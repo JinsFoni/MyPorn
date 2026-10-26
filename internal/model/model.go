@@ -1,7 +1,11 @@
 // Package model 定义跨层共享的领域类型（adapter / store / httpapi 共用）。
 package model
 
-import "time"
+import (
+	"sort"
+	"strings"
+	"time"
+)
 
 type Performer struct {
 	ID              int64
@@ -82,7 +86,8 @@ func (v Variant) EstimateBytes(durationSec int) int64 {
 	return int64(bw/8) * int64(durationSec)
 }
 
-func (v Variant) ID() string {
+// Quality 只按分辨率给一个代号（1080p / 4K …），不看编码。
+func (v Variant) Quality() string {
 	switch {
 	case v.Height >= 2160:
 		return "2160p"
@@ -101,6 +106,86 @@ func (v Variant) ID() string {
 	default:
 		return "auto"
 	}
+}
+
+// ID 是前端选档用的稳定标识。
+// 同一个分辨率可能同时有 H.264 和 AV1 两版（两家 CDN 各给一条），
+// 所以非 H.264 的编码要在后面缀上编码族，否则两条会撞成同一个 id、前端下拉框就没法区分。
+// H.264 保持原样（1080p），老会话里记住的档位不受影响。
+func (v Variant) ID() string {
+	q := v.Quality()
+	if fam := CodecFamily(v.Codec); fam != "" && fam != "avc" {
+		return q + "." + fam
+	}
+	return q
+}
+
+// CodecFamily 把 HLS 的 CODECS 字符串归一化成编码族：
+// av01.0.08M.08 → av1，hev1.2.4.L120 / hvc1… → hevc，vp09… → vp9，avc1.64001f / avc3… → avc。
+// 认不出来就返回空串（当成「未知」，按 H.264 那个档对待，不因缺信息把可用片源排到最后）。
+func CodecFamily(codec string) string {
+	c := strings.ToLower(strings.TrimSpace(codec))
+	switch {
+	case c == "":
+		return ""
+	case strings.HasPrefix(c, "av01"), strings.HasPrefix(c, "av1"):
+		return "av1"
+	case strings.HasPrefix(c, "hev1"), strings.HasPrefix(c, "hvc1"), strings.HasPrefix(c, "hevc"):
+		return "hevc"
+	case strings.HasPrefix(c, "vp09"), strings.HasPrefix(c, "vp9"):
+		return "vp9"
+	case strings.HasPrefix(c, "avc1"), strings.HasPrefix(c, "avc3"), strings.HasPrefix(c, "avc"):
+		return "avc"
+	default:
+		return ""
+	}
+}
+
+// CodecRank 是同分辨率内的编码偏好序，数字越小越优先：
+// AV1（同等画质省 30–50% 码率）> HEVC > VP9 > H.264 / 未知。
+// 分辨率永远排在它前面——不会为了 AV1 去降一档清晰度，见 SortVariantsDesc。
+func CodecRank(codec string) int {
+	switch CodecFamily(codec) {
+	case "av1":
+		return 0
+	case "hevc":
+		return 1
+	case "vp9":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// CodecLabel 是给人看的编码名，日志与前端角标用；未知返回空串。
+func CodecLabel(codec string) string {
+	switch CodecFamily(codec) {
+	case "av1":
+		return "AV1"
+	case "hevc":
+		return "HEVC"
+	case "vp9":
+		return "VP9"
+	case "avc":
+		return "H.264"
+	default:
+		return ""
+	}
+}
+
+// SortVariantsDesc 按「分辨率降序 → 编码偏好（AV1 优先）→ 码率降序」排序。
+// 三个 adapter 与下载、播放两条读路径都走这一个比较函数，
+// 免得「播放用 AV1、下载却拿 H.264」这种前后不一致。
+func SortVariantsDesc(vs []Variant) {
+	sort.SliceStable(vs, func(i, j int) bool {
+		if vs[i].Height != vs[j].Height {
+			return vs[i].Height > vs[j].Height
+		}
+		if ri, rj := CodecRank(vs[i].Codec), CodecRank(vs[j].Codec); ri != rj {
+			return ri < rj
+		}
+		return vs[i].Bandwidth > vs[j].Bandwidth
+	})
 }
 
 type Job struct {

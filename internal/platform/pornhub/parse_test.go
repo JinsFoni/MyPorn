@@ -58,8 +58,16 @@ https://cdn.example.com/4k/index.m3u8
 	if vs[1].Bandwidth != 6000000 {
 		t.Errorf("码率解析错误: %d", vs[1].Bandwidth)
 	}
-	if vs[0].ID() != "2160p" {
+	// 4K 那条是 HEVC：id 带编码后缀（同分辨率可能有 H.264 / AV1 / HEVC 多条，不能撞值）
+	if vs[0].ID() != "2160p.hevc" {
 		t.Errorf("变体 ID 错误: %s", vs[0].ID())
+	}
+	if vs[0].Quality() != "2160p" {
+		t.Errorf("Quality 应只看分辨率: %s", vs[0].Quality())
+	}
+	// H.264 那条保持老 id，前端记住的档位不受影响
+	if vs[1].ID() != "1080p" {
+		t.Errorf("H.264 变体 ID 应保持 1080p: %s", vs[1].ID())
 	}
 }
 
@@ -261,7 +269,7 @@ func TestVariantSortAndDefault(t *testing.T) {
 		{Height: 1080, Bandwidth: 2000},
 		{Height: 1080, Bandwidth: 5000},
 	}
-	sortVariantsDesc(vs)
+	model.SortVariantsDesc(vs)
 	if vs[0].Height != 1080 || vs[0].Bandwidth != 5000 {
 		t.Errorf("排序错误: %+v", vs)
 	}

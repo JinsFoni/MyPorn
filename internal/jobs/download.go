@@ -293,9 +293,12 @@ func (r *Runner) muxFromURL(ctx context.Context, c *Ctl, video *model.Video, bes
 }
 
 // pickVariant 取最高画质：优先用 5 分钟内的缓存，否则重新解析。
+// 「最高」= 分辨率优先，同分辨率内 AV1 > HEVC > VP9 > H.264（见 model.SortVariantsDesc）。
 func (r *Runner) pickVariant(ctx context.Context, video *model.Video, ad platform.Adapter) (model.Variant, error) {
 	variants, fetchedAt, err := r.st.GetVariants(video.ID)
+	model.SortVariantsDesc(variants)
 	if err == nil && len(variants) > 0 && time.Since(fetchedAt) < 5*time.Minute {
+		r.logPicked(video, variants[0])
 		return variants[0], nil
 	}
 	fresh, rerr := ad.ResolveStreams(ctx, video.PlatformVideoID)
@@ -309,10 +312,22 @@ func (r *Runner) pickVariant(ctx context.Context, video *model.Video, ad platfor
 	if len(fresh) == 0 {
 		return model.Variant{}, fmt.Errorf("平台没有返回可用画质")
 	}
+	model.SortVariantsDesc(fresh)
 	if err := r.st.SaveVariants(video.ID, fresh); err != nil {
 		r.log.Warn("保存画质列表失败", "video", video.ID, "err", err)
 	}
+	r.logPicked(video, fresh[0])
 	return fresh[0], nil
+}
+
+// logPicked 把最终选的档位与编码写进日志：将来某个平台给了 AV1，
+// 从日志里能直接看出「这部片子下的是 AV1 还是 H.264」。
+func (r *Runner) logPicked(video *model.Video, v model.Variant) {
+	codec := model.CodecLabel(v.Codec)
+	if codec == "" {
+		codec = "编码未知"
+	}
+	r.log.Info("选定画质", "video", video.ID, "quality", v.Quality(), "codec", codec, "bandwidth", v.Bandwidth)
 }
 
 // enrichVideo 在写 nfo 之前用详情页补全简介、标签、评分与封面。

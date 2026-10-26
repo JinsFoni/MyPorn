@@ -232,7 +232,7 @@ func (a *Adapter) ResolveStreams(ctx context.Context, videoID string) ([]model.V
 	if len(variants) == 0 {
 		return nil, errors.New("未解析到任何可用流地址（页面结构可能已变更）")
 	}
-	sortVariantsDesc(variants)
+	model.SortVariantsDesc(variants)
 	return variants, nil
 }
 

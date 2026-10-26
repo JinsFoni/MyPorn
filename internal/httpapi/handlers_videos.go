@@ -106,6 +106,9 @@ func (s *Server) handleVideoSeen(w http.ResponseWriter, r *http.Request) {
 // 第二个返回值是解析时顺手拿到的详情页元数据（标签、简介等），命中缓存时为 nil。
 func (s *Server) ensureVariants(r *http.Request, v *model.Video, needBandwidth bool) ([]model.Variant, *model.Video, error) {
 	variants, fetchedAt, err := s.st.GetVariants(v.ID)
+	// 库里只按 (height, bandwidth) 存，编码偏好在这里补上：
+	// 缓存命中时也要重排一次，否则「播放用 AV1、下载拿 H.264」两边会对不上。
+	model.SortVariantsDesc(variants)
 	if err == nil && len(variants) > 0 && time.Since(fetchedAt) < variantCacheTTL {
 		if !needBandwidth || hasBandwidth(variants) {
 			return variants, nil, nil
@@ -130,6 +133,7 @@ func (s *Server) ensureVariants(r *http.Request, v *model.Video, needBandwidth b
 		}
 		return nil, nil, rerr
 	}
+	model.SortVariantsDesc(fresh)
 	if serr := s.st.SaveVariants(v.ID, fresh); serr != nil {
 		s.log.Warn("保存清晰度列表失败", "video", v.ID, "err", serr)
 	}

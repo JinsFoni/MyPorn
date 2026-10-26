@@ -19,6 +19,8 @@ M1（订阅 + 影片流 + 在线播放）已实现并实测通过：
 - 增量同步：按 `syncIntervalHours` 调度，遇已入库影片即停，失败退避 30 分钟
 - 影片流：keyset 游标分页 + 无限滚动（离屏页 DOM 回收），新片标记
 - 在线播放：解析全部清晰度并按质量降序，**默认最高画质**（4K 不限），hls.js 按需加载，画质记忆
+- 编码偏好：分辨率优先，**同分辨率内 AV1 > HEVC > VP9 > H.264**（平台给 AV1 就用 AV1，体积约省一半）；
+  浏览器解不了的编码自动让位，下载仍 `-c copy` 不转码
 - 播放地址一律走 `/api/stream` 同源代理（平台 CDN 校验 Referer，浏览器直连会 404），支持 Range 拖动
 - 图片代理 + 磁盘缓存（规避防盗链），SSE 事件 `video.new` / `sync.progress` / `job.updated`
 - PWA：manifest + service worker，离线可打开外壳（HTTPS/反代由使用者负责）

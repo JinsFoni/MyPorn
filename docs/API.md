@@ -123,7 +123,11 @@ type Video = {
   "expiresAt": "2026-10-26T04:10:00Z"
 }
 ```
-- `variants` 按 (height, bandwidth) **降序**；`defaultVariantId` 即最高画质
+- `variants` 按 **(height, 编码偏好, bandwidth) 降序**；`defaultVariantId` 即最高画质。
+  编码偏好为 AV1 > HEVC > VP9 > H.264（`model.SortVariantsDesc`），只在同分辨率内生效，
+  详情见 ARCHITECTURE §7.4.1。前端还会按浏览器解码能力再排一次（解不了的编码靠后）。
+- `id` 是稳定的选档标识：H.264 为 `1080p` / `2160p` / `sd` / `auto`；
+  **非 H.264 带编码后缀**（`1080p.av1` / `1080p.hevc`），否则同分辨率两种编码会撞成同一个 id
 - `proxyPlaybackUrl` 为直链失败时的降级入口（M1 可返回 `null`）
 - 解析失败 `502 {"error":{"code":"resolve_failed","message":"..."}}`
 

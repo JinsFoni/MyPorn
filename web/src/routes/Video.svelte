@@ -10,6 +10,7 @@
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
   import {
+    codecTag,
     levelIndexForHeight,
     loadHls,
     pickVariant,
@@ -467,9 +468,10 @@
             {/if}
             {#each variants as variant (variant.id)}
               <option value={variant.id}>
-                {variantLabel(variant)}{variant.id === playback?.defaultVariantId ? '（最高）' : ''} · {formatBandwidth(
-                  variant.bandwidth,
-                )}
+                {variantLabel(variant)}{codecTag(variant) ? ` · ${codecTag(variant)}` : ''}{variant.id ===
+                playback?.defaultVariantId
+                  ? '（最高）'
+                  : ''} · {formatBandwidth(variant.bandwidth)}
               </option>
             {/each}
           </select>

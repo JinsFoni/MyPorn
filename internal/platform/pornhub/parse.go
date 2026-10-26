@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -738,7 +737,7 @@ func ParseMasterPlaylist(content, baseURL string) []model.Variant {
 			out = append(out, v)
 		}
 	}
-	sortVariantsDesc(out)
+	model.SortVariantsDesc(out)
 	return out
 }
 
@@ -780,15 +779,6 @@ func resolveURL(base, ref string) string {
 		return base[:i+1] + ref
 	}
 	return ref
-}
-
-func sortVariantsDesc(vs []model.Variant) {
-	sort.SliceStable(vs, func(i, j int) bool {
-		if vs[i].Height != vs[j].Height {
-			return vs[i].Height > vs[j].Height
-		}
-		return vs[i].Bandwidth > vs[j].Bandwidth
-	})
 }
 
 // ---------- 搜索页 ----------
