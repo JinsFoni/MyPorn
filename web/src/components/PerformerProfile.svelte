@@ -14,8 +14,10 @@
   const rows = $derived(displayProfile(profile));
 
   /** 按列铺开：先算一列能放几行，再让 grid 竖着填满一列才换列。
-   *  这一块最多两列（`@sm` 起才分列），所以一列的行数＝总数除二向上取整。 */
-  const rowsPerColumn = $derived(Math.ceil(rows.length / 2));
+   *  列数跟这一栏的宽度走（`@sm` 两列、`@3xl` 三列），所以两种列数各算一份行数：
+   *  一列的行数＝总数除列数向上取整，塞成 `--rows-2` / `--rows-3` 给对应的容器断点用。 */
+  const rowsAt2 = $derived(Math.ceil(rows.length / 2));
+  const rowsAt3 = $derived(Math.ceil(rows.length / 3));
 </script>
 
 <!-- 资料行：页头右侧那一块（窄屏时跨整行掉到下面，见 Performer.svelte 里的 grid）。
@@ -24,11 +26,11 @@
 {#if rows.length}
   <!-- @container 必须套在外层：容器查询只看祖先容器，写在自己的 dl 上永远匹配不到。 -->
   <div class="@container">
-    <!-- 按列读：`grid-flow-col` + `grid-template-rows` 让前 N 项竖着填满第一列再换列，
+    <!-- 按列读：`grid-flow-col` + `grid-template-rows` 让前 N 项竖着填满一列再换列，
          顺序才是「往下数」而不是一行一行横着数。窄到一列时退回默认的行优先，跟站点顺序一致。 -->
     <dl
-      class="grid grid-cols-1 gap-x-6 gap-y-2 @sm:auto-cols-fr @sm:grid-flow-col @sm:grid-cols-none @sm:grid-rows-[repeat(var(--rows),auto)]"
-      style="--rows: {rowsPerColumn}"
+      class="grid grid-cols-1 gap-x-6 gap-y-2 @sm:auto-cols-fr @sm:grid-flow-col @sm:grid-cols-none @sm:grid-rows-[repeat(var(--rows-2),auto)] @3xl:grid-rows-[repeat(var(--rows-3),auto)]"
+      style="--rows-2: {rowsAt2}; --rows-3: {rowsAt3}"
     >
       {#each rows as field (field.label)}
         <!-- 标签前挂一个 16px 字形（见 ProfileIcon），标签列因此留 5rem：
