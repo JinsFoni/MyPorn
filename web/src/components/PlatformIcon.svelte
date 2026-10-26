@@ -17,7 +17,7 @@
      pornhub = 橙底黑 PH（从站方 apple-touch-icon 抠出来的橙色方块）
      xhamster = 深色方砖 + 白色仓鼠头（站方 180px touch icon）
      beeg = 自带渐变底 + 白色字标的 favicon.svg
-     都缩到 64px 左右，显示尺寸 24px（跟原来的文字药丸同高，行布局不位移）。 */
+     都缩到 64px 左右。 */
   const ICONS: Record<string, string> = {
     pornhub: pornhubIcon,
     xhamster: xhamsterIcon,
@@ -28,14 +28,21 @@
 </script>
 
 {#if icon}
-  <img
-    src={icon}
-    alt={label}
-    title={label}
-    class="h-6 w-6 shrink-0 rounded-[22%] object-cover {className}"
-    loading="lazy"
-    decoding="async"
-  />
+  <!-- 32px 毛玻璃底座 + 24px 图标：底座 32 < 标题行高 34，标题行不位移。
+       深色底上 backdrop-blur 没有内容可糊，毛玻璃质感靠半透明白底 + 内描边
+       + 顶部一道内高光叠出来，blur 留着是为了图标将来压在封面/图片上时也成立。 -->
+  <span
+    class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[0.625rem] bg-gradient-to-b from-white/[0.13] to-white/[0.05] ring-1 ring-inset ring-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl {className}"
+  >
+    <img
+      src={icon}
+      alt={label}
+      title={label}
+      class="h-6 w-6 rounded-[22%] object-cover"
+      loading="lazy"
+      decoding="async"
+    />
+  </span>
 {:else}
   <!-- 不认识的平台回退成原来那个文字药丸 -->
   <span class="chip {className}">{label}</span>
