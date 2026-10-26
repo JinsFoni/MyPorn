@@ -2,6 +2,7 @@
   import InfiniteList from '../components/InfiniteList.svelte';
   import PlatformIcon from '../components/PlatformIcon.svelte';
   import PerformerProfile from '../components/PerformerProfile.svelte';
+  import SocialLinks from '../components/SocialLinks.svelte';
   import VideoCard from '../components/VideoCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import Skeleton from '../components/Skeleton.svelte';
@@ -173,10 +174,15 @@
     </p>
   {/if}
 
-  <!-- 页头就是这一块：左边头像 + 右边名字/计数/身材，往下是简介（压在头像下面）、资料行、站外链接。
+  <!-- 页头就是这一块，分三层：
+       ① 头像 │ 名字 + 计数 + 身材 │ 资料行（`xl` 起并排；窄屏资料行跨整行掉到下面）
+       ② 一道发丝线
+       ③ 简介（左，跟在「简介」标签后面）＋ 站外链接药丸（右）
        原来贴在下面的「个人资料 / 社交媒体」两张卡取消了，页面少两块面板的高度。 -->
   <section class="panel p-4 sm:p-5">
-    <div class="flex items-start gap-4 sm:gap-5">
+    <div
+      class="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-4 sm:gap-x-5 xl:grid-cols-[auto_minmax(0,1fr)_minmax(0,1.35fr)]"
+    >
       <div class="h-20 w-20 shrink-0 overflow-hidden rounded-full bg-raise sm:h-32 sm:w-32 xl:h-40 xl:w-40">
         {#if avatar}
           <img src={avatar} alt="" width="320" height="320" class="h-full w-full object-cover" />
@@ -190,7 +196,7 @@
         {/if}
       </div>
 
-      <div class="min-w-0 flex-1">
+      <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-hero font-normal tracking-[-0.01em] text-fg">{performer.name}</h2>
           <!-- 图标即入口：点它直接开该艺人的平台主页（原来那个「平台主页」按钮已经去掉）。 -->
@@ -218,17 +224,33 @@
           </p>
         {/if}
       </div>
+
+      <!-- 资料行（性别/身高/出身地/体重……）：来自艺人主页的「资料区块」。
+           两项性癖偏好和平台统计行（播放量等）在解析时就被丢掉了，不会出现在这里。
+           窄屏时它跨两列、整行掉到头像和名字下面。 -->
+      {#if performer.profile.length}
+        <div class="col-span-2 min-w-0 xl:col-span-1">
+          <PerformerProfile profile={performer.profile} />
+        </div>
+      {/if}
     </div>
 
-    <!-- 简介单独一行，压在头像下面（整块面板的左边）：站点上就是一段自由文本，换行原样保留。
-         长简介限制在 max-w-3xl——整行铺满一千多像素读起来太累。 -->
-    {#if performer.bio}
-      <p class="mt-4 max-w-3xl whitespace-pre-line text-ui text-muted">{performer.bio}</p>
-    {/if}
+    {#if performer.bio || performer.social.length}
+      <!-- 发丝线以上是「她是谁 + 她的资料」，以下是一段自由文本和站外链接。 -->
+      <div class="mt-4 flex flex-wrap items-start gap-x-6 gap-y-3 border-t border-line pt-3.5">
+        {#if performer.bio}
+          <!-- 简介：站点上就是一段自由文本，换行原样保留。宽度由右侧的药丸自然收窄，
+               再用 text-pretty 收掉「只剩一个 emoji 单独一行」这种孤字行。 -->
+          <div class="flex min-w-0 basis-full items-baseline gap-3 xl:flex-1 xl:basis-0">
+            <span class="shrink-0 text-meta text-dim">简介</span>
+            <p class="min-w-0 flex-1 whitespace-pre-line text-pretty text-ui text-muted">{performer.bio}</p>
+          </div>
+        {/if}
 
-    <!-- 资料行与站外链接：来自艺人主页的「资料区块 / 社交列表」。
-         两项性癖偏好和平台统计行（播放量等）在解析时就被丢掉了，不会出现在这里。 -->
-    <PerformerProfile profile={performer.profile} social={performer.social} />
+        <!-- 站外链接：来自艺人主页右侧的社交列表，全部新窗口打开 -->
+        <SocialLinks social={performer.social} class={performer.bio ? 'xl:ml-auto' : ''} />
+      </div>
+    {/if}
   </section>
 
   <section class="mt-6">
