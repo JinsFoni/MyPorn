@@ -6,11 +6,9 @@
     profile: ProfileField[];
     /** 站外链接（官方网址 / Twitter / Instagram …） */
     social: SocialLink[];
-    /** 简介（平台上的「简介」区块），可能很长 */
-    bio?: string | null;
   }
 
-  let { profile, social, bio = null }: Props = $props();
+  let { profile, social }: Props = $props();
 
   /* 只做三档单色字形：X、Instagram、其余一律地球。
      整个设计稿只有冷白一个色相，所以不引品牌原色（Instagram 的渐变在这里会炸）。
@@ -54,24 +52,17 @@
   </svg>
 {/snippet}
 
-<!-- 简介 / 资料行 / 站外链接：不再各自成卡，直接排在页头头像右边那一块里（不套面板、不加大标题，
-     名字和计数在上面已经交代过「这是谁」）。字段窄屏单列、sm 起两列、xl 起三列——
-     十几个字段的艺人也就三五行，不会把头像挤成一根柱子。 -->
-{#if bio || profile.length || social.length}
-  <div class="mt-4">
-    {#if bio}
-      <!-- 简介：站点上就是一段自由文本，换行原样保留 -->
-      <p class="whitespace-pre-line text-ui text-muted">{bio}</p>
-    {/if}
-
+<!-- 资料行 + 站外链接，排在页头右栏（名字/计数/身材/简介在左栏）。
+     `xl` 之前它掉到下面一条，`xl` 起才有一道发丝线把它跟左栏分开。
+     字段按右栏自身宽度排：够宽（`@xs`，约 20rem）才两列，十几个字段的人也就五六行。 -->
+{#if profile.length || social.length}
+  <!-- @container：字段排几列看这一栏自己有多宽，而不是看窗口有多宽——
+       1024px 的侧边栏布局下这一栏只有 250px，两列会把「Czech Republic」拆成竖排字母。 -->
+  <div class="@container min-w-0 xl:border-l xl:border-line xl:pl-6">
     {#if profile.length}
-      <dl
-        class="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2 xl:grid-cols-3 {bio
-          ? 'mt-3.5 border-t border-line pt-3.5'
-          : ''}"
-      >
+      <dl class="grid grid-cols-1 gap-x-6 gap-y-2 @xs:grid-cols-2">
         {#each profile as field (field.label)}
-          <div class="grid grid-cols-[5rem_minmax(0,1fr)] items-baseline gap-2">
+          <div class="grid grid-cols-[4rem_minmax(0,1fr)] items-baseline gap-2">
             <dt class="text-meta text-dim">{field.label}</dt>
             <dd class="min-w-0 break-words text-ui text-fg">{field.value}</dd>
           </div>
@@ -80,7 +71,7 @@
     {/if}
 
     {#if social.length}
-      <ul class="mt-3.5 flex flex-wrap gap-1.5">
+      <ul class="mt-3.5 flex flex-wrap gap-1.5 {profile.length ? 'border-t border-line pt-3.5' : ''}">
         {#each social as link (link.url)}
           <li>
             <!-- 外链一律新窗口 + noopener：这些地址来自上游页面，不能让它拿到 window.opener -->
