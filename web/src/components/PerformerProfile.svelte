@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ProfileIcon from './ProfileIcon.svelte';
   import type { ProfileField } from '../lib/types';
 
   interface Props {
@@ -17,8 +18,10 @@
   <div class="@container">
     <dl class="grid grid-cols-1 gap-x-6 gap-y-2 @sm:grid-cols-2 @3xl:grid-cols-3">
       {#each profile as field (field.label)}
-        <div class="grid grid-cols-[5rem_minmax(0,1fr)] items-baseline gap-2">
-          <dt class="text-ui text-dim">{field.label}</dt>
+        <!-- 标签前挂一个 14px 字形（见 ProfileIcon），所以标签列从 5rem 放到 6rem：
+             图标 14 + 间距 6 + 最长的「是否有穿环」70 ≈ 90px，正好一行不折。 -->
+        <div class="grid grid-cols-[6rem_minmax(0,1fr)] items-baseline gap-2">
+          <dt class="text-ui text-dim"><ProfileIcon label={field.label} />{field.label}</dt>
           <dd class="min-w-0 break-words text-ui text-fg">{field.value}</dd>
         </div>
       {/each}
