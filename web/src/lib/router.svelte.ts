@@ -12,6 +12,7 @@ export type RouteName =
   | 'performer'
   | 'discover'
   | 'downloads'
+  | 'manage'
   | 'video'
   | 'settings'
   | 'login';
@@ -24,6 +25,7 @@ const ROUTES: readonly RouteDef[] = [
   { name: 'performer', pattern: '/performer/:id', title: '艺人' },
   { name: 'discover', pattern: '/discover', title: '发现艺人' },
   { name: 'downloads', pattern: '/downloads', title: '下载' },
+  { name: 'manage', pattern: '/manage', title: '管理' },
   { name: 'video', pattern: '/video/:id', title: '播放' },
   { name: 'settings', pattern: '/settings', title: '设置' },
   { name: 'login', pattern: '/login', title: '登录' },

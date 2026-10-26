@@ -20,7 +20,7 @@
   interface NavItem {
     href: string;
     label: string;
-    icon: 'feed' | 'performers' | 'discover' | 'downloads' | 'settings';
+    icon: 'feed' | 'performers' | 'discover' | 'downloads' | 'manage' | 'settings';
     isActive: (path: string) => boolean;
   }
 
@@ -29,6 +29,7 @@
     { href: '/performers', label: '艺人', icon: 'performers', isActive: (p) => p.startsWith('/performer') },
     { href: '/discover', label: '发现', icon: 'discover', isActive: (p) => p.startsWith('/discover') },
     { href: '/downloads', label: '下载', icon: 'downloads', isActive: (p) => p.startsWith('/downloads') },
+    { href: '/manage', label: '管理', icon: 'manage', isActive: (p) => p.startsWith('/manage') },
     { href: '/settings', label: '设置', icon: 'settings', isActive: (p) => p.startsWith('/settings') },
   ];
 
@@ -129,6 +130,9 @@
       <path d="M12 4v10" />
       <path d="m8 10.5 4 4 4-4" />
       <path d="M4.5 17.5h15" />
+    {:else if name === 'manage'}
+      <!-- 管理：三根柱子（统计）+ 一条基线 -->
+      <path d="M4 20V11M12 20V4M20 20v-6" />
     {:else}
       <!-- 设置：齿轮 -->
       <path
@@ -274,7 +278,7 @@
     class="fixed inset-x-0 bottom-0 z-40 bg-ink/85 pb-safe backdrop-blur-xl backdrop-saturate-150 lg:hidden"
     aria-label="主导航"
   >
-    <ul class="grid grid-cols-5">
+    <ul class="grid grid-cols-6">
       {#each NAV as item (item.href)}
         {@const isActive = item.icon === 'settings' ? settingsActive : activeHref === item.href}
         <li>

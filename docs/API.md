@@ -285,3 +285,53 @@ type Video = {
 |---|---|---|
 | `no_library` | 400 | 还没有可用本地库 |
 | `already_queued` | 409 | 该影片已在下载队列 / 任务不可删除 |
+
+## 附：管理页（统计 + 关注管理）
+
+### A7. `GET /api/manage`
+
+管理页（`/manage`）整页只打这一个请求：上面那排读数、下面的分项明细、关注列表都取自**同一份快照**。
+
+```json
+{
+  "generatedAt": "2026-10-26T16:02:15Z",
+  "stats": {
+    "performers": 2, "performersEnabled": 2, "performersFailed": 0,
+    "videos": 155, "videosNew": 134, "videosWithFile": 14,
+    "files": 14, "bytes": 2971707187,
+    "byPlatform": [{ "key": "pornhub", "n": 155, "bytes": 2971707187 }],
+    "byLibrary":  [{ "id": 1, "name": "主库", "videos": 14, "bytes": 2971707187 }],
+    "byDuration": [{ "key": "5to15", "n": 101, "bytes": 0 }],
+    "byQuality":  [{ "key": "1080p", "n": 42, "bytes": 0 }],
+    "byYear":     [{ "key": "2024", "n": 13, "bytes": 0 }],
+    "ingest":     [{ "key": "2026-10", "n": 155, "bytes": 0 }],
+    "tags":       [{ "key": "巨乳", "n": 44, "bytes": 0 }],
+    "downloads":  { "done": 3, "failed": 0, "active": 0 },
+    "recent": [{ "id": 201, "title": "...", "platform": "pornhub",
+                 "thumbUrl": "/api/img?p=pornhub&u=...",
+                 "publishedAt": "2020-10-27T12:25:45Z", "firstSeenAt": "2026-10-26T12:25:45Z" }]
+  },
+  "subscriptions": [ /* 同 GET /api/subscriptions 的条目，另加下面三个字段 */ ]
+}
+```
+
+分档代号（前端负责翻成中文，改文案不用动后端）：
+
+| 字段 | 代号 |
+|---|---|
+| `byDuration` | `lt5`（<5 分钟）/ `5to15` / `15to40` / `gt40` / `unknown`（未取得时长） |
+| `byQuality` | `2160p` / `1440p` / `1080p` / `720p` / `480p` / `sd` / `none`（还没解析过清晰度）/ `unknown`——每部影片取 `video_streams` 里最高的 height |
+| `byYear` | `YYYY`（`published_at` 的年份，最多 6 个，正序）/ `unknown`（没有发布时间） |
+| `ingest` | `YYYY-MM`（`first_seen_at` 的月份，最多 12 个，正序） |
+| `tags` | 标签原文，出现最多的 12 个 |
+
+`subscriptions[]` 在 `Performer` 基础上追加：
+
+| 字段 | 含义 |
+|---|---|
+| `localVideoCount` | 本地已收录的影片数（= 与该艺人关联的 `videos` 行数，不是平台的 `videoCount`） |
+| `localFileCount` | 其中已落盘到任一本地库的影片数 |
+| `localBytes` | 这些落盘文件占的体积 |
+
+写操作沿用已有接口，不另开：`PATCH /api/subscriptions/{id}`（启用/停用）、
+`POST /api/subscriptions/{id}/sync`（立即同步）、`DELETE /api/subscriptions/{id}`（取消关注）。

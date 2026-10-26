@@ -22,6 +22,8 @@ M1（订阅 + 影片流 + 在线播放）已实现并实测通过：
 - 播放地址一律走 `/api/stream` 同源代理（平台 CDN 校验 Referer，浏览器直连会 404），支持 Range 拖动
 - 图片代理 + 磁盘缓存（规避防盗链），SSE 事件 `video.new` / `sync.progress` / `job.updated`
 - PWA：manifest + service worker，离线可打开外壳（HTTPS/反代由使用者负责）
+- 管理页（`/manage`）：**统计**（平台 / 本地库 / 时长 / 清晰度 / 发布年份分布、入库趋势、热门标签、最近入库）+
+  **关注管理**（搜索、排序、全部同步、启用开关、取消关注），整页只打一个 `GET /api/manage` 快照
 
 M2（本地库 + 下载队列 + Emby 元数据）已实现并实测通过：
 

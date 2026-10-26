@@ -394,3 +394,71 @@ export type ApiErrorCode =
   /** 前端本地补充：网络不可达 / 请求被取消 */
   | 'network_error'
   | 'aborted';
+
+// ---------------- 管理页（GET /api/manage，契约见 docs/API.md） ----------------
+
+/**
+ * 一个「代号 + 计数」的桶：平台、时长/清晰度/进度分档、月份、标签都用它。
+ * 代号是机器可读的（`pornhub` / `lt5` / `2026-10` / 标签原文），中文名字在前端翻。
+ */
+export interface ManageCount {
+  key: string;
+  n: number;
+  /** 只有平台、库这类分项才带体积，其余是 0 */
+  bytes: number;
+}
+
+export interface ManageLibrary {
+  id: number;
+  name: string;
+  videos: number;
+  bytes: number;
+}
+
+export interface ManageRecentVideo {
+  id: number;
+  title: string;
+  platform: string;
+  /** 已代理 */
+  thumbUrl: string | null;
+  publishedAt: string | null;
+  firstSeenAt: string | null;
+}
+
+/** 统计的一半：数据库此刻的样子 */
+export interface ManageStats {
+  performers: number;
+  performersEnabled: number;
+  /** last_error 非空的订阅数 */
+  performersFailed: number;
+  videos: number;
+  videosNew: number;
+  /** 已落盘到任意本地库的影片数 */
+  videosWithFile: number;
+  files: number;
+  bytes: number;
+  byPlatform: ManageCount[];
+  byLibrary: ManageLibrary[];
+  byDuration: ManageCount[];
+  byQuality: ManageCount[];
+  /** 发布年份（最近 6 个），时间正序；unknown = 没有发布时间的那些 */
+  byYear: ManageCount[];
+  /** 最近 12 个有数据的月份，时间正序 */
+  ingest: ManageCount[];
+  tags: ManageCount[];
+  downloads: { done: number; failed: number; active: number };
+  recent: ManageRecentVideo[];
+}
+
+/** 关注管理的一行：订阅 + 本地收录量（平台的 videoCount 不是库里的数） */
+export interface ManageSubscription extends Performer {
+  localVideoCount: number;
+  localFileCount: number;
+  localBytes: number;
+}
+
+export interface ManageResponse {
+  generatedAt: string;
+  stats: ManageStats;
+  subscriptions: ManageSubscription[];
+}

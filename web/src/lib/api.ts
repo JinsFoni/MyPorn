@@ -24,6 +24,7 @@ import type {
   Settings,
   SettingsPatch,
   SubscriptionCreated,
+  ManageResponse,
   SyncMode,
   VideoDetail,
   VideoPage,
@@ -223,6 +224,12 @@ export const api = {
       method: 'POST',
       body: { mode },
     });
+  },
+
+  // ---- 管理 ----
+  /** 统计 + 关注管理，整页一个请求（共用同一份快照） */
+  manage(): Promise<ManageResponse> {
+    return request<ManageResponse>('/api/manage');
   },
 
   // ---- 影片 ----

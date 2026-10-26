@@ -110,6 +110,9 @@ func (s *Server) Routes() http.Handler {
 			pr.Post("/jobs/{id}/retry", s.handleRetryJob)
 			pr.Delete("/jobs/{id}", s.handleDeleteJob)
 
+			// 管理页：统计 + 关注管理，一次请求给全（见 handlers_manage.go）
+			pr.Get("/manage", s.handleManage)
+
 			pr.Get("/settings", s.handleGetSettings)
 			pr.Put("/settings", s.handlePutSettings)
 

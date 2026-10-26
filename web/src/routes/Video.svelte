@@ -8,6 +8,7 @@
   import { formatBandwidth, formatCount, formatDate, formatDuration, relativeTime } from '../lib/format';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
+  import { platformLabel } from '../lib/platform';
   import {
     levelIndexForHeight,
     loadHls,
@@ -51,8 +52,6 @@
     description: '示例数据：后端未连接，播放器不会有真实片源。',
     related: [],
   };
-
-  const PLATFORM_LABEL: Record<string, string> = { pornhub: 'Pornhub' };
 
   const videoId = $derived(Number.parseInt(id, 10));
 
@@ -311,7 +310,7 @@
       },
       { label: '发布', value: formatDate(v.publishedAt) },
       { label: '播放量', value: formatCount(v.viewCount) },
-      { label: '平台', value: PLATFORM_LABEL[v.platform] ?? v.platform },
+      { label: '平台', value: platformLabel(v.platform) },
     ];
     return list;
   });
@@ -514,7 +513,7 @@
           class="btn mt-2 w-full"
           aria-label="在平台打开原始页面"
         >
-          在 {PLATFORM_LABEL[video.platform] ?? video.platform} 打开
+          在 {platformLabel(video.platform)} 打开
         </a>
 
         <p class="mt-4 text-meta leading-relaxed text-dim">

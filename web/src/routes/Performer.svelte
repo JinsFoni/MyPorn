@@ -8,6 +8,7 @@
   import { imageUrl } from '../lib/img';
   import { formatCount, formatDate, relativeFuture, relativeTime } from '../lib/format';
   import { live } from '../lib/live.svelte';
+  import { platformLabel } from '../lib/platform';
   import { navigate } from '../lib/router.svelte';
   import type { Performer, SyncMode, Video } from '../lib/types';
 
@@ -97,8 +98,6 @@
   let confirmKind = $state<'full' | 'unsubscribe' | null>(null);
   let confirmBusy = $state(false);
   let cancelBtn = $state<HTMLButtonElement | null>(null);
-
-  const PLATFORM_LABEL: Record<string, string> = { pornhub: 'Pornhub' };
 
   const avatar = $derived(performer ? imageUrl(performer.avatarUrl, 240) : null);
 
@@ -276,7 +275,7 @@
           <h2 class="text-hero font-normal tracking-[-0.01em] text-fg">{performer.name}</h2>
           <PlatformIcon
             platform={performer.platform}
-            label={PLATFORM_LABEL[performer.platform] ?? performer.platform}
+            label={platformLabel(performer.platform)}
           />
           {#if !performer.enabled}
             <span class="chip">已暂停</span>

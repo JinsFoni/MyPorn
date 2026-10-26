@@ -19,6 +19,7 @@
    * 保首屏包体（gzip ≤45KB）。chunk 命中后 promise 复用，不重复请求。
    */
   type IdPage = Component<{ id: string }>;
+  type PlainPage = Component<Record<string, never>>;
 
   const ID_PAGE_LOADERS: Record<'video' | 'performer', () => Promise<{ default: IdPage }>> = {
     video: () => import('./routes/Video.svelte') as Promise<{ default: IdPage }>,
@@ -35,6 +36,13 @@
     return pending;
   }
 
+  /** 管理页是数据页，整块懒加载，别让它进首屏包 */
+  let managePage: Promise<{ default: PlainPage }> | null = null;
+  function loadManage(): Promise<{ default: PlainPage }> {
+    managePage ??= import('./routes/Manage.svelte') as Promise<{ default: PlainPage }>;
+    return managePage;
+  }
+
   let ready = $state(false);
 
   const match = $derived(router.match);
@@ -45,6 +53,7 @@
     performer: '',
     discover: '',
     downloads: '',
+    manage: '管理',
     video: '',
     settings: '',
     login: '登录',
@@ -123,6 +132,15 @@
       {/await}
     {:else if shown.name === 'downloads'}
       <Downloads />
+    {:else if shown.name === 'manage'}
+      {#await loadManage()}
+        <p class="py-16 text-center text-ui text-dim">正在载入…</p>
+      {:then mod}
+        {@const ManagePage = mod.default}
+        <ManagePage />
+      {:catch}
+        <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
+      {/await}
     {:else}
       <NotFound />
     {/if}
