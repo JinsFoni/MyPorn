@@ -208,7 +208,7 @@
           />
         </div>
 
-        <p class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">
+        <p class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-ui text-dim">
           <span class="tabular-nums">{formatCount(performer.localVideoCount ?? performer.videoCount ?? 0)}部影片</span>
           {#if performer.subscriberCount !== null}
             <span aria-hidden="true">·</span>
@@ -219,7 +219,7 @@
         {#if bodyText}
           <!-- 身材：站点资料行里的「身高」「三围」抓取时已归一成公制，紧跟在影片数下面，
                所以它们在下面的资料行里不再重复出现。 -->
-          <p class="mt-1 flex flex-wrap items-baseline gap-x-2 text-meta">
+          <p class="mt-1 flex flex-wrap items-baseline gap-x-2 text-ui">
             <span class="text-dim">身材</span>
             <span class="tabular-nums text-muted">{bodyText}</span>
           </p>
@@ -243,8 +243,8 @@
           <!-- 简介：站点上就是一段自由文本，换行原样保留。宽度由右侧的药丸自然收窄，
                再用 text-pretty 收掉「只剩一个 emoji 单独一行」这种孤字行。 -->
           <div class="flex min-w-0 basis-full items-baseline gap-3 xl:flex-1 xl:basis-0">
-            <span class="shrink-0 text-meta text-dim">简介</span>
-            <p class="min-w-0 flex-1 whitespace-pre-line text-pretty text-ui text-muted">{performer.bio}</p>
+            <span class="shrink-0 text-ui text-dim">简介</span>
+            <p class="min-w-0 flex-1 whitespace-pre-line text-pretty text-title text-muted">{performer.bio}</p>
           </div>
         {/if}
 

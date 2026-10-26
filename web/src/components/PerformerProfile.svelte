@@ -17,9 +17,9 @@
   <div class="@container">
     <dl class="grid grid-cols-1 gap-x-6 gap-y-2 @sm:grid-cols-2 @3xl:grid-cols-3">
       {#each profile as field (field.label)}
-        <div class="grid grid-cols-[4.5rem_minmax(0,1fr)] items-baseline gap-2">
-          <dt class="text-meta text-dim">{field.label}</dt>
-          <dd class="min-w-0 break-words text-ui text-fg">{field.value}</dd>
+        <div class="grid grid-cols-[5rem_minmax(0,1fr)] items-baseline gap-2">
+          <dt class="text-ui text-dim">{field.label}</dt>
+          <dd class="min-w-0 break-words text-title text-fg">{field.value}</dd>
         </div>
       {/each}
     </dl>

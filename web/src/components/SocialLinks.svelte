@@ -62,7 +62,7 @@
           target="_blank"
           rel="noreferrer noopener"
           title="在新窗口打开 {link.label}"
-          class="chip bg-raise transition-colors hover:bg-white/15 hover:text-fg"
+          class="chip bg-raise text-ui transition-colors hover:bg-white/15 hover:text-fg"
         >
           {@render icon(kindOf(link.url))}
           <span>{link.label}</span>
