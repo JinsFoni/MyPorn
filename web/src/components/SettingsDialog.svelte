@@ -211,7 +211,7 @@
       aria-modal="true"
       aria-labelledby="settings-pane-title"
       tabindex="-1"
-      class="relative flex h-[min(88dvh,46rem)] w-full max-w-4xl overflow-hidden rounded-2xl bg-sheet outline-none"
+      class="relative flex h-[min(80dvh,38rem)] w-full max-w-4xl overflow-hidden rounded-2xl bg-sheet outline-none"
     >
       <nav class="hidden w-52 shrink-0 flex-col gap-0.5 bg-ink/50 p-2.5 sm:flex" aria-label="设置分类">
         <p class="px-3 pb-2.5 pt-1 text-ui font-medium tracking-[-0.01em] text-fg">设置</p>
