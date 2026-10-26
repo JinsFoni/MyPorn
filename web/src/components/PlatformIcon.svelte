@@ -13,10 +13,15 @@
      * md = 32px 底座（28px 标题旁）、sm = 24px（14px 名字旁）、xs = 20px（12px 元信息行里）
      */
     size?: 'md' | 'sm' | 'xs';
+    /**
+     * 传了就变成外链：点图标直接开平台主页（艺人页就是这么用的，
+     * 省掉一行「平台主页」按钮）。不传就还是纯图标。
+     */
+    href?: string | null;
     class?: string;
   }
 
-  let { platform, label, size = 'md', class: className = '' }: Props = $props();
+  let { platform, label, size = 'md', href = null, class: className = '' }: Props = $props();
 
   /* 直接放各家自己的 app icon（方形圆角小图标），不做单色化：
      pornhub = 橙底黑 PH（从站方 apple-touch-icon 抠出来的橙色方块）
@@ -45,23 +50,44 @@
   };
 </script>
 
-{#if icon}
+{#snippet plate(extra: string)}
   <!-- 毛玻璃底座：深色底上 backdrop-blur 没有内容可糊，质感靠半透明白底 + 内描边
        + 顶部一道内高光叠出来，blur 留着是为了图标将来压在封面/图片上时也成立。 -->
   <span
-    class="inline-flex shrink-0 items-center justify-center bg-gradient-to-b from-white/[0.13] to-white/[0.05] ring-1 ring-inset ring-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl {PLATE[
+    class="inline-flex shrink-0 items-center justify-center bg-gradient-to-b from-white/[0.13] to-white/[0.05] ring-1 ring-inset ring-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl transition-[background-color,box-shadow] duration-150 group-hover:from-white/[0.22] group-hover:to-white/[0.12] {PLATE[
       size
-    ]} {className}"
+    ]} {extra}"
   >
     <img
       src={icon}
       alt={label}
-      title={label}
       class="{IMG[size]} rounded-[22%] object-cover"
       loading="lazy"
       decoding="async"
     />
   </span>
+{/snippet}
+
+{#if icon}
+  {#if href}
+    <!-- 图标本身就是「去平台主页」的入口：悬停时底座提亮一档，明确它是可点的。 -->
+    <a
+      {href}
+      target="_blank"
+      rel="noreferrer noopener"
+      title="打开{label}主页"
+      aria-label="打开{label}主页"
+      class="group inline-flex outline-none focus-visible:[&>span]:ring-2 focus-visible:[&>span]:ring-white/45"
+    >
+      {@render plate(className)}
+    </a>
+  {:else}
+    {@render plate(className)}
+  {/if}
+{:else if href}
+  <a {href} target="_blank" rel="noreferrer noopener" class="chip transition-colors hover:text-fg" title="打开{label}主页"
+    >{label}</a
+  >
 {:else}
   <!-- 不认识的平台回退成原来那个文字药丸 -->
   <span class="chip {className}">{label}</span>

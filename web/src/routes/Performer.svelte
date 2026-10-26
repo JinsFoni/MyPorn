@@ -273,9 +273,11 @@
       <div class="min-w-0 flex-1">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-hero font-normal tracking-[-0.01em] text-fg">{performer.name}</h2>
+          <!-- 图标即入口：点它直接开该艺人的平台主页（原来那个「平台主页」按钮已经去掉）。 -->
           <PlatformIcon
             platform={performer.platform}
             label={platformLabel(performer.platform)}
+            href={performer.url}
           />
           {#if !performer.enabled}
             <span class="chip">已暂停</span>
@@ -333,9 +335,6 @@
       >
         {performer.enabled ? '暂停同步' : '启用同步'}
       </button>
-      <a href={performer.url} target="_blank" rel="noreferrer noopener" class="btn btn-ghost">
-        平台主页
-      </a>
       <button
         type="button"
         class="btn btn-danger ml-auto"
