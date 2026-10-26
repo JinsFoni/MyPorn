@@ -65,6 +65,7 @@ func (s *Server) performerDTO(p *model.Performer, newCount int) map[string]any {
 		"profile":          profileOrEmpty(p.Profile),
 		"social":           socialOrEmpty(p.Social),
 		"body":             bodyDTO(p.Body),
+		"rank":             p.Rank,
 		"videoCount":       p.VideoCount,
 		"subscriberCount":  p.SubscriberCount,
 		"subscriptionId":   nil,

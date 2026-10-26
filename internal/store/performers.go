@@ -13,7 +13,7 @@ import (
 var ErrNotFound = errors.New("not found")
 
 const performerCols = `id, platform, performer_id, name, url, avatar_url, bio,
-	profile_json, social_json, body_json, video_count, subscriber_count, last_fetched_at`
+	profile_json, social_json, body_json, model_rank, video_count, subscriber_count, last_fetched_at`
 
 // jsonBlock 把数组序列化成待入库的 JSON 文本；空数组也写成 '[]'，
 // 写入时据此判断「这次没抓到资料」，不覆盖库里已有的。
@@ -67,13 +67,15 @@ func scanPerformer(sc interface{ Scan(...any) error }) (*model.Performer, error)
 	var vc, scur sql.NullInt64
 	var fetched sql.NullString
 	var profile, social, body string
+	var rank int64
 	if err := sc.Scan(&p.ID, &p.Platform, &p.PerformerID, &p.Name, &p.URL, &p.AvatarURL, &p.Bio,
-		&profile, &social, &body, &vc, &scur, &fetched); err != nil {
+		&profile, &social, &body, &rank, &vc, &scur, &fetched); err != nil {
 		return nil, err
 	}
 	p.Profile = parseBlock[model.ProfileField](profile)
 	p.Social = parseBlock[model.SocialLink](social)
 	p.Body = parseBodyBlock(body)
+	p.Rank = int(rank)
 	if vc.Valid {
 		n := int(vc.Int64)
 		p.VideoCount = &n
@@ -90,8 +92,8 @@ func scanPerformer(sc interface{ Scan(...any) error }) (*model.Performer, error)
 func (s *Store) UpsertPerformer(p *model.Performer) (int64, error) {
 	_, err := s.db.Exec(`
 		INSERT INTO performers (platform, performer_id, name, url, avatar_url, bio,
-			profile_json, social_json, body_json, video_count, subscriber_count, last_fetched_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+			profile_json, social_json, body_json, model_rank, video_count, subscriber_count, last_fetched_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(platform, performer_id) DO UPDATE SET
 			name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE performers.name END,
 			url = CASE WHEN excluded.url <> '' THEN excluded.url ELSE performers.url END,
@@ -100,11 +102,12 @@ func (s *Store) UpsertPerformer(p *model.Performer) (int64, error) {
 			profile_json = CASE WHEN excluded.profile_json NOT IN ('', '[]') THEN excluded.profile_json ELSE performers.profile_json END,
 			social_json = CASE WHEN excluded.social_json NOT IN ('', '[]') THEN excluded.social_json ELSE performers.social_json END,
 			body_json = CASE WHEN excluded.body_json <> '' THEN excluded.body_json ELSE performers.body_json END,
+			model_rank = CASE WHEN excluded.model_rank > 0 THEN excluded.model_rank ELSE performers.model_rank END,
 			video_count = COALESCE(excluded.video_count, performers.video_count),
 			subscriber_count = COALESCE(excluded.subscriber_count, performers.subscriber_count),
 			last_fetched_at = excluded.last_fetched_at`,
 		p.Platform, p.PerformerID, p.Name, p.URL, p.AvatarURL, p.Bio,
-		jsonBlock(p.Profile), jsonBlock(p.Social), bodyBlock(p.Body),
+		jsonBlock(p.Profile), jsonBlock(p.Social), bodyBlock(p.Body), p.Rank,
 		nullInt(p.VideoCount), nullInt(p.SubscriberCount), now())
 	if err != nil {
 		return 0, err
@@ -190,7 +193,7 @@ func (s *Store) ListPerformersWithoutAvatar() ([]*model.Performer, error) {
 func perfixedCols(alias string) string {
 	return alias + ".id, " + alias + ".platform, " + alias + ".performer_id, " + alias + ".name, " +
 		alias + ".url, " + alias + ".avatar_url, " + alias + ".bio, " + alias + ".profile_json, " +
-		alias + ".social_json, " + alias + ".body_json, " + alias + ".video_count, " +
+		alias + ".social_json, " + alias + ".body_json, " + alias + ".model_rank, " + alias + ".video_count, " +
 		alias + ".subscriber_count, " + alias + ".last_fetched_at"
 }
 
@@ -275,12 +278,13 @@ func (s *Store) ListSubscriptions() ([]*model.Performer, error) {
 		var vc, scur sql.NullInt64
 		var fetched sql.NullString
 		var profile, social, body string
+		var rank int64
 		var sub model.Subscription
 		var totalPages sql.NullInt64
 		var lastSync, nextSync sql.NullString
 		var created string
 		if err := rows.Scan(&p.ID, &p.Platform, &p.PerformerID, &p.Name, &p.URL, &p.AvatarURL, &p.Bio,
-			&profile, &social, &body, &vc, &scur, &fetched,
+			&profile, &social, &body, &rank, &vc, &scur, &fetched,
 			&sub.ID, &sub.PerformerID, &sub.Enabled, &sub.BackfillDone, &sub.BackfillLimit,
 			&sub.BackfillPage, &totalPages, &lastSync, &nextSync, &sub.LastError, &created); err != nil {
 			return nil, err
@@ -288,6 +292,7 @@ func (s *Store) ListSubscriptions() ([]*model.Performer, error) {
 		p.Profile = parseBlock[model.ProfileField](profile)
 		p.Social = parseBlock[model.SocialLink](social)
 		p.Body = parseBodyBlock(body)
+		p.Rank = int(rank)
 		if vc.Valid {
 			n := int(vc.Int64)
 			p.VideoCount = &n

@@ -284,6 +284,23 @@ func parseProfileInfo(doc *goquery.Document) []model.ProfileField {
 	return out
 }
 
+// parseModelRank 取排名信息块里的「模特排名」，0 表示站点没给。
+// 块结构：.rankingInfo > .infoBox（模特排名）+ 若干 .infoBox.rankDetails（本周/本月/上月/年度）。
+// 数字放在 .big 里（"269 "，后面还挂一个涨跌箭头 <span class="icon">，取文本不受影响）。
+func parseModelRank(doc *goquery.Document) int {
+	box := doc.Find(".rankingInfo .infoBox").First()
+	if box.Length() == 0 {
+		box = doc.Find(".rankingInfo").First()
+	}
+	if box.Length() == 0 {
+		return 0
+	}
+	if n := parseCount(box.Find(".big").First().Text()); n != nil {
+		return *n
+	}
+	return 0
+}
+
 // socialHostLabels 把外链的域名翻成人看的名字，用于站点没给标签时的兜底。
 var socialHostLabels = map[string]string{
 	"twitter.com": "Twitter", "x.com": "X",
@@ -413,6 +430,9 @@ func parsePerformerPage(body []byte) (*model.Performer, error) {
 	// （`167cm · B89 · W64 · H91`）。认出来的那两行从 Profile 里摘掉，不再重复一遍；
 	// 认不出来的原样留在 Profile 里。
 	p.Body, p.Profile = model.ParseBody(p.Profile)
+
+	// 模特排名：排名信息块里第一个 infoBox 就是「模特排名」（后面几个是本周/本月/上月/年度）。
+	p.Rank = parseModelRank(doc)
 
 	// 头部读数：模特资料页顶部只有三块（模特排名 / 视频播放量 / 订阅者），
 	// 都用 .infoBox 承载，`data-title` 里是完整数字（"订阅者: 1,430,831"），

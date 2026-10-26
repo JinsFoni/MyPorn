@@ -241,6 +241,9 @@ func runDebugParse(reg *platform.Registry, rawURL string) {
 		if !p.Body.Empty() {
 			fmt.Printf("身材: %dcm B%d W%d H%d\n", p.Body.HeightCm, p.Body.Bust, p.Body.Waist, p.Body.Hips)
 		}
+		if p.Rank > 0 {
+			fmt.Printf("排名: %d\n", p.Rank)
+		}
 		for _, f := range p.Profile {
 			fmt.Printf("资料: %s: %s\n", f.Label, f.Value)
 		}

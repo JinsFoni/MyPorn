@@ -188,6 +188,45 @@ func TestPerformerBodyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPerformerRankRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+	id, err := st.UpsertPerformer(&model.Performer{
+		Platform: "pornhub", PerformerID: "mini-diva", Name: "Mini Diva", Rank: 269,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.GetPerformer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Rank != 269 {
+		t.Errorf("排名未存取: %d，期望 269", p.Rank)
+	}
+
+	// 这次没抓到排名（0）：保留库里的旧值，不要被清掉。
+	if _, err := st.UpsertPerformer(&model.Performer{
+		Platform: "pornhub", PerformerID: "mini-diva", Name: "Mini Diva",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = st.GetPerformer(id)
+	if p.Rank != 269 {
+		t.Errorf("空排名不应覆盖旧值，实际 %d", p.Rank)
+	}
+
+	// 排名变了就整体覆盖。
+	if _, err := st.UpsertPerformer(&model.Performer{
+		Platform: "pornhub", PerformerID: "mini-diva", Name: "Mini Diva", Rank: 254,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = st.GetPerformer(id)
+	if p.Rank != 254 {
+		t.Errorf("新排名应覆盖旧值，实际 %d", p.Rank)
+	}
+}
+
 func TestFeedPaginationByCursor(t *testing.T) {
 	st := newTestStore(t)
 	pid, _ := st.UpsertPerformer(&model.Performer{Platform: "pornhub", PerformerID: "p1", Name: "P1"})

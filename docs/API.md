@@ -43,6 +43,7 @@ type Performer = {
   profile: { label: string, value: string }[]  // 资料区块（性别/身高/出身地…），顺序即平台页面顺序；可能是空数组
   social: { label: string, url: string }[]     // 平台主页挂的站外链接（官方网址/Twitter/Instagram…）；可能是空数组
   body: { heightCm: number, bust: number, waist: number, hips: number }  // 身材（已归一成厘米）；0 = 平台没给/没认出来
+  rank: number                   // 平台给的模特排名（越小越靠前）；0 = 平台没给/没认出来，界面就不出「排名」那一行
   videoCount: number | null      // 平台资料页声明的影片总数；Pornhub 资料页**没有**这个数，通常为 null
   localVideoCount?: number       // 本地已收录的影片数（仅详情接口给；界面上的「N 部影片」用它）
   subscriberCount: number | null
@@ -209,6 +210,9 @@ type Video = {
    只给英制才按 2.54 换算），三围拆成 `bust/waist/hips`（英制的 `35-25-36` 会换成 `89/64/91`）。
    **认出来的这两行会从 `profile` 里摘掉**（同一条数据不在页面上出现两次），认不出来的（如 `1.67 m`）原样留在 `profile` 里；
    四项全 0 时艺人页不出「身材」那一行。字段固定四项、缺的就是 `0`，不会是 `null`。
+4c. **`Performer.rank`** 取艺人主页「排名信息」块里的**模特排名**（`.rankingInfo` 里第一个 `.infoBox`）——站点页头那块
+   `模特排名 / 本周排名 / 本月排名 / 上月排名 / 年度排名` 里只取第一个，其余四个不解析。取不到就是 `0`，艺人页不渲染这一行。
+   **单独一列**（`performers.model_rank`，整数）而不是塞进 JSON：它是一个会随同步更新的标量；同步时 `0` 不覆盖库里的旧值。
 5. **`Performer.backfillProgress`** 为 `{donePages, totalPages}`，百分比由前端计算；`totalPages` 未知时为 0。
 6. 没有批量同步端点：多艺人同步需逐个 `POST /api/subscriptions/{id}/sync`。
 7. 没有 OpenList 连通性测试端点（设置页因此无"测试连接"按钮）。

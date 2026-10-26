@@ -22,7 +22,9 @@ type Performer struct {
 	// Social 是艺人主页上挂的外部链接（Twitter / Instagram / 官方网址）。
 	Social []SocialLink
 	// Body 是身材数据（身高 + 三围，已归一成厘米），取自资料行里的「身高」「三围」。
-	Body          Body
+	Body Body
+	// Rank 是平台给的模特排名（越小越靠前），0 表示站点没给。
+	Rank          int
 	LastFetchedAt *time.Time
 	Subscription  *Subscription
 }

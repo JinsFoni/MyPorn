@@ -8,7 +8,7 @@
   import Skeleton from '../components/Skeleton.svelte';
   import { ApiError, api, messageFor } from '../lib/api';
   import { imageUrl } from '../lib/img';
-  import { formatBody, formatCount } from '../lib/format';
+  import { formatBody, formatCount, formatRank } from '../lib/format';
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
   import type { Performer, Video } from '../lib/types';
@@ -34,6 +34,7 @@
     ],
     social: [{ label: 'Twitter', url: 'https://example.invalid/mini-diva' }],
     body: { heightCm: 167, bust: 89, waist: 64, hips: 91 },
+    rank: 269,
     videoCount: null,
     localVideoCount: 42,
     subscriberCount: 1430831,
@@ -99,6 +100,8 @@
 
   /** 「身材」那一行：后端已把身高/三围归一到厘米，这里只拼字符串，四项全空就不显示 */
   const bodyText = $derived(performer ? formatBody(performer.body) : '');
+  /** 「排名」那一行：站点给的模特排名，没抓到就不显示 */
+  const rankText = $derived(performer ? formatRank(performer.rank) : '');
 
 
   async function loadPerformer(): Promise<void> {
@@ -222,6 +225,14 @@
           <p class="mt-1 flex flex-wrap items-baseline gap-x-2 text-ui">
             <span class="text-dim">身材</span>
             <span class="tabular-nums text-muted">{bodyText}</span>
+          </p>
+        {/if}
+
+        {#if rankText}
+          <!-- 排名：站点「排名信息」块里的模特排名（越小越靠前），跟身材一样是页头的读数 -->
+          <p class="mt-1 flex flex-wrap items-baseline gap-x-2 text-ui">
+            <span class="text-dim">排名</span>
+            <span class="tabular-nums text-muted">#{rankText}</span>
           </p>
         {/if}
       </div>

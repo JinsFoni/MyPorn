@@ -85,6 +85,12 @@ export function formatCount(value: number | null | undefined): string {
   return `${(value / 100000000).toFixed(1)}亿`;
 }
 
+/** 排名：整数加千分位（不走 formatCount 的「万/亿」缩写——「排名 1.2万」没人看得懂）；0 表示没数据 */
+export function formatRank(value: number | null | undefined): string {
+  if (!value || value <= 0) return '';
+  return value.toLocaleString('zh-CN');
+}
+
 /** 身材：167cm · B89 · W64 · H91（后端已归一到厘米，这里只管排版；缺项直接不写） */
 export function formatBody(body: Body | null | undefined): string {
   if (!body) return '';

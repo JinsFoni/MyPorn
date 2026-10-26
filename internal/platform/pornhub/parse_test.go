@@ -133,6 +133,10 @@ func TestParsePerformerPageRealLayout(t *testing.T) {
 	if p.SubscriberCount == nil || *p.SubscriberCount != 1430831 {
 		t.Errorf("订阅数应取 data-title 里的完整数字 1430831，实际 %v", p.SubscriberCount)
 	}
+	// 排名信息块里第一个 infoBox 是「模特排名」，后面几个（本周/本月/上月/年度）不要。
+	if p.Rank != 269 {
+		t.Errorf("模特排名要取 269，实际 %d", p.Rank)
+	}
 }
 
 // 资料区块与站外链接：两项性癖偏好和平台统计行要丢掉（"视频播放量" 含"视频"二字，

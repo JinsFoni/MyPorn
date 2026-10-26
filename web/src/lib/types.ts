@@ -61,6 +61,8 @@ export interface Performer {
   social: SocialLink[];
   /** 身材（身高 + 三围，厘米制）；四项全 0 表示没解析到，此时不显示「身材」那一行 */
   body: Body;
+  /** 平台给的模特排名（越小越靠前）；0 表示没解析到，此时不显示「排名」那一行 */
+  rank: number;
   /** 平台声明的影片总数（Pornhub 资料页其实不给，常为 null） */
   videoCount: number | null;
   /** 本地已收录的影片数（艺人详情接口才给；「N 部影片」显示的是这个） */
