@@ -11,6 +11,9 @@ importers:
       '@fontsource/roboto':
         specifier: ^5.3.0
         version: 5.3.0
+      '@fontsource/saira-extra-condensed':
+        specifier: ^5.3.0
+        version: 5.3.0
       hls.js:
         specifier: ^1.7.3
         version: 1.7.3
@@ -554,6 +557,9 @@ packages:
 
   '@fontsource/roboto@5.3.0':
     resolution: {integrity: sha512-BapRJOWYP+LZ21zp+wBQjfpPYKRoxc4LspJ/RLuI+HSMBD5u/X4O+ESDrSvEqDSy0rAl7GwBJ+09mdc16cVQ1Q==}
+
+  '@fontsource/saira-extra-condensed@5.3.0':
+    resolution: {integrity: sha512-oBbHvzZAebVOvXRgDxwWSl3IQbPIJNAP0XxIJOs2DUk1byMMXEhEoz0cD+vUKb+TzSWS4t4xe5ZGh5QhTZ17Rw==}
 
   '@isaacs/cliui@9.0.0':
     resolution: {integrity: sha512-AokJm4tuBHillT+FpMtxQ60n8ObyXBatq7jD2/JA9dxbDDokKQm8KMht5ibGzLVU9IJDIKK4TPKgMHEYMn3lMg==}
@@ -2840,6 +2846,8 @@ snapshots:
       '@babel/helper-validator-identifier': 7.29.7
 
   '@fontsource/roboto@5.3.0': {}
+
+  '@fontsource/saira-extra-condensed@5.3.0': {}
 
   '@isaacs/cliui@9.0.0': {}
 

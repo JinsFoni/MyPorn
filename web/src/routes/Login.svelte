@@ -38,7 +38,7 @@
   ></div>
 
   <div class="relative w-full max-w-sm">
-    <p class="text-hero font-normal tracking-[-0.01em] text-fg">MyPorn</p>
+    <p class="font-brand text-[2rem] font-semibold leading-none tracking-[-0.01em] text-fg">MyPorn</p>
     <p class="mt-2 text-ui text-muted">输入访问密码进入你的影片库。</p>
 
     <form class="mt-8 space-y-3" onsubmit={submit} novalidate>

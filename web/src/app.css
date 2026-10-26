@@ -17,6 +17,18 @@
   src: url('@fontsource/roboto/files/roboto-latin-500-normal.woff2') format('woff2');
 }
 
+/* 站名 MyPorn 的"艺术字"：超窄无衬线（Saira Extra Condensed 600），
+   视觉上对标 beeg.com 左上角那个又高又窄、字距极紧的 logo 字标。
+   只用在品牌字标上（侧边栏 / 移动端顶栏 / 登录页），正文一律 Roboto。 */
+@font-face {
+  font-family: 'Saira XC';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('@fontsource/saira-extra-condensed/files/saira-extra-condensed-latin-600-normal.woff2')
+    format('woff2');
+}
+
 /* ---------------------------------------------------------------------------
    MyPorn 设计令牌 —— 冷调纯黑画布（视觉语言参考 beeg.com）
 
@@ -32,6 +44,8 @@
   --font-sans:
     'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  /* 品牌字标专用（`font-brand`），别拿它排正文 */
+  --font-brand: 'Saira XC', 'Roboto', ui-sans-serif, sans-serif;
 
   /* 画布与两档表面 */
   --color-ink: #020408;

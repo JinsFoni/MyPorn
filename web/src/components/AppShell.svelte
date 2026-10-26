@@ -178,7 +178,7 @@
       <a
         data-link
         href="/"
-        class="flex h-9 shrink-0 items-center text-title font-medium tracking-[-0.01em] text-fg"
+        class="flex h-9 shrink-0 items-center font-brand text-[1.25rem] font-semibold leading-none tracking-[-0.01em] text-fg"
         aria-label="MyPorn 首页"
       >
         MyPorn
@@ -206,7 +206,7 @@
     <a
       data-link
       href="/"
-      class="flex h-10 shrink-0 items-center rounded-xl px-3 text-title font-medium tracking-[-0.01em] text-fg"
+      class="flex h-10 shrink-0 items-center rounded-xl px-3 font-brand text-[1.5rem] font-semibold leading-none tracking-[-0.01em] text-fg"
       aria-label="MyPorn 首页"
     >
       MyPorn
