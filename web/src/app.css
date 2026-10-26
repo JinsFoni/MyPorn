@@ -1,0 +1,287 @@
+@import 'tailwindcss';
+
+/* Roboto 只带两个字重（400 / 500）——beeg 也只用这两档；woff2 单个 ~22KB。
+   CJK 走系统字体（PingFang SC / 微软雅黑），不额外打包中文字体。 */
+@font-face {
+  font-family: 'Roboto';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('@fontsource/roboto/files/roboto-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Roboto';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('@fontsource/roboto/files/roboto-latin-500-normal.woff2') format('woff2');
+}
+
+/* ---------------------------------------------------------------------------
+   MyPorn 设计令牌 —— 冷调纯黑画布（视觉语言参考 beeg.com）
+
+   一套刻意做窄的系统：
+   - 只有一个色相：冷白 #F5FAFF，靠 95% / 60% / 40% 三档透明度分层，没有彩色强调色；
+     要"最亮"的地方就用纯白填充 + 黑字。
+   - 表面只有两档：画布 #020408，和冷白 5% / 9% 两层半透明。
+   - 圆角只有两种：媒体与面板 12px，可点元素 9999px（药丸）。
+   - 字重常态 400，只有按钮与激活项用 500。没有阴影、没有描边卡片；
+     唯一的渐变是顶部那层环境光（`.canvas-glow`）。
+--------------------------------------------------------------------------- */
+@theme {
+  --font-sans:
+    'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+
+  /* 画布与两档表面 */
+  --color-ink: #020408;
+  --color-panel: #f5faff0d; /* 冷白 5%：区块、媒体底、输入框 */
+  --color-raise: #f5faff17; /* 冷白 9%：悬停、抬升层、药丸 */
+
+  /* 线条（只有发丝线） */
+  --color-line: #f5faff1a;
+  --color-line-strong: #f5faff33;
+
+  /* 文本三档：正文 / 次要 / 注释 */
+  --color-fg: #f5faff;
+  --color-muted: #f5faff99;
+  --color-dim: #f5faff66;
+
+  /* 唯一的"强调"是纯白：主按钮填充、激活态、新片角标 */
+  --color-hi: #ffffff;
+  --color-hi-soft: #f5faff1a;
+
+  /* 语义色只用于状态点与错误文案，永远不做大面积填充 */
+  --color-brick: #e2685f;
+  --color-sage: #7fb08c;
+
+  /* 字号：14 正文、12 元信息、28 页标题 */
+  --text-meta: 0.75rem; /* 12px */
+  --text-meta--line-height: 1rem;
+  --text-ui: 0.875rem; /* 14px */
+  --text-ui--line-height: 1.25rem;
+  --text-body: 0.875rem; /* 14px */
+  --text-body--line-height: 1.375rem;
+  --text-title: 1rem; /* 16px */
+  --text-title--line-height: 1.375rem;
+  --text-display: 1.25rem; /* 20px */
+  --text-display--line-height: 1.625rem;
+  --text-hero: 1.75rem; /* 28px */
+  --text-hero--line-height: 2.125rem;
+
+  --radius-xl: 0.75rem;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background-color: var(--color-ink);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: var(--color-ink);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    font-weight: 400;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* 键盘焦点必须可见；鼠标点击不冒出光圈 */
+  :focus-visible {
+    outline: 2px solid var(--color-fg);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
+  ::selection {
+    background: #f5faff33;
+    color: #fff;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line-strong);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* 画布辉光：直接照搬 beeg 的实现——一张 1000×563 的柔和彩色底图（glow.webp，
+   8KB webp）铺满 49vh 高的顶部色带，上面再压一层从黑 60% 渐变到画布色的压暗层。
+   beeg 用它做整站背景，压暗层让顶边够暗、底部无缝接上画布。 */
+@utility canvas-glow {
+  background-image:
+    linear-gradient(to bottom, rgb(0 0 0 / 0.6), var(--color-ink)),
+    url('./assets/glow.webp');
+  background-size:
+    100% 100%,
+    cover;
+  background-position:
+    center,
+    center;
+  background-repeat: no-repeat;
+}
+
+/* 安全区（iPhone 刘海 / 底部手势条） */
+@utility pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom), 0px);
+}
+@utility pt-safe {
+  padding-top: max(env(safe-area-inset-top), 0px);
+}
+@utility mb-safe {
+  margin-bottom: max(env(safe-area-inset-bottom), 0px);
+}
+@utility pl-safe {
+  padding-left: max(env(safe-area-inset-left), 0px);
+}
+@utility pr-safe {
+  padding-right: max(env(safe-area-inset-right), 0px);
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* 交互基元：全站统一的按钮 / 输入框 / 药丸，避免每个组件各写一套 */
+@utility btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.25rem;
+  padding-inline: 1rem;
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  background-color: var(--color-panel);
+  color: var(--color-fg);
+  font-size: var(--text-ui);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+  &:hover:not(:disabled) {
+    background-color: var(--color-raise);
+  }
+  &:disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+}
+
+@utility btn-primary {
+  background-color: var(--color-hi);
+  color: var(--color-ink);
+  &:hover:not(:disabled) {
+    background-color: #e8eef5;
+  }
+}
+
+@utility btn-ghost {
+  background-color: transparent;
+  color: var(--color-muted);
+  &:hover:not(:disabled) {
+    color: var(--color-fg);
+    background-color: var(--color-panel);
+  }
+}
+
+@utility btn-danger {
+  background-color: transparent;
+  color: var(--color-brick);
+  &:hover:not(:disabled) {
+    background-color: color-mix(in oklab, var(--color-brick) 14%, transparent);
+  }
+}
+
+@utility field {
+  width: 100%;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid transparent;
+  background-color: var(--color-panel);
+  color: var(--color-fg);
+  font-size: var(--text-ui);
+  line-height: 1.35;
+  &::placeholder {
+    color: var(--color-dim);
+  }
+  &:hover {
+    background-color: var(--color-raise);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--color-fg);
+    outline-offset: 1px;
+    background-color: var(--color-raise);
+  }
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+/* 面板：冷白 5% 的软面，不用描边。只在真正"成块"的地方用（表单分组、列表行） */
+@utility panel {
+  border-radius: var(--radius-xl);
+  background-color: var(--color-panel);
+}
+
+@utility card {
+  border-radius: var(--radius-xl);
+  background-color: var(--color-panel);
+}
+
+/* 药丸：标签、筛选、计数、状态 */
+@utility chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  background-color: var(--color-panel);
+  color: var(--color-muted);
+  font-size: var(--text-meta);
+  line-height: 1rem;
+  white-space: nowrap;
+}
+
+@utility chip-hi {
+  background-color: var(--color-hi);
+  color: var(--color-ink);
+}
+
+@utility label-meta {
+  display: block;
+  font-size: var(--text-meta);
+  line-height: 1rem;
+  color: var(--color-dim);
+}

@@ -1,0 +1,37 @@
+# 依赖与构建
+node_modules/
+web/dist/
+bin/
+.gocache/
+*.exe
+
+# 前端构建产物（index.html 占位文件保留，保证 go:embed 能编译）
+internal/webui/dist/*
+!internal/webui/dist/index.html
+
+# 临时目录（本地跑测试实例用）
+.tmp/
+
+# 运行时数据
+data/
+media/
+*.db
+*.db-wal
+*.db-shm
+logs/
+
+# 环境与密钥
+.env
+.env.local
+.env.*.local
+
+# 系统
+.DS_Store
+.idea/
+.vscode/
+
+# 本地工具缓存
+.pnpm-store/
+.playwright/
+.playwright-cli/
+*.log
