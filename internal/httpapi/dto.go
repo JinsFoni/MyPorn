@@ -27,6 +27,21 @@ func rfc3339(t *time.Time) any {
 	return t.UTC().Format(time.RFC3339)
 }
 
+// profileOrEmpty / socialOrEmpty：nil 会序列化成 null，前端还得判空，索性统一成空数组。
+func profileOrEmpty(v []model.ProfileField) []model.ProfileField {
+	if v == nil {
+		return []model.ProfileField{}
+	}
+	return v
+}
+
+func socialOrEmpty(v []model.SocialLink) []model.SocialLink {
+	if v == nil {
+		return []model.SocialLink{}
+	}
+	return v
+}
+
 func (s *Server) performerDTO(p *model.Performer, newCount int) map[string]any {
 	dto := map[string]any{
 		"id":               p.ID,
@@ -36,6 +51,8 @@ func (s *Server) performerDTO(p *model.Performer, newCount int) map[string]any {
 		"url":              p.URL,
 		"avatarUrl":        imgProxy(p.Platform, p.AvatarURL),
 		"bio":              p.Bio,
+		"profile":          profileOrEmpty(p.Profile),
+		"social":           socialOrEmpty(p.Social),
 		"videoCount":       p.VideoCount,
 		"subscriberCount":  p.SubscriberCount,
 		"subscriptionId":   nil,

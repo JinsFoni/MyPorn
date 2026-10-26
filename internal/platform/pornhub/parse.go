@@ -236,6 +236,137 @@ func parseRelativeDate(s string, nowT time.Time) *time.Time {
 
 // ---------- 艺人页 ----------
 
+// profileDropLabels 是资料区块里**不收**的行：
+//   - 「会勾起我性欲的是 / 会浇灭我性欲的是」——用户明确不要，这两项也不适合入库；
+//   - 「视频播放量 / 主页浏览量 / 已看视频」——平台统计，不是个人资料，
+//     页头已经有本地影片数与订阅数了，没必要重复。
+//
+// 中英文都匹配（站点按语言返回不同文案），只做包含匹配，改文案时不必精确对齐。
+var profileDropLabels = []string{
+	"会勾起我性欲", "会浇灭我性欲", "播放量", "浏览量", "已看视频",
+	"turn on", "turn off", "video views", "profile views", "videos watched",
+}
+
+func dropProfileLabel(label string) bool {
+	l := strings.ToLower(strings.TrimSpace(label))
+	if l == "" {
+		return true
+	}
+	for _, bad := range profileDropLabels {
+		if strings.Contains(l, bad) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseProfileInfo 抓资料区块（.infoPiece）里的「标签: 值」行，保持站点顺序。
+// 站点字段按艺人不同（有人有罩杯、眼睛颜色，有人没有），所以不做白名单，
+// 只丢 profileDropLabels 里那几行。
+func parseProfileInfo(doc *goquery.Document) []model.ProfileField {
+	pieces := doc.Find(".js-infoText .infoPiece")
+	if pieces.Length() == 0 {
+		pieces = doc.Find(".infoPiece")
+	}
+	out := make([]model.ProfileField, 0, pieces.Length())
+	pieces.Each(func(_ int, s *goquery.Selection) {
+		label := strings.TrimSpace(s.Find("span").First().Text())
+		label = strings.TrimRight(label, ":： ") // 站点写成「性别:」
+		value := strings.TrimSpace(s.Find(".smallInfo").First().Text())
+		if value == "" {
+			value = strings.TrimSpace(s.Find("span").Last().Text())
+		}
+		if value == "" || value == label || dropProfileLabel(label) {
+			return
+		}
+		out = append(out, model.ProfileField{Label: label, Value: value})
+	})
+	return out
+}
+
+// socialHostLabels 把外链的域名翻成人看的名字，用于站点没给标签时的兜底。
+var socialHostLabels = map[string]string{
+	"twitter.com": "Twitter", "x.com": "X",
+	"instagram.com": "Instagram", "onlyfans.com": "OnlyFans",
+	"fansly.com": "Fansly", "tiktok.com": "TikTok",
+	"youtube.com": "YouTube", "youtu.be": "YouTube",
+	"twitch.tv": "Twitch", "linktr.ee": "Linktree",
+	"snapchat.com": "Snapchat", "reddit.com": "Reddit",
+	"t.me": "Telegram", "telegram.me": "Telegram",
+	"facebook.com": "Facebook", "fanhub.com": "Fanhub",
+	"manyvids.com": "ManyVids", "chaturbate.com": "Chaturbate",
+	"pornhub.com": "Pornhub",
+}
+
+func socialHostLabel(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	host := strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
+	if name, ok := socialHostLabels[host]; ok {
+		return name
+	}
+	// 未知域名：取主体部分（linktr.ee → Linktr）。
+	parts := strings.Split(host, ".")
+	if len(parts) >= 2 {
+		base := parts[len(parts)-2]
+		if base != "" {
+			return strings.ToUpper(base[:1]) + base[1:]
+		}
+	}
+	return host
+}
+
+// parseSocialLinks 抓艺人主页右侧的站外链接列表（官方网址 / Twitter / Instagram…）。
+// 只认 .socialList：顶部那个「关于我的更多信息」按钮是引流位，不算社交账号。
+func parseSocialLinks(doc *goquery.Document) []model.SocialLink {
+	out := make([]model.SocialLink, 0, 4)
+	seen := map[string]bool{}
+	doc.Find(".socialList li a").Each(func(_ int, s *goquery.Selection) {
+		href, _ := s.Attr("href")
+		href = strings.TrimSpace(href)
+		if href == "" || seen[href] {
+			return
+		}
+		// 只收 http(s)：资料来自上游页面，别把 javascript: / data: 之类的带进前端。
+		lower := strings.ToLower(href)
+		if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+			return
+		}
+		label := strings.TrimSpace(s.Find(".socialText").First().Text())
+		if label == "" {
+			label = socialHostLabel(href)
+		}
+		if label == "" {
+			return
+		}
+		seen[href] = true
+		out = append(out, model.SocialLink{Label: label, URL: href})
+	})
+	return out
+}
+
+// aboutText 抓「简介」正文。区块里第一个 div 是标题（"简介 Mini Diva"），正文是后面的 div。
+func aboutText(doc *goquery.Document) string {
+	s := doc.Find(".aboutMeSection").First()
+	if s.Length() == 0 {
+		return ""
+	}
+	var out string
+	s.Children().EachWithBreak(func(_ int, c *goquery.Selection) bool {
+		if c.HasClass("title") {
+			return true
+		}
+		if t := strings.TrimSpace(c.Text()); t != "" {
+			out = t
+			return false
+		}
+		return true
+	})
+	return out
+}
+
 func parsePerformerPage(body []byte) (*model.Performer, error) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
@@ -270,6 +401,13 @@ func parsePerformerPage(body []byte) (*model.Performer, error) {
 	if p.Bio == "" {
 		p.Bio = pickText(doc, ".aboutMeText", "[itemprop=description]")
 	}
+	if p.Bio == "" {
+		p.Bio = aboutText(doc) // 页面上的「简介」区块（ld+json 里通常没有 description）
+	}
+
+	// 资料区块与站外链接：整组随艺人资料一起存，页面按顺序渲染。
+	p.Profile = parseProfileInfo(doc)
+	p.Social = parseSocialLinks(doc)
 
 	// 头部读数：模特资料页顶部只有三块（模特排名 / 视频播放量 / 订阅者），
 	// 都用 .infoBox 承载，`data-title` 里是完整数字（"订阅者: 1,430,831"），
@@ -292,9 +430,11 @@ func parsePerformerPage(body []byte) (*model.Performer, error) {
 	// 计数：从详情区块里按标签文字就近取数。
 	// 只认资料区块（.infoPiece / .info）——早先这里还带了 `li`，结果把影片列表卡片
 	// 里的「播放量」当成了影片总数（48949 这种数字就是这么来的）。
+	// 同一个坑还有一处：「视频播放量: 561,906,285」也含「视频」二字，必须先被
+	// dropProfileLabel 挡掉，否则会把播放量当成影片总数。
 	doc.Find(".infoPiece, .info").Each(func(_ int, s *goquery.Selection) {
 		txt := strings.ToLower(strings.TrimSpace(s.Text()))
-		if len(txt) > 120 {
+		if len(txt) > 120 || dropProfileLabel(txt) {
 			return
 		}
 		switch {

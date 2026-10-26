@@ -17,8 +17,25 @@ type Performer struct {
 	Bio             string
 	VideoCount      *int
 	SubscriberCount *int
-	LastFetchedAt   *time.Time
-	Subscription    *Subscription
+	// Profile 是资料区块里的「标签: 值」行（性别、身高、出身地……），顺序即站点顺序。
+	Profile []ProfileField
+	// Social 是艺人主页上挂的外部链接（Twitter / Instagram / 官方网址）。
+	Social        []SocialLink
+	LastFetchedAt *time.Time
+	Subscription  *Subscription
+}
+
+// ProfileField 是艺人资料里的一行，如 {性别, 女性}。
+// 站点字段会变（有的艺人有罩杯、眼睛，有的没有），所以不建固定列，整组按顺序存 JSON。
+type ProfileField struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// SocialLink 是艺人主页上的一个外部链接。
+type SocialLink struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
 }
 
 type Subscription struct {

@@ -135,6 +135,74 @@ func TestParsePerformerPageRealLayout(t *testing.T) {
 	}
 }
 
+// 资料区块与站外链接：两项性癖偏好和平台统计行要丢掉（"视频播放量" 含"视频"二字，
+// 不挡掉会被当成影片总数）；其余按站点顺序保留；链接只收 http(s)。
+func TestParsePerformerProfileAndSocial(t *testing.T) {
+	html := `<html><body>
+<div class="model-details">
+  <div class="aboutMeSection"><div class="title">简介 Mini Diva</div>
+    <div>Love being here from time to time.</div></div>
+  <div class="js-socials"><ul class="socialList">
+    <li><a href="https://onlyfans.com/minidivaonly/c1"><i class="officialSiteIcon"></i><span class="socialText">官方网址</span></a></li>
+    <li><a href="https://twitter.com/minidivaonly"><i class="ph-icon-twitterX"></i><span class="socialText">Twitter</span></a></li>
+    <li><a href="https://twitter.com/minidivaonly"><span class="socialText">Twitter</span></a></li>
+    <li><a href="javascript:alert(1)"><span class="socialText">坏链接</span></a></li>
+    <li><a href="https://linktr.ee/minidiva"><i class="x"></i></a></li>
+  </ul></div>
+  <div class="js-infoText"><div class="content-columns">
+    <div class="infoPiece"><span>性别:</span><span itemprop="gender" class="smallInfo">女性</span></div>
+    <div class="infoPiece"><span>出身地:</span><span itemprop="birthPlace" class="smallInfo">Czech Republic</span></div>
+    <div class="infoPiece"><span>身高:</span><span itemprop="height" class="smallInfo">5&#039; 6&quot; (167cm)</span></div>
+    <div class="infoPiece"><span>会勾起我性欲的是:</span><span class="smallInfo">When you watching me</span></div>
+    <div class="infoPiece"><span>会浇灭我性欲的是:</span><span class="smallInfo">Dunno</span></div>
+    <div class="infoPiece"><span>视频播放量:</span><span class="smallInfo">561,906,285</span></div>
+    <div class="infoPiece"><span>已看视频:</span><span class="smallInfo">707</span></div>
+  </div></div>
+</div>
+<div class="nameSubscribe"><h1>Mini Diva</h1></div>
+</body></html>`
+	p, err := parsePerformerPage([]byte(html))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Bio != "Love being here from time to time." {
+		t.Errorf("简介应取 .aboutMeSection 正文，实际 %q", p.Bio)
+	}
+	wantProfile := [][2]string{
+		{"性别", "女性"},
+		{"出身地", "Czech Republic"},
+		{"身高", `5' 6" (167cm)`},
+	}
+	if len(p.Profile) != len(wantProfile) {
+		t.Fatalf("资料应有 %d 行（性癖两项 + 播放量/已看视频都要丢掉），实际 %d 行: %+v",
+			len(wantProfile), len(p.Profile), p.Profile)
+	}
+	for i, w := range wantProfile {
+		if p.Profile[i].Label != w[0] || p.Profile[i].Value != w[1] {
+			t.Errorf("第 %d 行应为 %q: %q，实际 %q: %q",
+				i+1, w[0], w[1], p.Profile[i].Label, p.Profile[i].Value)
+		}
+	}
+	if p.VideoCount != nil {
+		t.Errorf("「视频播放量」不是影片总数，videoCount 应为 nil，实际 %d", *p.VideoCount)
+	}
+	wantSocial := [][2]string{
+		{"官方网址", "https://onlyfans.com/minidivaonly/c1"},
+		{"Twitter", "https://twitter.com/minidivaonly"},
+		{"Linktree", "https://linktr.ee/minidiva"}, // 没有 socialText 时用域名兜底
+	}
+	if len(p.Social) != len(wantSocial) {
+		t.Fatalf("链接应有 %d 条（重复与非 http(s) 要去掉），实际 %d 条: %+v",
+			len(wantSocial), len(p.Social), p.Social)
+	}
+	for i, w := range wantSocial {
+		if p.Social[i].Label != w[0] || p.Social[i].URL != w[1] {
+			t.Errorf("第 %d 条链接应为 %q %q，实际 %q %q",
+				i+1, w[0], w[1], p.Social[i].Label, p.Social[i].URL)
+		}
+	}
+}
+
 // 英文文案 "Subscribers: 1,430,831" 里的 b 不能被当成 billion 倍率。
 func TestParseCountFromLabel(t *testing.T) {
 	cases := map[string]int{

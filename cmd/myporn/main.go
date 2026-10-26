@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -234,6 +235,15 @@ func runDebugParse(reg *platform.Registry, rawURL string) {
 			return
 		}
 		fmt.Printf("艺人: %q 头像=%s 视频数=%v 订阅数=%v\n", p.Name, p.AvatarURL, p.VideoCount, p.SubscriberCount)
+		if p.Bio != "" {
+			fmt.Printf("简介: %s\n", strings.ReplaceAll(p.Bio, "\n", " / "))
+		}
+		for _, f := range p.Profile {
+			fmt.Printf("资料: %s: %s\n", f.Label, f.Value)
+		}
+		for _, l := range p.Social {
+			fmt.Printf("链接: %s → %s\n", l.Label, l.URL)
+		}
 		page, err := a.ListPerformerVideos(ctx, id, 1)
 		if err != nil {
 			fmt.Println("抓取影片列表失败:", err)

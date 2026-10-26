@@ -25,6 +25,18 @@ export interface BackfillProgress {
   totalPages: number | null;
 }
 
+/** 艺人资料里的一行，如 {性别, 女性}。字段因艺人而异，所以是数组不是固定属性。 */
+export interface ProfileField {
+  label: string;
+  value: string;
+}
+
+/** 艺人主页上的站外链接。 */
+export interface SocialLink {
+  label: string;
+  url: string;
+}
+
 export interface Performer {
   id: number;
   platform: PlatformKey;
@@ -35,6 +47,10 @@ export interface Performer {
   /** 已经过本地 /api/img 代理 */
   avatarUrl: string | null;
   bio: string | null;
+  /** 资料区块（性别、身高、出身地……），顺序即平台页面顺序；可能为空数组 */
+  profile: ProfileField[];
+  /** 平台主页上挂的站外链接（Twitter / Instagram / 官方网址）；可能为空数组 */
+  social: SocialLink[];
   /** 平台声明的影片总数（Pornhub 资料页其实不给，常为 null） */
   videoCount: number | null;
   /** 本地已收录的影片数（艺人详情接口才给；「N 部影片」显示的是这个） */

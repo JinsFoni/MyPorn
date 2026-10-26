@@ -92,6 +92,60 @@ func TestUpsertPerformerAndSubscription(t *testing.T) {
 	}
 }
 
+func TestPerformerProfileAndSocialRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+	id, err := st.UpsertPerformer(&model.Performer{
+		Platform: "pornhub", PerformerID: "mini-diva", Name: "Mini Diva",
+		Profile: []model.ProfileField{
+			{Label: "性别", Value: "女性"},
+			{Label: "身高", Value: `5' 6" (167cm)`},
+		},
+		Social: []model.SocialLink{
+			{Label: "Twitter", URL: "https://twitter.com/minidivaonly"},
+			{Label: "官方网址", URL: "https://onlyfans.com/minidivaonly/c1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.GetPerformer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Profile) != 2 || p.Profile[1].Label != "身高" || p.Profile[1].Value != `5' 6" (167cm)` {
+		t.Errorf("资料行未按顺序存取: %+v", p.Profile)
+	}
+	if len(p.Social) != 2 || p.Social[0].URL != "https://twitter.com/minidivaonly" {
+		t.Errorf("站外链接未存取: %+v", p.Social)
+	}
+
+	// 页面这次没抓到资料（空数组）时，不能把库里已有的清空。
+	if _, err := st.UpsertPerformer(&model.Performer{
+		Platform: "pornhub", PerformerID: "mini-diva", Name: "Mini Diva",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, err = st.GetPerformer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Profile) != 2 || len(p.Social) != 2 {
+		t.Errorf("空资料不应覆盖旧值: profile=%+v social=%+v", p.Profile, p.Social)
+	}
+
+	// 真的抓到新内容时整体替换（顺序也换）。
+	if _, err := st.UpsertPerformer(&model.Performer{
+		Platform: "pornhub", PerformerID: "mini-diva", Name: "Mini Diva",
+		Profile: []model.ProfileField{{Label: "性别", Value: "女性"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = st.GetPerformer(id)
+	if len(p.Profile) != 1 {
+		t.Errorf("新资料应整体覆盖旧值，实际 %+v", p.Profile)
+	}
+}
+
 func TestFeedPaginationByCursor(t *testing.T) {
 	st := newTestStore(t)
 	pid, _ := st.UpsertPerformer(&model.Performer{Platform: "pornhub", PerformerID: "p1", Name: "P1"})

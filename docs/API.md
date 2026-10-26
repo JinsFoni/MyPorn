@@ -40,6 +40,8 @@ type Performer = {
   url: string                // 平台主页
   avatarUrl: string | null   // 经过本地 /api/img 代理后的 URL
   bio: string | null
+  profile: { label: string, value: string }[]  // 资料区块（性别/身高/出身地…），顺序即平台页面顺序；可能是空数组
+  social: { label: string, url: string }[]     // 平台主页挂的站外链接（官方网址/Twitter/Instagram…）；可能是空数组
   videoCount: number | null      // 平台资料页声明的影片总数；Pornhub 资料页**没有**这个数，通常为 null
   localVideoCount?: number       // 本地已收录的影片数（仅详情接口给；界面上的「N 部影片」用它）
   subscriberCount: number | null
@@ -198,6 +200,10 @@ type Video = {
    注意 **Pornhub 的资料页只有「视频播放量」和「订阅者」，没有影片总数**，所以 `videoCount` 经常是 `null`；
    艺人页显示的「N 部影片」用 `localVideoCount`（本地收录数，与下面影片列表一致），订阅数用 `subscriberCount`
    （从 `.infoBox[data-title="订阅者: 1,430,831"]` 里取完整数字）。
+4a. **`Performer.profile` / `Performer.social`** 来自艺人主页的「资料区块」与右侧社交列表，同步时整体覆盖写入；
+   上游页面没有这些内容时保留库里旧值，接口永远返回数组（空则 `[]`，不会是 `null`）。
+   **「会勾起我性欲的是」「会浇灭我性欲的是」两项性癖偏好，以及「视频播放量 / 主页浏览量 / 已看视频」三行平台统计，
+   在解析阶段就被丢掉**，不属于资料的一部分，也不会入库。
 5. **`Performer.backfillProgress`** 为 `{donePages, totalPages}`，百分比由前端计算；`totalPages` 未知时为 0。
 6. 没有批量同步端点：多艺人同步需逐个 `POST /api/subscriptions/{id}/sync`。
 7. 没有 OpenList 连通性测试端点（设置页因此无"测试连接"按钮）。

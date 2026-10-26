@@ -1,6 +1,7 @@
 <script lang="ts">
   import InfiniteList from '../components/InfiniteList.svelte';
   import PlatformIcon from '../components/PlatformIcon.svelte';
+  import PerformerProfile from '../components/PerformerProfile.svelte';
   import VideoCard from '../components/VideoCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import Skeleton from '../components/Skeleton.svelte';
@@ -9,7 +10,7 @@
   import { formatCount } from '../lib/format';
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
-    import type { Performer, Video } from '../lib/types';
+  import type { Performer, Video } from '../lib/types';
 
   interface Props {
     id: string;
@@ -26,6 +27,11 @@
     url: 'https://example.invalid/model/mini-diva',
     avatarUrl: null,
     bio: '示例数据：后端未连接。',
+    profile: [
+      { label: '性别', value: '女性' },
+      { label: '出身地', value: 'Czech Republic' },
+    ],
+    social: [{ label: 'Twitter', url: 'https://example.invalid/mini-diva' }],
     videoCount: null,
     localVideoCount: 42,
     subscriberCount: 1430831,
@@ -188,9 +194,8 @@
           />
         </div>
 
-        {#if performer.bio}
-          <p class="mt-1.5 line-clamp-2 max-w-2xl text-ui text-muted">{performer.bio}</p>
-        {/if}
+        <!-- 简介不在这里：它和资料字段一起在下面的「个人资料」面板里整段显示，
+             页头只留「是谁 + 有多少片」，避免同一段文字在一屏里出现两次。 -->
 
         <!-- 一行元信息，用中点分隔（beeg 的艺人页也是这么写的：数字直接跟着图标/词走）。
              本页不再显示任何同步信息（未看数、上次/下次同步、已暂停、同步出错、进度条），
@@ -206,6 +211,10 @@
     </div>
 
   </section>
+
+  <!-- 资料与站外链接：来自艺人主页的「简介 / 资料区块 / 社交列表」。
+       两项性癖偏好和平台统计行（播放量等）在解析时就被丢掉了，不会出现在这里。 -->
+  <PerformerProfile profile={performer.profile} social={performer.social} bio={performer.bio} />
 
   <section class="mt-6">
     <h3 class="mb-3 text-title font-medium text-fg">影片</h3>
