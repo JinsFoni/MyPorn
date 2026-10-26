@@ -52,17 +52,14 @@
   </svg>
 {/snippet}
 
-<!-- 资料行 + 站外链接，排在页头右栏（名字/计数/身材/简介在左栏）。
-     `xl` 之前它掉到下面一条，`xl` 起才有一道发丝线把它跟左栏分开。
-     字段按右栏自身宽度排：够宽（`@xs`，约 20rem）才两列，十几个字段的人也就五六行。 -->
+<!-- 资料行 + 站外链接，横跨整个面板（在头像/名字那一行下面、简介下面）。
+     字段窄屏单列、`sm` 起两列、`xl` 起三列——十几个字段的人也就四五行，不会把面板拉长。 -->
 {#if profile.length || social.length}
-  <!-- @container：字段排几列看这一栏自己有多宽，而不是看窗口有多宽——
-       1024px 的侧边栏布局下这一栏只有 250px，两列会把「Czech Republic」拆成竖排字母。 -->
-  <div class="@container min-w-0 xl:border-l xl:border-line xl:pl-6">
+  <div class="mt-4">
     {#if profile.length}
-      <dl class="grid grid-cols-1 gap-x-6 gap-y-2 @xs:grid-cols-2">
+      <dl class="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2 xl:grid-cols-3">
         {#each profile as field (field.label)}
-          <div class="grid grid-cols-[4rem_minmax(0,1fr)] items-baseline gap-2">
+          <div class="grid grid-cols-[5rem_minmax(0,1fr)] items-baseline gap-2">
             <dt class="text-meta text-dim">{field.label}</dt>
             <dd class="min-w-0 break-words text-ui text-fg">{field.value}</dd>
           </div>

@@ -99,8 +99,6 @@
   /** 「身材」那一行：后端已把身高/三围归一到厘米，这里只拼字符串，四项全空就不显示 */
   const bodyText = $derived(performer ? formatBody(performer.body) : '');
 
-  /** 右栏（资料行 + 站外链接）有没有内容：没有就整块省略，别留一条空轨道把左边挤窄 */
-  const hasAside = $derived(performer ? performer.profile.length > 0 || performer.social.length > 0 : false);
 
   async function loadPerformer(): Promise<void> {
     error = '';
@@ -175,7 +173,7 @@
     </p>
   {/if}
 
-  <!-- 页头就是这一块：左边头像，右边从名字一路排到站外链接（简介、资料行、药丸都在同一行里）。
+  <!-- 页头就是这一块：左边头像 + 右边名字/计数/身材，往下是简介（压在头像下面）、资料行、站外链接。
        原来贴在下面的「个人资料 / 社交媒体」两张卡取消了，页面少两块面板的高度。 -->
   <section class="panel p-4 sm:p-5">
     <div class="flex items-start gap-4 sm:gap-5">
@@ -192,54 +190,45 @@
         {/if}
       </div>
 
-      <!-- 头像右边分两栏（`xl` 之前上下叠）：左边是「是谁 + 有多少片 + 身材 + 简介」，
-           右边是「资料行 + 站外链接」。读起来是「先认识这个人，再看她的资料」，比一股脑往下堆清楚。
-           1024px 那种带侧边栏的窄桌面只有 700px 可用，硬分栏会把两边都挤得没法看，所以叠着放。 -->
-      <div
-        class="grid min-w-0 flex-1 gap-4 {hasAside
-          ? 'xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] xl:gap-6'
-          : ''}"
-      >
-        <div class="min-w-0">
-          <div class="flex flex-wrap items-center gap-2">
-            <h2 class="text-hero font-normal tracking-[-0.01em] text-fg">{performer.name}</h2>
-            <!-- 图标即入口：点它直接开该艺人的平台主页（原来那个「平台主页」按钮已经去掉）。 -->
-            <PlatformIcon
-              platform={performer.platform}
-              label={platformLabel(performer.platform)}
-              href={performer.url}
-            />
-          </div>
-
-          <p class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">
-            <span class="tabular-nums">{formatCount(performer.localVideoCount ?? performer.videoCount ?? 0)}部影片</span>
-            {#if performer.subscriberCount !== null}
-              <span aria-hidden="true">·</span>
-              <span class="tabular-nums">{formatCount(performer.subscriberCount)}订阅</span>
-            {/if}
-          </p>
-
-          {#if bodyText}
-            <!-- 身材：站点资料行里的「身高」「三围」抓取时已归一成公制，紧跟在影片数下面，
-                 所以它们在右栏的资料行里不再重复出现。 -->
-            <p class="mt-1 flex flex-wrap items-baseline gap-x-2 text-meta">
-              <span class="text-dim">身材</span>
-              <span class="tabular-nums text-muted">{bodyText}</span>
-            </p>
-          {/if}
-
-          {#if performer.bio}
-            <!-- 简介：站点上就是一段自由文本，换行原样保留 -->
-            <p class="mt-3 whitespace-pre-line text-ui text-muted">{performer.bio}</p>
-          {/if}
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2">
+          <h2 class="text-hero font-normal tracking-[-0.01em] text-fg">{performer.name}</h2>
+          <!-- 图标即入口：点它直接开该艺人的平台主页（原来那个「平台主页」按钮已经去掉）。 -->
+          <PlatformIcon
+            platform={performer.platform}
+            label={platformLabel(performer.platform)}
+            href={performer.url}
+          />
         </div>
 
-        <!-- 资料行与站外链接：来自艺人主页的「资料区块 / 社交列表」。
-             两项性癖偏好和平台统计行（播放量等）在解析时就被丢掉了，不会出现在这里。
-             宽屏时用一道发丝线跟左边分开——同一块面板里两个层次，不靠背景色。 -->
-        <PerformerProfile profile={performer.profile} social={performer.social} />
+        <p class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">
+          <span class="tabular-nums">{formatCount(performer.localVideoCount ?? performer.videoCount ?? 0)}部影片</span>
+          {#if performer.subscriberCount !== null}
+            <span aria-hidden="true">·</span>
+            <span class="tabular-nums">{formatCount(performer.subscriberCount)}订阅</span>
+          {/if}
+        </p>
+
+        {#if bodyText}
+          <!-- 身材：站点资料行里的「身高」「三围」抓取时已归一成公制，紧跟在影片数下面，
+               所以它们在下面的资料行里不再重复出现。 -->
+          <p class="mt-1 flex flex-wrap items-baseline gap-x-2 text-meta">
+            <span class="text-dim">身材</span>
+            <span class="tabular-nums text-muted">{bodyText}</span>
+          </p>
+        {/if}
       </div>
     </div>
+
+    <!-- 简介单独一行，压在头像下面（整块面板的左边）：站点上就是一段自由文本，换行原样保留。
+         长简介限制在 max-w-3xl——整行铺满一千多像素读起来太累。 -->
+    {#if performer.bio}
+      <p class="mt-4 max-w-3xl whitespace-pre-line text-ui text-muted">{performer.bio}</p>
+    {/if}
+
+    <!-- 资料行与站外链接：来自艺人主页的「资料区块 / 社交列表」。
+         两项性癖偏好和平台统计行（播放量等）在解析时就被丢掉了，不会出现在这里。 -->
+    <PerformerProfile profile={performer.profile} social={performer.social} />
   </section>
 
   <section class="mt-6">
