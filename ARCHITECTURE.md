@@ -204,6 +204,11 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
 - **自动起播的坑**：原生 `<video>` 设完 `src` 立刻 `play()` 就能成；HLS 要等清单解析、MediaSource 挂上，
   之前的 `play()` 会被 `AbortError` 打断。所以首次起播走 `kickPlay()`：120ms 一次重试，最多 40 次，
   被浏览器拦自动播放（`NotAllowedError`）就停在海报上等用户点。
+- **别让画面变暗**：皮肤在控件出现时会盖一层**全画幅**暗场（`--media-controls-gradient` 默认 上 50% / 中 20% / 下 40% 黑），
+  于是鼠标一动、控制条一露，整块画面就暗下去（实测同一帧平均亮度 118 → 86）。把 `--media-controls-gradient` 改成只在底部
+  留一条 26% 高的暗角（`rgb(0 0 0 / .3) → transparent`）：中间和上面一点不动，控制条后面仍然有垫底的渐变。
+  这个变量是皮肤自己声明的，只能写在 `.media-container` 的行内样式上（`tuneSkin()`），写在 `<video-skin>` 上会被它的
+  `@layer base.preset` 规则盖掉。
 - **错误处理**：皮肤自带错误弹窗会跟本站的「重新解析 / 用代理播放」浮层打架，所以订阅 `store.error` 后立刻
   `dismissError()`，把文案交给页面自己的浮层。
 - **快捷键**：皮肤自带（空格/K、←→ ±10s、↑↓ 音量、M 静音、F 全屏、单击暂停、双击左右 ±10s、双击中间全屏）；

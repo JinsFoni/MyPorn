@@ -186,8 +186,23 @@
     (el as EngineSourceHost).source = { src: next.src, type: next.type, capRenditionToPlayerSize: false };
   }
 
+  /**
+   * 皮肤默认在控件出现时盖一层**全画幅**变暗（`--media-controls-gradient`：上 50%、中 20%、下 40% 黑），
+   * 于是鼠标一动、控制条一露，画面整块就暗下去。这里只留底部一条浅浅的暗角给控制条垫底，
+   * 中间和上面保持原亮度。`--media-*` 是皮肤的公开调色口，改它比覆盖它的内部类名稳。
+   */
+  function tuneSkin(): void {
+    const container = skinEl?.shadowRoot?.querySelector('.media-container');
+    if (!(container instanceof HTMLElement)) return;
+    container.style.setProperty(
+      '--media-controls-gradient',
+      'linear-gradient(to top, rgb(0 0 0 / 0.3), rgb(0 0 0 / 0) 26%)',
+    );
+  }
+
   /** 把当前 src/type 装进播放器；播放器还没挂上媒体（store.target 为空）时稍后重试 */
   function attach(): void {
+    tuneSkin();
     const s = store();
     const el = mediaEl;
     if (!s || !el) return;
