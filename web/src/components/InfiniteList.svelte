@@ -41,7 +41,7 @@
     empty,
     reloadKey = 0,
     maxLoadedPages = 4,
-    gridClass = 'grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5',
+    gridClass = 'grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5',
   }: Props = $props();
 
   let pages = $state<Page<T>[]>([]);
