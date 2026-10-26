@@ -7,8 +7,9 @@
    * 皮肤用 `--media-*` 自定义属性调成站点的单色冷调，不引入第二套视觉语言。
    *
    * 皮肤之外，这里还补了三样皮肤给不了的东西：
-   *   1. 左上角的**清晰度菜单**（每个清晰度是一条独立清单，皮肤的 ABR 菜单列不出来）；
-   *   2. **氛围模式**：把当前画面缩到 32×18 的画布上再放大模糊，给播放器四周蒙一层同色光；
+   *   1. **清晰度菜单**与**氛围模式**开关：两个按钮挂进皮肤底部控制条右侧那一组里（见 lib/playerBar.ts），
+   *      和自带的音量/设置/画中画/全屏排在同一行、一起显隐；
+   *   2. **氛围模式**本身：把当前画面缩到 32×18 的画布上再放大模糊，给播放器四周蒙一层同色光；
    *   3. **音量记忆**（`localStorage`，等媒体就绪才套用，否则会被播放器默认的满音量盖掉）。
    *
    * 片源策略（见 lib/player.ts）：每个清晰度是**一条独立的清单/直链**，由后端解析后交给这里，
@@ -20,6 +21,7 @@
   import '@videojs/html/video/skin';
   import '@videojs/html/i18n';
   import { prefersReducedMotion, type QualityOption } from '../lib/player';
+  import { mountPlayerBar, type PlayerBar, type PlayerBarState } from '../lib/playerBar';
 
   /** hlsjs-video 的 `source` 属性（原生 <video> 没有；按需断言） */
   interface EngineSourceHost extends HTMLElement {
@@ -64,7 +66,6 @@
   let playerEl = $state<HTMLElement | null>(null);
   let mediaEl = $state<HTMLElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
-  let chromeEl = $state<HTMLDivElement | null>(null);
   let skinEl = $state<HTMLElement | null>(null);
 
   /** 播放器 store：字段见 @videojs/html 的 player-store 参考（paused / currentTime / error …） */
@@ -109,11 +110,11 @@
   let volumeApplied = false;
   let lastVolume = { volume: -1, muted: false };
 
-  let qualityOpen = $state(false);
   let ambient = $state(readAmbient());
-  /** 鼠标在画面上动就露头，停下来 2.5 秒收回去（全屏时 .group:hover 命中不到，只能自己数） */
-  let chromePoke = $state(false);
-  let hideTimer: number | undefined;
+  /** 底部控制条里的自定义按钮（清晰度 / 氛围模式），皮肤 shadow root 渲染好之后才挂得上 */
+  let bar: PlayerBar | null = null;
+  let barTries = 0;
+  let barTimer: number | undefined;
 
   function store(): Store | undefined {
     return (playerEl as unknown as { store?: Store } | null)?.store;
@@ -162,19 +163,29 @@
     }
   }
 
-  function pokeChrome(): void {
-    chromePoke = true;
-    if (hideTimer !== undefined) clearTimeout(hideTimer);
-    hideTimer = window.setTimeout(() => {
-      hideTimer = undefined;
-      if (store()?.paused) return; // 暂停时控件本来就常驻，别让这两个按钮先跑
-      chromePoke = false;
-    }, 2500);
+  function chooseQuality(id: string): void {
+    if (id !== selectedQuality) onSelectQuality?.(id);
   }
 
-  function chooseQuality(id: string): void {
-    qualityOpen = false;
-    if (id !== selectedQuality) onSelectQuality?.(id);
+  /**
+   * 把清晰度/氛围模式两个按钮挂进皮肤的控制条（细节见 lib/playerBar.ts）：
+   * 皮肤的 shadow root 有时比组件的 onMount 晚一步，所以按 50ms 重试，最多 40 次。
+   */
+  function mountBar(): void {
+    if (bar || !skinEl) return;
+    const handle = mountPlayerBar(skinEl, { selectQuality: chooseQuality, toggleAmbient });
+    if (!handle) {
+      if (barTries < 40) {
+        barTries += 1;
+        barTimer = window.setTimeout(() => {
+          barTimer = undefined;
+          mountBar();
+        }, 50);
+      }
+      return;
+    }
+    bar = handle;
+    bar.update({ qualities, selected: selectedQuality, ambient });
   }
 
   function applySource(el: HTMLElement, next: { src: string; type: string }): void {
@@ -407,6 +418,12 @@
     attach();
   });
 
+  // 清晰度列表 / 当前档 / 氛围开关变了，把状态推给控制条里的两个按钮
+  $effect(() => {
+    const state: PlayerBarState = { qualities, selected: selectedQuality, ambient };
+    bar?.update(state);
+  });
+
   onMount(() => {
     const s = store();
     if (!s) return;
@@ -469,23 +486,15 @@
       }
     });
     window.addEventListener('keydown', onKeydown);
-    // 指针动一下就把左上角的药丸露出来（挂在 skin 上，而不是靠 CSS :hover——全屏时 hover 命中不到外面那层）
-    const skin = skinEl;
-    const onLeave = (): void => {
-      chromePoke = false;
-    };
-    skin?.addEventListener('pointermove', pokeChrome);
-    skin?.addEventListener('pointerdown', pokeChrome);
-    skin?.addEventListener('pointerleave', onLeave);
+    mountBar();
     return () => {
       unsubscribe();
       window.removeEventListener('keydown', onKeydown);
-      skin?.removeEventListener('pointermove', pokeChrome);
-      skin?.removeEventListener('pointerdown', pokeChrome);
-      skin?.removeEventListener('pointerleave', onLeave);
       if (retryTimer !== undefined) clearTimeout(retryTimer);
       if (kickTimer !== undefined) clearTimeout(kickTimer);
-      if (hideTimer !== undefined) clearTimeout(hideTimer);
+      if (barTimer !== undefined) clearTimeout(barTimer);
+      bar?.destroy();
+      bar = null;
       stopAmbientLoop();
     };
   });
@@ -495,12 +504,9 @@
     const s = store();
     const host = playerEl;
     if (!s || !host) return;
-    if (qualityOpen && event.key === 'Escape') {
-      qualityOpen = false;
-      return;
-    }
+    // 皮肤控件和我们的两个按钮都在 shadow root 里，`contains` 跨不过 shadow 边界，所以看合成路径
+    if (event.composedPath().some((node) => node instanceof Node && host.contains(node))) return;
     const target = event.target;
-    if (target instanceof Node && host.contains(target)) return;
     if (target instanceof HTMLElement) {
       const tag = target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return;
@@ -557,23 +563,10 @@
         break;
     }
   }
-
-  /** 点菜单外面就收起来 */
-  function onWindowClick(event: MouseEvent): void {
-    if (!qualityOpen) return;
-    const target = event.target;
-    if (target instanceof Node && chromeEl?.contains(target)) return;
-    qualityOpen = false;
-  }
-
-  const showQuality = $derived(qualities.length > 1);
-  const currentQuality = $derived(qualities.find((q) => q.id === selectedQuality) ?? null);
 </script>
 
-<svelte:window onclick={onWindowClick} />
-
 <!-- 氛围模式的光晕在裁剪层外面，才能往播放器四周溢出 -->
-<div class="relative group">
+<div class="relative">
   <canvas
     bind:this={canvasEl}
     class="ambient-glow"
@@ -597,68 +590,7 @@
             <video bind:this={mediaEl} playsinline preload="metadata" aria-label={title}></video>
           {/if}
 
-          <!-- 这两块故意放在 <video-skin> 里面：全屏元素是 skin，放外面全屏后就看不见了 -->
-          <div bind:this={chromeEl} class="player-chrome" data-open={qualityOpen || chromePoke ? 'true' : 'false'}>
-            {#if showQuality}
-              <div class="relative">
-                <button
-                  type="button"
-                  class="pill-btn"
-                  aria-haspopup="menu"
-                  aria-expanded={qualityOpen}
-                  title="清晰度"
-                  onclick={() => (qualityOpen = !qualityOpen)}
-                >
-                  <span class="tabular-nums">{currentQuality?.label ?? '清晰度'}</span>
-                  <svg viewBox="0 0 24 24" class="chevron" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-                    <path d="m7 10 5 5 5-5" />
-                  </svg>
-                </button>
-
-                {#if qualityOpen}
-                  <div role="menu" aria-label="清晰度" class="quality-menu">
-                    {#each qualities as quality (quality.id)}
-                      <button
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={quality.id === selectedQuality}
-                        class="quality-item"
-                        data-current={quality.id === selectedQuality ? 'true' : 'false'}
-                        onclick={() => chooseQuality(quality.id)}
-                      >
-                        <span class="tabular-nums">{quality.label}</span>
-                        <span class="quality-hint">
-                          {quality.hint}
-                          {#if quality.id === selectedQuality}
-                            <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                              <path d="m5 13 4 4 10-10" />
-                            </svg>
-                          {/if}
-                        </span>
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/if}
-
-            <button
-              type="button"
-              class="pill-btn"
-              data-on={ambient ? 'true' : 'false'}
-              aria-pressed={ambient}
-              title={ambient ? '关闭氛围模式' : '开启氛围模式'}
-              aria-label={ambient ? '关闭氛围模式' : '开启氛围模式'}
-              onclick={toggleAmbient}
-            >
-              <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
-                <path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-                <circle cx="12" cy="12" r="3.6" />
-              </svg>
-            </button>
-          </div>
-
-          <!-- 页面浮层：默认不吃指针事件，免得挡住左上角的药丸；自己需要交互的地方自己加 pointer-events-auto -->
+          <!-- 页面浮层：默认不吃指针事件；自己需要交互的地方自己加 pointer-events-auto -->
           {#if overlay}
             <div class="overlay-layer">{@render overlay()}</div>
           {/if}
@@ -701,65 +633,6 @@
     }
   }
 
-  /* ---------- 画面左上角的小药丸（清晰度 / 氛围模式） ---------- */
-  .player-chrome {
-    position: absolute;
-    left: 0.75rem;
-    top: 0.75rem;
-    z-index: 20;
-    align-self: start;
-    justify-self: start;
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    opacity: 0;
-    transition: opacity 0.2s ease;
-  }
-  /* 跟着皮肤自己的节奏走：指针动了露头（见 pokeChrome），键盘聚焦时也露；触屏没有悬停，常驻 */
-  .player-chrome:focus-within,
-  .player-chrome[data-open='true'] {
-    opacity: 1;
-  }
-  @media (pointer: coarse) {
-    .player-chrome {
-      opacity: 1;
-    }
-  }
-
-  .pill-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    height: 1.75rem;
-    padding: 0 0.625rem;
-    border-radius: 9999px;
-    background: color-mix(in oklab, #000 45%, transparent);
-    backdrop-filter: blur(8px);
-    color: color-mix(in oklab, var(--color-fg) 88%, transparent);
-    font-size: var(--text-meta);
-    line-height: 1;
-    transition:
-      background-color 0.15s ease,
-      color 0.15s ease;
-  }
-  .pill-btn:hover {
-    background: color-mix(in oklab, #fff 16%, transparent);
-    color: var(--color-hi);
-  }
-  .pill-btn:focus-visible {
-    outline: 2px solid var(--color-hi);
-    outline-offset: 2px;
-  }
-  .pill-btn[data-on='true'] {
-    background: color-mix(in oklab, #fff 18%, transparent);
-    color: var(--color-hi);
-  }
-  .pill-btn .chevron {
-    width: 0.875rem;
-    height: 0.875rem;
-    opacity: 0.7;
-  }
-
   .overlay-layer {
     position: absolute;
     inset: 0;
@@ -767,46 +640,4 @@
     pointer-events: none;
   }
 
-  .quality-menu {
-    position: absolute;
-    left: 0;
-    top: calc(100% + 0.375rem);
-    width: 13rem;
-    padding: 0.25rem;
-    border-radius: 0.75rem;
-    background: color-mix(in oklab, #000 72%, transparent);
-    backdrop-filter: blur(16px);
-    box-shadow: 0 12px 32px #0008;
-    outline: 1px solid color-mix(in oklab, #fff 12%, transparent);
-  }
-  .quality-item {
-    display: flex;
-    width: 100%;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0.375rem 0.5rem;
-    border-radius: 0.5rem;
-    font-size: var(--text-meta);
-    line-height: 1.2;
-    text-align: left;
-    color: color-mix(in oklab, var(--color-fg) 80%, transparent);
-    transition:
-      background-color 0.15s ease,
-      color 0.15s ease;
-  }
-  .quality-item:hover {
-    background: color-mix(in oklab, #fff 10%, transparent);
-    color: var(--color-hi);
-  }
-  .quality-item[data-current='true'] {
-    color: var(--color-hi);
-  }
-  .quality-hint {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.375rem;
-    font-size: var(--text-meta);
-    color: var(--color-dim, color-mix(in oklab, var(--color-fg) 45%, transparent));
-  }
 </style>

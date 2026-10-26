@@ -124,7 +124,7 @@
 | 状态 | Svelte 5 runes（`$state/$derived/$effect`），跨页共享放 `.svelte.ts` 模块 |
 | 实时进度 | `EventSource('/api/events')` 单连接，页面卸载即关；不用 WebSocket |
 | 长列表 | IntersectionObserver 分页 + keyset 游标；先用「页淘汰」（离屏页卸载 DOM），万条库足够；真卡再上虚拟滚动 |
-| 播放器 | **Video.js 10**：`<video-player>`+`<video-skin>` 自定义元素（皮肤自带进度条/音量/倍速/画中画/全屏/快捷键/手势），皮肤只用 `--media-*` 变量调成站点的单色冷调；左上角自绘**清晰度菜单**与**氛围模式**（画布取帧 → 放大模糊当环境光），音量与氛围开关都记在 `localStorage`；mp4 用原生 `<video>`，HLS 用 `<hlsjs-video>` 且 `await import()` 按需加载；**编码偏好见 §7.4.1** |
+| 播放器 | **Video.js 10**：`<video-player>`+`<video-skin>` 自定义元素（皮肤自带进度条/音量/倍速/画中画/全屏/快捷键/手势），皮肤只用 `--media-*` 变量调成站点的单色冷调；**清晰度菜单**与**氛围模式**两个按钮挂进皮肤底部控制条（详见 §7.4.2），氛围光靠画布取帧 → 放大模糊，音量与氛围开关都记在 `localStorage`；mp4 用原生 `<video>`，HLS 用 `<hlsjs-video>` 且 `await import()` 按需加载；**编码偏好见 §7.4.1** |
 | 图片 | `loading=lazy` + 宽高占位防跳动；缩略图走 `/api/img?u=`（后端代理 + 磁盘缓存，绕开 Referer/403） |
 | 主题 | Tailwind 原子类，**暗色为默认**，移动端优先布局（视觉基线见 §7.6） |
 | PWA | `vite-plugin-pwa`，`registerType: 'prompt'`，precache 仅 app shell（html/js/css/icon），**不缓存视频与 API 响应** |
@@ -180,20 +180,29 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
 
 - **结构**：`<video-player>`（`display: contents`，只做 store 边界）› `<video-skin>`（媒体容器 + 控件 + 快捷键 + 手势）› 媒体元素。
   页面里的圆角/裁剪由外层的 `relative overflow-hidden rounded-xl` 负责，皮肤自己的圆角设 0。
-  **本站自己加的两块（清晰度/氛围模式药丸、页面浮层）也挂在 `<video-skin>` 里**（走它的默认 `<slot>`，和媒体元素并列）：
-  全屏元素就是 skin 本身，放外面全屏后这两块会跟着消失。
+  **页面浮层**（解析中/播放失败）也挂在 `<video-skin>` 里（走它的默认 `<slot>`，和媒体元素并列）：
+  全屏元素就是 skin 本身，放外面全屏后它就跟着消失了。
 - **中文化**：`<media-i18n>` 包一层，locale 从 `<html lang="zh-CN">` 继承，`@videojs/html` 自带 zh-CN 语言包
   （`画质 / 播放速度 / 字幕 / 静音 / 全屏` 等都是中文）。
 - **皮肤样式只能靠变量**：`--media-accent-color`（白 `#f5faff`）、`--media-accent-text-color`（画布黑）、
   `--media-font-family`（Roboto）、`--media-border-radius`、`--media-border-color`，其余交给皮肤，不改它的内部类名。
 - **片源策略不变**：每个清晰度仍是**一条独立清单/直链**，切换时读 store 的进度再 `seek` 回去续播。
-  皮肤里那个「画质」菜单因此只有当前这一条（自动 + 当前档），不拿它当主入口——**清晰度菜单改成播放器左上角自己画**：
+  皮肤里那个「画质」菜单因此只有当前这一条（自动 + 当前档），不拿它当主入口——**清晰度菜单自己画**：
   分档列表来自后端（顺序即 §7.4.1 的排序），每行 `1080p` + `4.0 Mbps · 最高`，当前档打勾；侧边栏那个下拉框因此删了，
   右侧「清晰度」一行只读显示当前档。这样 §7.4.1 的排序与「默认最高画质」都由后端说了算。
-- **药丸什么时候露头**：跟皮肤自己的控件同一节奏——指针在画面上动就显示（2.5 秒不动收回，暂停时保持露出），
-  触屏（`pointer: coarse`）常驻。**不能靠 CSS `:hover`**：全屏时 hover 命中不到全屏子树外面的 `.group` 包裹层，
-  所以由 JS 在 skin 上监听 `pointermove/pointerdown/pointerleave` 切换 `data-open`。
-- **氛围模式**（左上角太阳按钮，存 `myporn.ambient`，默认开、系统「减少动效」时默认关）：把正在播的那一帧画到
+- **两个自绘按钮进底部控制条**（`lib/playerBar.ts`）：皮肤的整套控件在自己的 shadow root 里，`<video-skin>` 只留了一个默认插槽，
+  没有「往控制条里加按钮」的口子，公开的 `--media-*` 也只能改颜色/圆角/字体。所以想在底部那一行、和自带的音量/设置/画中画/全屏
+  并排，只能把节点**挂进它 shadow root 里的 `.video-controls-secondary`**（右侧按钮组）。挂进去之后是真正的条形成员：
+  控件的显隐/上浮/毛玻璃底色/全屏缩放（`--media-scale-unit`）全都自动跟着走，不用再自己数 2.5 秒收回，
+  全屏也照样在（全屏元素就是 skin）。两处只依赖皮肤的类名与 `media-*` 公开组件：`.video-controls-secondary` 和
+  `.media-button` / `.media-menu-*`；皮肤结构升级导致挂不上时返回 `null`、上层按 50ms 重试 40 次，最坏结果是这两个按钮不出现。
+  - **清晰度**：一个显示当前档的按钮（`1080p ⌄`）+ 皮肤自己的 `<media-menu>` 弹层（挂在按钮上方、右对齐，靠 `commandfor` 绑定，
+    所以 `aria-expanded`、Esc、点外面关闭、打开时锁住控件不隐藏都由皮肤负责）。列表项用 `<media-menu-item class="media-menu-radio-item">`，
+    每行两行文案（`1080p` / `4.0 Mbps · 最高`）+ 当前档的对勾；点一项 → `select` 事件 → 交回页面换片源。
+  - **氛围模式**：太阳图标，`aria-pressed` 表示开关，亮/暗用图标透明度表达（不用皮肤那套 `[aria-expanded]` 白底，避免和菜单状态混淆）。
+  - 位置：桌面上排在设置齿轮右边、画中画/全屏左边；手机（`< 32rem`）皮肤把这组按钮整体收进右上角的浮动药丸，这两个跟着一起过去，
+    底部那行才留得下进度条。
+- **氛围模式**（存 `myporn.ambient`，默认开、系统「减少动效」时默认关）：把正在播的那一帧画到
   **32×18 的 `<canvas>`** 上，再靠 CSS 放大 + `blur(28→48px)` 铺到播放器四周当环境光。
   采样优先用 `requestVideoFrameCallback`（有新帧才画，暂停/后台自动停），没有就 rAF + 15fps 节流；
   暂停时靠 `seeked`/`loadeddata` 各补一帧。跨源片源会污染画布，但只 `drawImage` 不读像素，所以照常能糊出来。
@@ -221,8 +230,8 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
 
 | 范围 | 目标（gzip） | 实测（2026-10） |
 |---|---|---|
-| 首屏列表页（index + CSS） | ≤60 KB | 49.0 + 9.8 = 58.8 KB |
-| 视频页（Video.js 10 播放器 + 清晰度菜单/氛围模式，不含 HLS 引擎） | ≤95 KB | 85.5 KB |
+| 首屏列表页（index + CSS） | ≤60 KB | 47.3 + 9.1 = 56.4 KB |
+| 视频页（Video.js 10 播放器 + 清晰度菜单/氛围模式，不含 HLS 引擎） | ≤95 KB | 83.4 KB |
 | 仅 HLS 片源额外下载（hls.js 适配器） | ≤180 KB | 173.0 KB |
 | 全部路由合计 | ≤300 KB | ≈ 300 KB |
 
