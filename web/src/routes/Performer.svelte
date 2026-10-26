@@ -155,7 +155,7 @@
 {#if loading && !performer}
   <section class="panel p-4 sm:p-5">
     <div class="flex items-start gap-4 sm:gap-5">
-      <Skeleton class="h-26 w-26 shrink-0 sm:h-32 sm:w-32" rounded="rounded-full" />
+      <Skeleton class="h-26 w-26 shrink-0 self-center sm:h-32 sm:w-32" rounded="rounded-full" />
       <div class="min-w-0 flex-1 space-y-2.5">
         <Skeleton class="h-7 w-52" />
         <Skeleton class="h-3.5 w-full max-w-md" />
@@ -186,8 +186,10 @@
     <div
       class="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-4 sm:gap-x-5 xl:grid-cols-[auto_minmax(0,1fr)_minmax(0,1.35fr)]"
     >
-      <!-- 头像尺寸跟艺人列表页的卡片同一口径（6.5rem / `sm` 起 8rem，正好等于列表栅格的轨道宽度） -->
-      <div class="h-26 w-26 shrink-0 overflow-hidden rounded-full bg-raise sm:h-32 sm:w-32">
+      <!-- 头像尺寸跟艺人列表页的卡片同一口径（6.5rem / `sm` 起 8rem，正好等于列表栅格的轨道宽度）。
+           `self-center`：头像在自己的行里竖直居中，水平中线就跟右边那一栏里的资料表对齐了
+           （资料表通常是这一行最高的一项，头像因此比名字略低一点）。 -->
+      <div class="h-26 w-26 shrink-0 self-center overflow-hidden rounded-full bg-raise sm:h-32 sm:w-32">
         {#if avatar}
           <img src={avatar} alt="" width="320" height="320" class="h-full w-full object-cover" />
         {:else}
@@ -241,7 +243,9 @@
            两项性癖偏好和平台统计行（播放量等）在解析时就被丢掉了，不会出现在这里。
            窄屏时它跨两列、整行掉到头像和名字下面。 -->
       {#if performer.profile.length}
-        <div class="col-span-2 min-w-0 xl:col-span-1">
+        <!-- 这一栏也 `self-center`：资料表比头像矮时（三项一行的时候）它自己不贴行顶，
+             两边的水平中线才真的落在同一条线上。 -->
+        <div class="col-span-2 min-w-0 self-center xl:col-span-1">
           <PerformerProfile profile={performer.profile} />
         </div>
       {/if}
