@@ -150,7 +150,7 @@
     <button type="button" class="btn" onclick={() => refresh()}>重试</button>
   </div>
 {:else if loading && items.length === 0}
-  <div class="grid grid-cols-[repeat(auto-fill,5.5rem)] gap-x-6 gap-y-8 sm:gap-x-8 sm:grid-cols-[repeat(auto-fill,6rem)]">
+  <div class="grid grid-cols-[repeat(auto-fill,6.5rem)] gap-x-6 gap-y-8 sm:gap-x-8 sm:grid-cols-[repeat(auto-fill,8rem)]">
     {#each Array.from({ length: 12 }, (_, i) => i) as i (i)}
       <div class="min-w-0">
         <Skeleton class="aspect-square w-full" rounded="rounded-full" />
@@ -170,7 +170,7 @@
     {/snippet}
   </EmptyState>
 {:else}
-  <div class="grid grid-cols-[repeat(auto-fill,5.5rem)] gap-x-6 gap-y-8 sm:gap-x-8 sm:grid-cols-[repeat(auto-fill,6rem)]">
+  <div class="grid grid-cols-[repeat(auto-fill,6.5rem)] gap-x-6 gap-y-8 sm:gap-x-8 sm:grid-cols-[repeat(auto-fill,8rem)]">
     {#each sorted as performer (performer.id)}
       <PerformerCard {performer} eager={performer.id === sorted[0]?.id} />
     {/each}

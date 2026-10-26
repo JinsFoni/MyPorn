@@ -37,7 +37,7 @@
   class="group flex min-w-0 flex-col text-center"
   aria-label={`${performer.name}${performer.newVideoCount > 0 ? `，${String(performer.newVideoCount)} 部新片` : ''}`}
 >
-  <!-- 头像宽度由栅格轨道固定（88/96px），所以左边缘和页面标题对齐；间距只由 gap 决定 -->
+  <!-- 头像宽度由栅格轨道固定（96/128px，桌面端约等于 X 的 133px 头像），所以左边缘和页面标题对齐；间距只由 gap 决定 -->
   <div class="aspect-square w-full">
     <div class="h-full w-full overflow-hidden rounded-full bg-panel">
       {#if avatar && !avatarFailed}
@@ -54,7 +54,7 @@
       {:else}
         <div class="flex h-full w-full items-center justify-center text-dim">
           {#if monogram}
-            <span class="text-hero font-normal text-dim">{monogram}</span>
+            <span class="text-[2rem] font-normal leading-none text-dim">{monogram}</span>
           {:else}
             <svg viewBox="0 0 24 24" class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
               <circle cx="12" cy="9" r="3.25" />
@@ -67,8 +67,8 @@
 
   </div>
 
-  <!-- 名字最多两行（格子只有 96px 宽，单行会被截得只剩半句）；状态行用 mt-auto 贴底，同一行卡片仍对齐 -->
-  <h3 class="mt-2.5 line-clamp-2 text-ui leading-snug text-fg/95 transition-colors group-hover:text-fg">{performer.name}</h3>
+  <!-- 名字最多两行（格子 96/128px 宽，单行会被截得只剩半句）；加粗对标 X 上的用户名；状态行用 mt-auto 贴底，同一行卡片仍对齐 -->
+  <h3 class="mt-3 line-clamp-2 text-ui font-bold leading-snug text-fg transition-colors group-hover:text-fg/95">{performer.name}</h3>
   <p class="mt-auto flex items-center justify-center gap-1.5 pt-1 text-meta text-dim">
     <span
       class="h-1.5 w-1.5 shrink-0 rounded-full {dotTone[sync.tone]}"
