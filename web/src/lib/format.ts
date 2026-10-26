@@ -2,6 +2,8 @@
  * 时间 / 数字格式化。不引库：Intl.DateTimeFormat('zh-CN') + 手写相对时间。
  */
 
+import type { Body } from './types';
+
 const dateTimeFmt = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' });
 
 function toDate(iso: string | null | undefined): Date | null {
@@ -81,6 +83,17 @@ export function formatCount(value: number | null | undefined): string {
   if (value < 10000) return value.toLocaleString('zh-CN');
   if (value < 100000000) return `${(value / 10000).toFixed(value % 10000 === 0 ? 0 : 1)}万`;
   return `${(value / 100000000).toFixed(1)}亿`;
+}
+
+/** 身材：167cm · B89 · W64 · H91（后端已归一到厘米，这里只管排版；缺项直接不写） */
+export function formatBody(body: Body | null | undefined): string {
+  if (!body) return '';
+  const parts: string[] = [];
+  if (body.heightCm > 0) parts.push(`${String(body.heightCm)}cm`);
+  if (body.bust > 0) parts.push(`B${String(body.bust)}`);
+  if (body.waist > 0) parts.push(`W${String(body.waist)}`);
+  if (body.hips > 0) parts.push(`H${String(body.hips)}`);
+  return parts.join(' · ');
 }
 
 export function formatBandwidth(bitsPerSecond: number): string {

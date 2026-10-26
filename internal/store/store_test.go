@@ -146,6 +146,48 @@ func TestPerformerProfileAndSocialRoundTrip(t *testing.T) {
 	}
 }
 
+// 身材：四项目存取要一致；这次没解析到（Body 全 0）时不能把库里的抹掉。
+func TestPerformerBodyRoundTrip(t *testing.T) {
+	st := newTestStore(t)
+	id, err := st.UpsertPerformer(&model.Performer{
+		Platform: "pornhub", PerformerID: "mini-diva", Name: "Mini Diva",
+		Body: model.Body{HeightCm: 167, Bust: 89, Waist: 64, Hips: 91},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.GetPerformer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := model.Body{HeightCm: 167, Bust: 89, Waist: 64, Hips: 91}
+	if p.Body != want {
+		t.Errorf("身材未存取: %+v，期望 %+v", p.Body, want)
+	}
+
+	if _, err := st.UpsertPerformer(&model.Performer{
+		Platform: "pornhub", PerformerID: "mini-diva", Name: "Mini Diva",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = st.GetPerformer(id)
+	if p.Body != want {
+		t.Errorf("空身材不应覆盖旧值，实际 %+v", p.Body)
+	}
+
+	// 只有身高时，三围归零（整组覆盖，不残留上一次的腰臀）。
+	if _, err := st.UpsertPerformer(&model.Performer{
+		Platform: "pornhub", PerformerID: "mini-diva", Name: "Mini Diva",
+		Body: model.Body{HeightCm: 168},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = st.GetPerformer(id)
+	if p.Body != (model.Body{HeightCm: 168}) {
+		t.Errorf("新身材应整体覆盖，实际 %+v", p.Body)
+	}
+}
+
 func TestFeedPaginationByCursor(t *testing.T) {
 	st := newTestStore(t)
 	pid, _ := st.UpsertPerformer(&model.Performer{Platform: "pornhub", PerformerID: "p1", Name: "P1"})

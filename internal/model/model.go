@@ -20,7 +20,9 @@ type Performer struct {
 	// Profile 是资料区块里的「标签: 值」行（性别、身高、出身地……），顺序即站点顺序。
 	Profile []ProfileField
 	// Social 是艺人主页上挂的外部链接（Twitter / Instagram / 官方网址）。
-	Social        []SocialLink
+	Social []SocialLink
+	// Body 是身材数据（身高 + 三围，已归一成厘米），取自资料行里的「身高」「三围」。
+	Body          Body
 	LastFetchedAt *time.Time
 	Subscription  *Subscription
 }

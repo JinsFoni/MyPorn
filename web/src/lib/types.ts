@@ -37,6 +37,14 @@ export interface SocialLink {
   url: string;
 }
 
+/** 身材：身高 + 三围，后端抓取时已归一到厘米；0 = 平台没给或没认出来。 */
+export interface Body {
+  heightCm: number;
+  bust: number;
+  waist: number;
+  hips: number;
+}
+
 export interface Performer {
   id: number;
   platform: PlatformKey;
@@ -51,6 +59,8 @@ export interface Performer {
   profile: ProfileField[];
   /** 平台主页上挂的站外链接（Twitter / Instagram / 官方网址）；可能为空数组 */
   social: SocialLink[];
+  /** 身材（身高 + 三围，厘米制）；四项全 0 表示没解析到，此时不显示「身材」那一行 */
+  body: Body;
   /** 平台声明的影片总数（Pornhub 资料页其实不给，常为 null） */
   videoCount: number | null;
   /** 本地已收录的影片数（艺人详情接口才给；「N 部影片」显示的是这个） */

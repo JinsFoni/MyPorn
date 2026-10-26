@@ -42,6 +42,17 @@ func socialOrEmpty(v []model.SocialLink) []model.SocialLink {
 	return v
 }
 
+// bodyDTO 把身材摊成固定四项：缺的就是 0。
+// 不给 0 值就省字段（omitempty 是给库里那列 JSON 用的），前端不必判 undefined。
+func bodyDTO(b model.Body) map[string]int {
+	return map[string]int{
+		"heightCm": b.HeightCm,
+		"bust":     b.Bust,
+		"waist":    b.Waist,
+		"hips":     b.Hips,
+	}
+}
+
 func (s *Server) performerDTO(p *model.Performer, newCount int) map[string]any {
 	dto := map[string]any{
 		"id":               p.ID,
@@ -53,6 +64,7 @@ func (s *Server) performerDTO(p *model.Performer, newCount int) map[string]any {
 		"bio":              p.Bio,
 		"profile":          profileOrEmpty(p.Profile),
 		"social":           socialOrEmpty(p.Social),
+		"body":             bodyDTO(p.Body),
 		"videoCount":       p.VideoCount,
 		"subscriberCount":  p.SubscriberCount,
 		"subscriptionId":   nil,

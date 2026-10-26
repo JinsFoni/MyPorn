@@ -152,6 +152,7 @@ func TestParsePerformerProfileAndSocial(t *testing.T) {
   <div class="js-infoText"><div class="content-columns">
     <div class="infoPiece"><span>性别:</span><span itemprop="gender" class="smallInfo">女性</span></div>
     <div class="infoPiece"><span>出身地:</span><span itemprop="birthPlace" class="smallInfo">Czech Republic</span></div>
+    <div class="infoPiece"><span>三围:</span><span itemprop="measurements" class="smallInfo">35-25-36</span></div>
     <div class="infoPiece"><span>身高:</span><span itemprop="height" class="smallInfo">5&#039; 6&quot; (167cm)</span></div>
     <div class="infoPiece"><span>会勾起我性欲的是:</span><span class="smallInfo">When you watching me</span></div>
     <div class="infoPiece"><span>会浇灭我性欲的是:</span><span class="smallInfo">Dunno</span></div>
@@ -168,13 +169,13 @@ func TestParsePerformerProfileAndSocial(t *testing.T) {
 	if p.Bio != "Love being here from time to time." {
 		t.Errorf("简介应取 .aboutMeSection 正文，实际 %q", p.Bio)
 	}
+	// 身高/三围已经被认出来变成 p.Body，资料行里不再重复；性癖两项 + 播放量/已看视频照旧丢掉。
 	wantProfile := [][2]string{
 		{"性别", "女性"},
 		{"出身地", "Czech Republic"},
-		{"身高", `5' 6" (167cm)`},
 	}
 	if len(p.Profile) != len(wantProfile) {
-		t.Fatalf("资料应有 %d 行（性癖两项 + 播放量/已看视频都要丢掉），实际 %d 行: %+v",
+		t.Fatalf("资料应有 %d 行（身高/三围已并入 Body，性癖两项 + 播放量/已看视频都要丢掉），实际 %d 行: %+v",
 			len(wantProfile), len(p.Profile), p.Profile)
 	}
 	for i, w := range wantProfile {
@@ -185,6 +186,10 @@ func TestParsePerformerProfileAndSocial(t *testing.T) {
 	}
 	if p.VideoCount != nil {
 		t.Errorf("「视频播放量」不是影片总数，videoCount 应为 nil，实际 %d", *p.VideoCount)
+	}
+	wantBody := model.Body{HeightCm: 167, Bust: 89, Waist: 64, Hips: 91}
+	if p.Body != wantBody {
+		t.Errorf("身材应归一成 %+v，实际 %+v", wantBody, p.Body)
 	}
 	wantSocial := [][2]string{
 		{"官方网址", "https://onlyfans.com/minidivaonly/c1"},
@@ -206,9 +211,9 @@ func TestParsePerformerProfileAndSocial(t *testing.T) {
 // 英文文案 "Subscribers: 1,430,831" 里的 b 不能被当成 billion 倍率。
 func TestParseCountFromLabel(t *testing.T) {
 	cases := map[string]int{
-		"订阅者: 1,430,831":        1430831,
+		"订阅者: 1,430,831":         1430831,
 		"Subscribers: 1,430,831": 1430831,
-		"订阅者：1.4M":              1400000,
+		"订阅者：1.4M":               1400000,
 		"1.4M":                   1400000,
 	}
 	for in, want := range cases {

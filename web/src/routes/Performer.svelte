@@ -7,7 +7,7 @@
   import Skeleton from '../components/Skeleton.svelte';
   import { ApiError, api, messageFor } from '../lib/api';
   import { imageUrl } from '../lib/img';
-  import { formatCount } from '../lib/format';
+  import { formatBody, formatCount } from '../lib/format';
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
   import type { Performer, Video } from '../lib/types';
@@ -32,6 +32,7 @@
       { label: '出身地', value: 'Czech Republic' },
     ],
     social: [{ label: 'Twitter', url: 'https://example.invalid/mini-diva' }],
+    body: { heightCm: 167, bust: 89, waist: 64, hips: 91 },
     videoCount: null,
     localVideoCount: 42,
     subscriberCount: 1430831,
@@ -93,7 +94,10 @@
   let listKey = $state(0);
   let lastBump = 0;
 
-  const avatar = $derived(performer ? imageUrl(performer.avatarUrl, 240) : null);
+  const avatar = $derived(performer ? imageUrl(performer.avatarUrl, 320) : null);
+
+  /** 「身材」那一行：后端已把身高/三围归一到厘米，这里只拼字符串，四项全空就不显示 */
+  const bodyText = $derived(performer ? formatBody(performer.body) : '');
 
   async function loadPerformer(): Promise<void> {
     error = '';
@@ -144,8 +148,8 @@
 </script>
 
 {#if loading && !performer}
-  <section>
-    <div class="flex items-center gap-4 sm:gap-5">
+  <section class="panel p-4 sm:p-5">
+    <div class="flex items-start gap-4 sm:gap-5">
       <Skeleton class="h-20 w-20 shrink-0 sm:h-28 sm:w-28" rounded="rounded-full" />
       <div class="min-w-0 flex-1 space-y-2.5">
         <Skeleton class="h-7 w-52" />
@@ -168,11 +172,13 @@
     </p>
   {/if}
 
-  <section>
-    <div class="flex items-center gap-4 sm:gap-5">
-      <div class="h-20 w-20 shrink-0 overflow-hidden rounded-full bg-panel sm:h-28 sm:w-28">
+  <!-- 页头就是这一块：左边头像，右边从名字一路排到站外链接（简介、资料行、药丸都在同一行里）。
+       原来贴在下面的「个人资料 / 社交媒体」两张卡取消了，页面少两块面板的高度。 -->
+  <section class="panel p-4 sm:p-5">
+    <div class="flex items-start gap-4 sm:gap-5">
+      <div class="h-20 w-20 shrink-0 overflow-hidden rounded-full bg-raise sm:h-32 sm:w-32 lg:h-40 lg:w-40">
         {#if avatar}
-          <img src={avatar} alt="" width="240" height="240" class="h-full w-full object-cover" />
+          <img src={avatar} alt="" width="320" height="320" class="h-full w-full object-cover" />
         {:else}
           <div class="flex h-full w-full items-center justify-center text-dim">
             <svg viewBox="0 0 24 24" class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
@@ -194,12 +200,8 @@
           />
         </div>
 
-        <!-- 简介不在这里：它和资料字段一起在下面的「个人资料」面板里整段显示，
-             页头只留「是谁 + 有多少片」，避免同一段文字在一屏里出现两次。 -->
-
-        <!-- 一行元信息，用中点分隔（beeg 的艺人页也是这么写的：数字直接跟着图标/词走）。
-             本页不再显示任何同步信息（未看数、上次/下次同步、已暂停、同步出错、进度条），
-             那些都在「管理 → 关注管理」里看：这儿只回答「这是谁、有多少片子」。 -->
+        <!-- 简介、资料字段、站外链接都在这块里跟着往下排（见 PerformerProfile）：
+             头像右边就是这位艺人的全部信息，不再另起一块。 -->
         <p class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">
           <span class="tabular-nums">{formatCount(performer.localVideoCount ?? performer.videoCount ?? 0)}部影片</span>
           {#if performer.subscriberCount !== null}
@@ -207,14 +209,22 @@
             <span class="tabular-nums">{formatCount(performer.subscriberCount)}订阅</span>
           {/if}
         </p>
+
+        {#if bodyText}
+          <!-- 身材：站点资料行里的「身高」「三围」抓取时已归一成公制，紧跟在影片数下面，
+               所以它们在下面的资料区块里不再重复出现。 -->
+          <p class="mt-1 flex flex-wrap items-baseline gap-x-2 text-meta">
+            <span class="text-dim">身材</span>
+            <span class="tabular-nums text-muted">{bodyText}</span>
+          </p>
+        {/if}
+
+        <!-- 资料与站外链接：来自艺人主页的「简介 / 资料区块 / 社交列表」。
+             两项性癖偏好和平台统计行（播放量等）在解析时就被丢掉了，不会出现在这里。 -->
+        <PerformerProfile profile={performer.profile} social={performer.social} bio={performer.bio} />
       </div>
     </div>
-
   </section>
-
-  <!-- 资料与站外链接：来自艺人主页的「简介 / 资料区块 / 社交列表」。
-       两项性癖偏好和平台统计行（播放量等）在解析时就被丢掉了，不会出现在这里。 -->
-  <PerformerProfile profile={performer.profile} social={performer.social} bio={performer.bio} />
 
   <section class="mt-6">
     <h3 class="mb-3 text-title font-medium text-fg">影片</h3>

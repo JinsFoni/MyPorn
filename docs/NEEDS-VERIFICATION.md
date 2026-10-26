@@ -1,6 +1,6 @@
 # 上线前必须验证的解析点（Pornhub）
 
-> **状态（2026-10）**：已在真实站点（`cn.pornhub.com`）核对并通过——艺人主页资料（含资料区块与站外链接）、影片列表第 1 页、
+> **状态（2026-10）**：已在真实站点（`cn.pornhub.com`）核对并通过——艺人主页资料（含身材、简介、资料区块与站外链接）、影片列表第 1 页、
 > 视频页 `mediaDefinitions`、播放地址解析、真机下载全部实测正常。下文保留为「站点改版后的自查清单」。
 > 所有解析逻辑集中在 `internal/platform/pornhub/parse.go`，改选择器不需要动业务代码。
 
@@ -12,7 +12,7 @@ make backend           # 先编译
 ./bin/myporn -root . -debug-video "abc123viewkey"
 ```
 
-`-debug-parse` 会打印：艺人名/头像/视频数/订阅数、简介、资料行（`资料: 标签: 值`）、站外链接（`链接: 标签 → 地址`）、第 1 页条数、总页数、前 5 条影片。
+`-debug-parse` 会打印：艺人名/头像/视频数/订阅数、身材（`身材: 167cm B89 W64 H91`）、简介、资料行（`资料: 标签: 值`）、站外链接（`链接: 标签 → 地址`）、第 1 页条数、总页数、前 5 条影片。
 `-debug-video` 会打印：标题/时长/标签 + 解析出的所有清晰度（应从 2160p 降序排列）。
 
 任何一项是空的，就按下表核对。
@@ -26,7 +26,8 @@ make backend           # 先编译
 | 名称 | JSON-LD `Person.name` → `.nameSubscribe h1` → `h1` | 若 JSON-LD 无 `Person`，需改选择器 |
 | 头像 | JSON-LD `Person.image` → `.avatarWrapper img[data-src]` → `img[src*='/av/']` | 注意懒加载属性可能是 `data-src` / `data-image` |
 | 简介 | JSON-LD `description` → `.aboutMeText` → `.aboutMeSection`（跳过 `.title`，取后面那个 div 的正文） | 2026-10 已核对：中文站 `ld+json` 里没有 description，正文只在 `.aboutMeSection` 里；换行是页面原有的，前端按 `pre-line` 保留 |
-| 资料行 | `.js-infoText .infoPiece`（回退 `.infoPiece`）：第一个 `span` 是标签（去掉尾部 `:`/`：`）、`.smallInfo` 是值；**全量按顺序收**，只丢下面「不收的行」 | 2026-10 已核对：Mini Diva 收到 14 行（感情状态/喜欢/性别/出身地/三围/身高/体重/种族/发色/假奶子/纹身/是否有穿环/兴趣爱好），Charming Milana 只有 3 行——字段本来就是因人而异的 |
+| 资料行 | `.js-infoText .infoPiece`（回退 `.infoPiece`）：第一个 `span` 是标签（去掉尾部 `:`/`：`）、`.smallInfo` 是值；**全量按顺序收**，只丢下面「不收的行」和「身材」认走的两行 | 2026-10 已核对：Mini Diva 收到 14 行（感情状态/喜欢/性别/出身地/三围/身高/体重/种族/发色/假奶子/纹身/是否有穿环/兴趣爱好），Charming Milana 只有 3 行——字段本来就是因人而异的 |
+| 身材 | 从资料行里认「身高」「三围」并归一成厘米（`internal/model/body.go`）：身高优先取站点写的 `167cm`，只给英制按 2.54 换算；三围按「写了 cm/in 就照写、没写看量级（≤60 是英寸）」判断 | 2026-10 已核对：Mini Diva 的 `5' 6" (167cm)` + `35-25-36` 得到 `167cm · B89 · W64 · H91`，两行随即从资料行里摘掉；Charming Milana 页面没有这两行，页头就不出「身材」。若哪天站点把三围写成 `1.67 m` 这类没单位的格式，会原样留在资料行里（不猜单位） |
 | 站外链接 | `.socialList li a` 的 `href` + `span.socialText`；没有标签时按域名兜底（`socialHostLabels`）；只收 `http(s)`，同一地址去重 | 2026-10 已核对：`官方网址`（onlyfans）/ `Twitter` / `Instagram` 三条；顶部那个「关于我的更多信息」按钮是引流位，不算社交账号，不收 |
 | 不收的行 | 「会勾起我性欲的是」「会浇灭我性欲的是」（用户要求），以及「视频播放量 / 主页浏览量 / 已看视频」（平台统计，不是个人资料） | 中英文文案都匹配（`profileDropLabels`）。**注意**：`视频播放量` 含「视频」二字，不挡住会被下面「视频数」那一行当成影片总数 |
 | 订阅数 | `.infoBox` 的 `data-title`（"订阅者: 1,430,831"）里冒号后的数字，取不到时退到 `.big` 文本（"1.4M"） | 2026-10 已核对：头部三块读数是「模特排名 / 视频播放量 / 订阅者」，`data-title` 里的完整数字比 `1.4M` 精确 |

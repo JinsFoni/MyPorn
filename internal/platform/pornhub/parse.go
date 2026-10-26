@@ -409,6 +409,11 @@ func parsePerformerPage(body []byte) (*model.Performer, error) {
 	p.Profile = parseProfileInfo(doc)
 	p.Social = parseSocialLinks(doc)
 
+	// 身材：从资料行里的「身高」「三围」认出来并换算成厘米，页头排在影片数下面
+	// （`167cm · B89 · W64 · H91`）。认出来的那两行从 Profile 里摘掉，不再重复一遍；
+	// 认不出来的原样留在 Profile 里。
+	p.Body, p.Profile = model.ParseBody(p.Profile)
+
 	// 头部读数：模特资料页顶部只有三块（模特排名 / 视频播放量 / 订阅者），
 	// 都用 .infoBox 承载，`data-title` 里是完整数字（"订阅者: 1,430,831"），
 	// 比页面显示的 "1.4M" 精确得多。**资料页没有「影片总数」**，所以 video_count 可能一直为空。

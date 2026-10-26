@@ -238,6 +238,9 @@ func runDebugParse(reg *platform.Registry, rawURL string) {
 		if p.Bio != "" {
 			fmt.Printf("简介: %s\n", strings.ReplaceAll(p.Bio, "\n", " / "))
 		}
+		if !p.Body.Empty() {
+			fmt.Printf("身材: %dcm B%d W%d H%d\n", p.Body.HeightCm, p.Body.Bust, p.Body.Waist, p.Body.Hips)
+		}
 		for _, f := range p.Profile {
 			fmt.Printf("资料: %s: %s\n", f.Label, f.Value)
 		}

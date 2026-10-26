@@ -54,57 +54,49 @@
   </svg>
 {/snippet}
 
+<!-- 简介 / 资料行 / 站外链接：不再各自成卡，直接排在页头头像右边那一块里（不套面板、不加大标题，
+     名字和计数在上面已经交代过「这是谁」）。字段窄屏单列、sm 起两列、xl 起三列——
+     十几个字段的艺人也就三五行，不会把头像挤成一根柱子。 -->
 {#if bio || profile.length || social.length}
-  <!-- 左边是资料（宽），右边是链接（窄）；窄屏两张卡上下叠。
-       资料字段按「标签 / 值」两列排，窄屏单列、sm 起两列——字段多时不会拉成一条长蛇。 -->
-  <section class="mt-6 grid gap-3 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
-    {#if bio || profile.length}
-      <div class="panel p-4 sm:p-5">
-        <h3 class="label-meta">个人资料</h3>
+  <div class="mt-4">
+    {#if bio}
+      <!-- 简介：站点上就是一段自由文本，换行原样保留 -->
+      <p class="whitespace-pre-line text-ui text-muted">{bio}</p>
+    {/if}
 
-        {#if bio}
-          <!-- 简介：站点上就是一段自由文本，换行原样保留 -->
-          <p class="mt-2.5 whitespace-pre-line text-ui text-muted">{bio}</p>
-        {/if}
-
-        {#if profile.length}
-          <dl
-            class="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2 {bio
-              ? 'mt-3.5 border-t border-line pt-3.5'
-              : 'mt-2.5'}"
-          >
-            {#each profile as field (field.label)}
-              <div class="grid grid-cols-[5rem_minmax(0,1fr)] items-baseline gap-2">
-                <dt class="text-meta text-dim">{field.label}</dt>
-                <dd class="min-w-0 break-words text-ui text-fg">{field.value}</dd>
-              </div>
-            {/each}
-          </dl>
-        {/if}
-      </div>
+    {#if profile.length}
+      <dl
+        class="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2 xl:grid-cols-3 {bio
+          ? 'mt-3.5 border-t border-line pt-3.5'
+          : ''}"
+      >
+        {#each profile as field (field.label)}
+          <div class="grid grid-cols-[5rem_minmax(0,1fr)] items-baseline gap-2">
+            <dt class="text-meta text-dim">{field.label}</dt>
+            <dd class="min-w-0 break-words text-ui text-fg">{field.value}</dd>
+          </div>
+        {/each}
+      </dl>
     {/if}
 
     {#if social.length}
-      <div class="panel h-fit p-4 sm:p-5">
-        <h3 class="label-meta">社交媒体</h3>
-        <ul class="mt-2.5 flex flex-wrap gap-2">
-          {#each social as link (link.url)}
-            <li>
-              <!-- 外链一律新窗口 + noopener：这些地址来自上游页面，不能让它拿到 window.opener -->
-              <a
-                href={link.url}
-                target="_blank"
-                rel="noreferrer noopener"
-                title="在新窗口打开 {link.label}"
-                class="chip bg-raise transition-colors hover:bg-white/15 hover:text-fg"
-              >
-                {@render icon(kindOf(link.url))}
-                <span>{link.label}</span>
-              </a>
-            </li>
-          {/each}
-        </ul>
-      </div>
+      <ul class="mt-3.5 flex flex-wrap gap-1.5">
+        {#each social as link (link.url)}
+          <li>
+            <!-- 外链一律新窗口 + noopener：这些地址来自上游页面，不能让它拿到 window.opener -->
+            <a
+              href={link.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              title="在新窗口打开 {link.label}"
+              class="chip bg-raise transition-colors hover:bg-white/15 hover:text-fg"
+            >
+              {@render icon(kindOf(link.url))}
+              <span>{link.label}</span>
+            </a>
+          </li>
+        {/each}
+      </ul>
     {/if}
-  </section>
+  </div>
 {/if}
