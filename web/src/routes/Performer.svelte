@@ -244,7 +244,7 @@
                再用 text-pretty 收掉「只剩一个 emoji 单独一行」这种孤字行。 -->
           <div class="flex min-w-0 basis-full items-baseline gap-3 xl:flex-1 xl:basis-0">
             <span class="shrink-0 text-ui text-dim">简介</span>
-            <p class="min-w-0 flex-1 whitespace-pre-line text-pretty text-title text-muted">{performer.bio}</p>
+            <p class="min-w-0 flex-1 whitespace-pre-line text-pretty text-ui text-muted">{performer.bio}</p>
           </div>
         {/if}
 
