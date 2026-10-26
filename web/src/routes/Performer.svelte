@@ -183,12 +183,10 @@
        ③ 简介（左，跟在「简介」标签后面）＋ 站外链接药丸（右）
        原来贴在下面的「个人资料 / 社交媒体」两张卡取消了，页面少两块面板的高度。 -->
   <section class="panel p-4 sm:p-5">
-    <div
-      class="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-4 sm:gap-x-5 xl:grid-cols-[auto_minmax(0,1fr)_minmax(0,1.35fr)]"
-    >
+    <div class="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-4 sm:gap-x-5">
       <!-- 头像尺寸跟艺人列表页的卡片同一口径（6.5rem / `sm` 起 8rem，正好等于列表栅格的轨道宽度）。
-           `self-center`：头像在自己的行里竖直居中，水平中线就跟右边那一栏里的资料表对齐了
-           （资料表通常是这一行最高的一项，头像因此比名字略低一点）。 -->
+           `self-center`：头像在这一行里竖直居中，水平中线就落在右边那组「名字栏 + 资料表」的中线上
+           （那组自己也是 `self-center`，所以资料表的中线跟着一起走）。 -->
       <div class="h-26 w-26 shrink-0 self-center overflow-hidden rounded-full bg-raise sm:h-32 sm:w-32">
         {#if avatar}
           <img src={avatar} alt="" width="320" height="320" class="h-full w-full object-cover" />
@@ -202,53 +200,67 @@
         {/if}
       </div>
 
-      <div class="min-w-0">
-        <div class="flex flex-wrap items-center gap-2">
-          <h2 class="text-hero font-normal tracking-[-0.01em] text-fg">{performer.name}</h2>
-          <!-- 图标即入口：点它直接开该艺人的平台主页（原来那个「平台主页」按钮已经去掉）。 -->
-          <PlatformIcon
-            platform={performer.platform}
-            label={platformLabel(performer.platform)}
-            href={performer.url}
-          />
+      <!-- 窄屏时这层是 `display: contents`：名字栏和资料表仍然是页头栅格的两个直接子项，
+           资料表才跨得了两列、掉到头像下面。`xl` 起它才变成真栅格，把名字栏和资料表并排，
+           并用 `items-start` 让两边的行起点贴在同一条上沿——于是名字/计数/身材/排名这四行
+           就跟资料表的前四行一行对一行。整层自己 `self-center`，头像的中线仍然落在资料表的中线上。 -->
+      <div
+        class="contents xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] xl:items-start xl:gap-x-5 xl:self-center"
+      >
+        <!-- 名字这一栏按资料表的行距来排：每行 20px（资料行是 14px/1.25rem 的一行，名字用
+             `leading-5` 压到同样 20px）+ `gap-y-2` 的 8px 行距，四行的总高 104px 跟四行资料表一样高。 -->
+        <div class="grid min-w-0 gap-y-2">
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- 名字 28px 但行高只有 20px：Roboto 的大写高 0.711em ≈ 19.9px，正好填满这一行，
+                 字形不会把行距撑大（溢出的是上下留白，不占位）。 -->
+            <h2 class="text-hero leading-5 font-normal tracking-[-0.01em] text-fg">{performer.name}</h2>
+            <!-- 图标即入口：点它直接开该艺人的平台主页（原来那个「平台主页」按钮已经去掉）。
+                 `sm`（24px 托底）配 28px 的名字；`-my-0.5` 抵掉托底比那一行多出的上下 2px，
+                 否则 24px 会把这一行撑高到 24px，下面三行就整体错开 4px、跟资料行对不齐了。 -->
+            <PlatformIcon
+              platform={performer.platform}
+              label={platformLabel(performer.platform)}
+              href={performer.url}
+              size="sm"
+              class="-my-0.5"
+            />
+          </div>
+
+          <p class="flex flex-wrap items-center gap-x-3 gap-y-1 text-ui text-dim">
+            <span class="tabular-nums">{formatCount(performer.localVideoCount ?? performer.videoCount ?? 0)}部影片</span>
+            {#if performer.subscriberCount !== null}
+              <span aria-hidden="true">·</span>
+              <span class="tabular-nums">{formatCount(performer.subscriberCount)}订阅</span>
+            {/if}
+          </p>
+
+          {#if bodyText}
+            <!-- 身材：站点资料行里的「身高」「三围」抓取时已归一成公制，紧跟在影片数下面，
+                 所以它们在下面的资料行里不再重复出现。 -->
+            <p class="flex flex-wrap items-baseline gap-x-2 text-ui">
+              <span class="text-dim">身材</span>
+              <span class="tabular-nums text-muted">{bodyText}</span>
+            </p>
+          {/if}
+
+          {#if rankText}
+            <!-- 排名：站点「排名信息」块里的模特排名（越小越靠前），跟身材一样是页头的读数 -->
+            <p class="flex flex-wrap items-baseline gap-x-2 text-ui">
+              <span class="text-dim">排名</span>
+              <span class="tabular-nums text-muted">#{rankText}</span>
+            </p>
+          {/if}
         </div>
 
-        <p class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-ui text-dim">
-          <span class="tabular-nums">{formatCount(performer.localVideoCount ?? performer.videoCount ?? 0)}部影片</span>
-          {#if performer.subscriberCount !== null}
-            <span aria-hidden="true">·</span>
-            <span class="tabular-nums">{formatCount(performer.subscriberCount)}订阅</span>
-          {/if}
-        </p>
-
-        {#if bodyText}
-          <!-- 身材：站点资料行里的「身高」「三围」抓取时已归一成公制，紧跟在影片数下面，
-               所以它们在下面的资料行里不再重复出现。 -->
-          <p class="mt-1 flex flex-wrap items-baseline gap-x-2 text-ui">
-            <span class="text-dim">身材</span>
-            <span class="tabular-nums text-muted">{bodyText}</span>
-          </p>
-        {/if}
-
-        {#if rankText}
-          <!-- 排名：站点「排名信息」块里的模特排名（越小越靠前），跟身材一样是页头的读数 -->
-          <p class="mt-1 flex flex-wrap items-baseline gap-x-2 text-ui">
-            <span class="text-dim">排名</span>
-            <span class="tabular-nums text-muted">#{rankText}</span>
-          </p>
+        <!-- 资料行（性别/身高/出身地/体重……）：来自艺人主页的「资料区块」。
+             两项性癖偏好和平台统计行（播放量等）在解析时就被丢掉了，不会出现在这里。
+             窄屏时它跨两列、整行掉到头像和名字下面。 -->
+        {#if performer.profile.length}
+          <div class="col-span-2 min-w-0 xl:col-span-1">
+            <PerformerProfile profile={performer.profile} />
+          </div>
         {/if}
       </div>
-
-      <!-- 资料行（性别/身高/出身地/体重……）：来自艺人主页的「资料区块」。
-           两项性癖偏好和平台统计行（播放量等）在解析时就被丢掉了，不会出现在这里。
-           窄屏时它跨两列、整行掉到头像和名字下面。 -->
-      {#if performer.profile.length}
-        <!-- 这一栏也 `self-center`：资料表比头像矮时（三项一行的时候）它自己不贴行顶，
-             两边的水平中线才真的落在同一条线上。 -->
-        <div class="col-span-2 min-w-0 self-center xl:col-span-1">
-          <PerformerProfile profile={performer.profile} />
-        </div>
-      {/if}
     </div>
 
     {#if performer.bio || performer.social.length}
