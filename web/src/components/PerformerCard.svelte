@@ -35,11 +35,11 @@
 <a
   href={`/performer/${String(performer.id)}`}
   data-link
-  class="group block min-w-0 text-center"
+  class="group flex min-w-0 flex-col text-center"
   aria-label={`${performer.name}${newCount > 0 ? `，${String(newCount)} 部新片` : ''}`}
 >
-  <!-- 头像封顶 88/96px，不再撑满整个格子（大屏下原来一格 170px+ 太夸张） -->
-  <div class="relative mx-auto aspect-square w-full max-w-[5.5rem] sm:max-w-24">
+  <!-- 头像宽度由栅格轨道固定（88/96px），所以左边缘和页面标题对齐；间距只由 gap 决定 -->
+  <div class="relative aspect-square w-full">
     <div class="h-full w-full overflow-hidden rounded-full bg-panel">
       {#if avatar && !avatarFailed}
         <img
@@ -76,8 +76,9 @@
     {/if}
   </div>
 
-  <h3 class="mt-3 truncate text-ui text-fg/95 transition-colors group-hover:text-fg">{performer.name}</h3>
-  <p class="mt-1 flex items-center justify-center gap-1.5 text-meta text-dim">
+  <!-- 名字最多两行（格子只有 96px 宽，单行会被截得只剩半句）；状态行用 mt-auto 贴底，同一行卡片仍对齐 -->
+  <h3 class="mt-2.5 line-clamp-2 text-ui leading-snug text-fg/95 transition-colors group-hover:text-fg">{performer.name}</h3>
+  <p class="mt-auto flex items-center justify-center gap-1.5 pt-1 text-meta text-dim">
     <span
       class="h-1.5 w-1.5 shrink-0 rounded-full {dotTone[sync.tone]}"
       role="img"
