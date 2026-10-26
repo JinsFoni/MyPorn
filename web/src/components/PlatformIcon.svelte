@@ -8,8 +8,11 @@
     platform: string;
     /** 平台显示名，只用于 alt / title / 读屏，不显示成文字 */
     label: string;
-    /** md = 32px 底座（标题旁）；sm = 20px（12px 元信息行里用，跟文字同高） */
-    size?: 'md' | 'sm';
+    /**
+     * 三档，按「和它并排的文字有多大」选：
+     * md = 32px 底座（28px 标题旁）、sm = 24px（14px 名字旁）、xs = 20px（12px 元信息行里）
+     */
+    size?: 'md' | 'sm' | 'xs';
     class?: string;
   }
 
@@ -28,15 +31,17 @@
 
   let icon = $derived(ICONS[platform.toLowerCase()]);
 
-  // 底座留 4px（md）/ 3px（sm）边给玻璃圈透出来；两档的圆角都按「外圆角 − 边距」取，
+  // 底座比图标每边大 4px，留出玻璃圈；圆角按「外圆角 − 边距」取，
   // 内外两圈同心，看着才是一块玻璃托着一块牌。
-  const PLATE: Record<'md' | 'sm', string> = {
+  const PLATE: Record<'md' | 'sm' | 'xs', string> = {
     md: 'h-8 w-8 rounded-[0.625rem]',
-    sm: 'h-5 w-5 rounded-[0.3125rem]',
+    sm: 'h-6 w-6 rounded-[0.5rem]',
+    xs: 'h-5 w-5 rounded-[0.3125rem]',
   };
-  const IMG: Record<'md' | 'sm', string> = {
+  const IMG: Record<'md' | 'sm' | 'xs', string> = {
     md: 'h-6 w-6',
-    sm: 'h-3.5 w-3.5',
+    sm: 'h-4 w-4',
+    xs: 'h-3 w-3',
   };
 </script>
 

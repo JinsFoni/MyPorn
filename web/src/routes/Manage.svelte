@@ -454,7 +454,7 @@
                     <span class="min-w-0 flex-1">
                       <span class="block truncate text-ui text-fg/90">{row.title}</span>
                       <span class="mt-0.5 flex items-center gap-1.5 text-meta text-dim">
-                        <PlatformIcon platform={row.platform} label={platformLabel(row.platform)} size="sm" />
+                        <PlatformIcon platform={row.platform} label={platformLabel(row.platform)} size="xs" />
                         <span>{row.publishedAt ? formatDate(row.publishedAt) : '无发布时间'}</span>
                         {#if row.firstSeenAt}
                           <span aria-hidden="true">·</span>

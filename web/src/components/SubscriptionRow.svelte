@@ -76,7 +76,7 @@
         <span class="min-w-0 truncate text-ui {item.enabled ? 'text-fg' : 'text-muted'}">
           {item.name}
         </span>
-        <PlatformIcon platform={item.platform} label={platformLabel(item.platform)} />
+        <PlatformIcon platform={item.platform} label={platformLabel(item.platform)} size="sm" />
       </span>
       <span class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-meta text-dim">
         <span class="tabular-nums">本地 {formatCount(item.localVideoCount)} 部</span>
