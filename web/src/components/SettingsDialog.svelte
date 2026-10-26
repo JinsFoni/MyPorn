@@ -223,7 +223,7 @@
               ? 'bg-raise text-fg'
               : 'text-muted hover:bg-panel hover:text-fg'}"
             aria-current={ui.settingsPane === pane.id ? 'true' : undefined}
-            onclick={() => (ui.settingsPane = pane.id)}
+            onclick={() => ui.setPane(pane.id)}
           >
             {@render paneIcon(pane.id)}
             <span class="min-w-0 flex-1 truncate">{pane.label}</span>
@@ -267,7 +267,7 @@
                 : 'hover:bg-panel'}"
               role="tab"
               aria-selected={ui.settingsPane === pane.id}
-              onclick={() => (ui.settingsPane = pane.id)}
+              onclick={() => ui.setPane(pane.id)}
             >
               {pane.label}
             </button>

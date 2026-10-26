@@ -180,8 +180,12 @@ Service Worker 要求 **secure context**：从 `http://192.168.x.x` 这类局域
   本地库（`LibraryPanel`，内部自带 `<form>`）与账号两个分类不在 form 里，页脚也不出现保存按钮。
 - **交互**：`Esc` / 点遮罩 / 右上角 ✕ 关闭（保存中不关），打开时锁 `body` 滚动并把焦点交给弹窗；
   齿轮的 `aria-expanded` 与白色高亮跟随弹窗开关。
-- **旧地址**：`/settings` 仍然可用——`App.svelte` 里一个 effect 把路由重定向到打开弹窗（`#libraries` 直接落在本地库分类），
-  地址栏 replace 回 `/`，不会留下一个空页面。
+- **URL**：地址栏是 `/settings`，分类写在 hash 里（`/settings#upload`、`#libraries`…），所以能收藏、能分享，
+  刷新后还停在原分类上。地址是唯一事实来源：`App.svelte` 里一个 effect 盯着路由——变成 `/settings` 就打开弹窗
+  （切换分类用 `history.replaceState` 改 hash，不堆历史），离开 `/settings` 就静默关掉。
+  - 打开时 `navigate('/settings')` push 一条历史 ⇒ **浏览器后退等于关弹窗**；
+  - 关闭（Esc / 遮罩 / ✕ / 页脚）用 `navigate(from, { replace: true })` 回到打开前那一页，不留 `/settings` 残余。
+  - 弹窗背后保留最后渲染的那个真实页面（`lastPage`），不重新挂载、不重新拉数据。
 
 ---
 

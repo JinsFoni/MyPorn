@@ -10,8 +10,8 @@
   import NotFound from './routes/NotFound.svelte';
   import { api } from './lib/api';
   import { navigate, router } from './lib/router.svelte';
-  import { ui } from './lib/ui.svelte';
-  import type { RouteName } from './lib/router.svelte';
+  import { paneFromHash, ui } from './lib/ui.svelte';
+  import type { RouteMatch, RouteName } from './lib/router.svelte';
   import type { Component } from 'svelte';
 
   /**
@@ -51,15 +51,29 @@
     'not-found': '',
   };
 
-  const shellTitle = $derived(DEFAULT_TITLE[match.name]);
+  // /settings 是「URL 上的弹窗」：地址栏换成 /settings 时弹窗打开，页面本身留在原地
+  // （记下最后一个真实页面，弹窗盖在它上面，关掉时回到它，不重新拉数据）
+  let lastPage = $state<RouteMatch | null>(null);
 
-  // 设置改成弹窗后，/settings 这个旧地址仍然可用：直接开弹窗，然后把地址换回首页
-  // （带 #libraries 的老链接——下载对话框以前就是这么跳的——落在「本地库」分类上）
   $effect(() => {
-    if (match.name !== 'settings') return;
-    ui.openSettings(window.location.hash === '#libraries' ? 'libraries' : 'sync');
-    navigate('/', { replace: true });
+    if (match.name !== 'settings') lastPage = match;
   });
+
+  $effect(() => {
+    if (match.name === 'settings') {
+      ui.openFromRoute(paneFromHash(window.location.hash));
+    } else if (ui.settingsOpen) {
+      ui.closeFromRoute();
+    }
+  });
+
+  const shown = $derived<RouteMatch>(
+    match.name === 'settings'
+      ? (lastPage ?? { name: 'feed', params: {}, title: '关注' })
+      : match,
+  );
+
+  const shellTitle = $derived(DEFAULT_TITLE[shown.name]);
 
   onMount(() => {
     void (async () => {
@@ -83,31 +97,31 @@
   </div>
 {:else}
   <AppShell title={shellTitle}>
-    {#if match.name === 'feed'}
+    {#if shown.name === 'feed'}
       <Feed />
-    {:else if match.name === 'performers'}
+    {:else if shown.name === 'performers'}
       <Performers />
-    {:else if match.name === 'performer'}
+    {:else if shown.name === 'performer'}
       {#await loadIdPage('performer')}
         <p class="py-16 text-center text-ui text-dim">正在载入…</p>
       {:then mod}
         {@const PerformerPage = mod.default}
-        <PerformerPage id={match.params.id} />
+        <PerformerPage id={shown.params.id} />
       {:catch}
         <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
       {/await}
-    {:else if match.name === 'discover'}
+    {:else if shown.name === 'discover'}
       <Discover />
-    {:else if match.name === 'video'}
+    {:else if shown.name === 'video'}
       {#await loadIdPage('video')}
         <p class="py-16 text-center text-ui text-dim">正在载入…</p>
       {:then mod}
         {@const VideoPage = mod.default}
-        <VideoPage id={match.params.id} />
+        <VideoPage id={shown.params.id} />
       {:catch}
         <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
       {/await}
-    {:else if match.name === 'downloads'}
+    {:else if shown.name === 'downloads'}
       <Downloads />
     {:else}
       <NotFound />
