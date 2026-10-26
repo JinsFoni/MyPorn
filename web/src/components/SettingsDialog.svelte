@@ -203,14 +203,15 @@
       onclick={close}
     ></button>
 
-    <!-- 弹窗本体：左边分类栏，右边滚动内容；没有描边和投影，靠 ink 底压出层次 -->
+    <!-- 弹窗本体：左边分类栏，右边滚动内容；没有描边和投影，靠 ink 底压出层次。
+         高度固定（不跟内容变），切分类时不会跳来跳去，内容多了在右侧内部滚 -->
     <div
       bind:this={dialogEl}
       role="dialog"
       aria-modal="true"
       aria-labelledby="settings-pane-title"
       tabindex="-1"
-      class="relative flex max-h-[min(92dvh,46rem)] w-full max-w-4xl overflow-hidden rounded-2xl bg-sheet outline-none"
+      class="relative flex h-[min(88dvh,46rem)] w-full max-w-4xl overflow-hidden rounded-2xl bg-sheet outline-none"
     >
       <nav class="hidden w-52 shrink-0 flex-col gap-0.5 bg-ink/50 p-2.5 sm:flex" aria-label="设置分类">
         <p class="px-3 pb-2.5 pt-1 text-ui font-medium tracking-[-0.01em] text-fg">设置</p>
