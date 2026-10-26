@@ -6,11 +6,10 @@
   import Skeleton from '../components/Skeleton.svelte';
   import { ApiError, api, messageFor } from '../lib/api';
   import { imageUrl } from '../lib/img';
-  import { formatCount, formatDate, relativeFuture, relativeTime } from '../lib/format';
+  import { formatCount, relativeFuture, relativeTime } from '../lib/format';
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
-  import { navigate } from '../lib/router.svelte';
-  import type { Performer, SyncMode, Video } from '../lib/types';
+    import type { Performer, Video } from '../lib/types';
 
   interface Props {
     id: string;
@@ -91,13 +90,8 @@
   let loading = $state(true);
   let error = $state('');
   let mockNote = $state('');
-  let syncing = $state(false);
-  let togglingEnabled = $state(false);
   let listKey = $state(0);
   let lastBump = 0;
-  let confirmKind = $state<'full' | 'unsubscribe' | null>(null);
-  let confirmBusy = $state(false);
-  let cancelBtn = $state<HTMLButtonElement | null>(null);
 
   const avatar = $derived(performer ? imageUrl(performer.avatarUrl, 240) : null);
 
@@ -154,57 +148,8 @@
     }
   }
 
-  async function startSync(mode: SyncMode): Promise<void> {
-    const p = performer;
-    if (!p || p.subscriptionId === null || syncing) return;
-    syncing = true;
-    try {
-      await api.syncSubscription(p.subscriptionId, mode);
-      live.toast(mode === 'full' ? '已开始全量回填' : '已开始增量同步', 'success');
-      window.setTimeout(() => void loadPerformer(), 2500);
-    } catch (err) {
-      live.toast(messageFor(err), 'error');
-    } finally {
-      syncing = false;
-    }
-  }
-
-  async function toggleEnabled(): Promise<void> {
-    const p = performer;
-    if (!p || p.subscriptionId === null || togglingEnabled) return;
-    togglingEnabled = true;
-    try {
-      performer = await api.updateSubscription(p.subscriptionId, { enabled: !p.enabled });
-      live.toast(performer.enabled ? '已启用自动同步' : '已暂停自动同步', 'success');
-    } catch (err) {
-      live.toast(messageFor(err), 'error');
-    } finally {
-      togglingEnabled = false;
-    }
-  }
-
-  async function runConfirm(): Promise<void> {
-    const kind = confirmKind;
-    if (!kind) return;
-    confirmBusy = true;
-    if (kind === 'full') {
-      confirmKind = null;
-      await startSync('full');
-    } else {
-      const p = performer;
-      if (p && p.subscriptionId !== null) {
-        try {
-          await api.unsubscribe(p.subscriptionId);
-          live.toast(`已取消订阅 ${p.name}`, 'success');
-          navigate('/performers', { replace: true });
-        } catch (err) {
-          live.toast(messageFor(err), 'error');
-        }
-      }
-      confirmKind = null;
-    }
-    confirmBusy = false;
-  }
+  /* 本页不再提供任何写操作（同步 / 全量回填 / 启停 / 取消订阅都是「管理 → 关注管理」的事）：
+     艺人主页只负责看——信息、同步进度、影片列表。 */
 
   $effect(() => {
     void loadPerformer();
@@ -218,17 +163,7 @@
     void loadPerformer();
   });
 
-  $effect(() => {
-    if (confirmKind !== null) cancelBtn?.focus();
-  });
-
 </script>
-
-<svelte:window
-  onkeydown={(event) => {
-    if (event.key === 'Escape' && confirmKind !== null) confirmKind = null;
-  }}
-/>
 
 {#if loading && !performer}
   <section>
@@ -310,41 +245,6 @@
       </div>
     </div>
 
-    <div class="mt-4 flex flex-wrap items-center gap-2">
-      <button
-        type="button"
-        class="btn btn-primary"
-        onclick={() => void startSync('incremental')}
-        disabled={syncing || !performer.enabled || performer.subscriptionId === null}
-      >
-        {syncing ? '同步中…' : '立即同步'}
-      </button>
-      <button
-        type="button"
-        class="btn"
-        onclick={() => (confirmKind = 'full')}
-        disabled={syncing || performer.subscriptionId === null}
-      >
-        全量回填
-      </button>
-      <button
-        type="button"
-        class="btn"
-        onclick={() => void toggleEnabled()}
-        disabled={togglingEnabled || performer.subscriptionId === null}
-      >
-        {performer.enabled ? '暂停同步' : '启用同步'}
-      </button>
-      <button
-        type="button"
-        class="btn btn-danger ml-auto"
-        onclick={() => (confirmKind = 'unsubscribe')}
-        disabled={performer.subscriptionId === null}
-      >
-        取消订阅
-      </button>
-    </div>
-
     {#if progress}
       <div class="panel mt-4 px-3.5 py-3" role="status" aria-live="polite">
         <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-meta">
@@ -376,48 +276,12 @@
       {/snippet}
 
       {#snippet empty()}
-        <EmptyState title="还没有同步到影片" hint="点「立即同步」开始抓取；首次订阅会自动全量回填。" icon="film">
-          {#snippet actions()}
-            <button
-              type="button"
-              class="btn btn-primary"
-              onclick={() => void startSync('incremental')}
-              disabled={syncing || typeof performer?.subscriptionId !== 'number'}
-            >
-              立即同步
-            </button>
-          {/snippet}
-        </EmptyState>
+        <EmptyState
+          title="还没有同步到影片"
+          hint="到「管理 → 关注管理」点同步即可抓取；首次订阅会自动全量回填。"
+          icon="film"
+        />
       {/snippet}
     </InfiniteList>
   </section>
-
-  {#if confirmKind}
-    <div class="fixed inset-0 z-50 flex items-end justify-center bg-ink/75 p-4 sm:items-center">
-      <div class="w-full max-w-sm rounded-2xl bg-raise p-5" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
-        <h2 id="confirm-title" class="text-title font-medium text-fg">
-          {confirmKind === 'full' ? '全量回填？' : '取消订阅？'}
-        </h2>
-        <p class="mt-2 text-ui text-muted">
-          {#if confirmKind === 'full'}
-            会从头翻页抓取该艺人的全部影片，几百部需要一两分钟；已入库的影片不会重复。
-          {:else}
-            取消后不再自动同步，已入库的影片会保留；想恢复可以重新订阅。
-          {/if}
-        </p>
-        <p class="mt-3 text-meta text-dim">上次同步：{formatDate(performer.lastSyncAt)}</p>
-        <div class="mt-5 flex justify-end gap-2">
-          <button type="button" class="btn" bind:this={cancelBtn} onclick={() => (confirmKind = null)}>取消</button>
-          <button
-            type="button"
-            class={confirmKind === 'full' ? 'btn btn-primary' : 'btn btn-danger'}
-            onclick={() => void runConfirm()}
-            disabled={confirmBusy}
-          >
-            {confirmKind === 'full' ? '开始回填' : '确认取消订阅'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
 {/if}
