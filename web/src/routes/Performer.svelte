@@ -152,7 +152,7 @@
 {#if loading && !performer}
   <section class="panel p-4 sm:p-5">
     <div class="flex items-start gap-4 sm:gap-5">
-      <Skeleton class="h-20 w-20 shrink-0 sm:h-28 sm:w-28" rounded="rounded-full" />
+      <Skeleton class="h-26 w-26 shrink-0 sm:h-32 sm:w-32" rounded="rounded-full" />
       <div class="min-w-0 flex-1 space-y-2.5">
         <Skeleton class="h-7 w-52" />
         <Skeleton class="h-3.5 w-full max-w-md" />
@@ -183,7 +183,8 @@
     <div
       class="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-4 sm:gap-x-5 xl:grid-cols-[auto_minmax(0,1fr)_minmax(0,1.35fr)]"
     >
-      <div class="h-20 w-20 shrink-0 overflow-hidden rounded-full bg-raise sm:h-32 sm:w-32 xl:h-40 xl:w-40">
+      <!-- 头像尺寸跟艺人列表页的卡片同一口径（6.5rem / `sm` 起 8rem，正好等于列表栅格的轨道宽度） -->
+      <div class="h-26 w-26 shrink-0 overflow-hidden rounded-full bg-raise sm:h-32 sm:w-32">
         {#if avatar}
           <img src={avatar} alt="" width="320" height="320" class="h-full w-full object-cover" />
         {:else}
