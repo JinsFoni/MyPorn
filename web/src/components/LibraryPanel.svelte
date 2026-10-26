@@ -155,14 +155,14 @@
   });
 </script>
 
-<section id="libraries" class="scroll-mt-20">
-  <div class="flex items-baseline justify-between gap-3">
-    <h2 class="text-ui font-medium text-fg">本地库</h2>
-    <button type="button" class="btn btn-ghost h-8" onclick={() => void load()}>刷新空间</button>
+<!-- 标题由设置弹窗的分类栏给出，这里不再重复一遍 -->
+<section class="pb-1">
+  <div class="flex items-start justify-between gap-3">
+    <p class="text-meta text-dim">
+      每部影片独立一个文件夹，内含原片 + nfo + poster / thumb / fanart，Emby 可直接刮削。
+    </p>
+    <button type="button" class="btn btn-ghost h-8 shrink-0" onclick={() => void load()}>刷新空间</button>
   </div>
-  <p class="mt-1 text-meta text-dim">
-    每部影片独立一个文件夹，内含原片 + nfo + poster / thumb / fanart，Emby 可直接刮削。
-  </p>
 
   {#if loading && libraries.length === 0}
     <div class="mt-3 h-20 animate-pulse rounded-xl bg-panel"></div>

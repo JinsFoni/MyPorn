@@ -142,13 +142,13 @@
 | 字体 | Roboto 400/500（`@fontsource/roboto` 只打包 latin 400/500 两个 woff2，~44KB），中文回落到系统 PingFang / Noto Sans SC | `web/src/app.css` |
 | 字号 | 12 元信息 / 14 正文 / 16 小标题 / 20 页面标题（移动）/ 28 页面标题（桌面，字重 400） | `web/src/components/TopBar.svelte` 等 |
 | 圆角 | 媒体与面板 12px（`rounded-xl`）、按钮与标签 9999px（药丸）、头像 50% | 全局 |
-| 布局 | **桌面端**：**悬浮式**侧边导航——`fixed left-3 top-3 bottom-3`、240px 宽的圆角玻璃块（`rounded-xl` + 白 5% 底 + `backdrop-blur`，四边留 12px 空隙、不贴视口边缘，自身可滚动），内容区让出 `16.5rem`（`lg:pl-[16.5rem]`）；网格按「扣掉侧边栏后的剩余宽度」定档——1440 宽 4 列、1536 以上 5 列。导航项只有**关注 / 艺人 / 发现 / 下载**四项，**「设置」单独摆在栏底右下角，只显示齿轮图标**（36px 圆形命中区，`aria-label` + `title` 兜住可访问性；**不铺底色**，选中/未选中只靠颜色区分——白 95% / 白 60%），栏底只留这一个齿轮，不再显示实时连接状态（连接状态只在移动端顶栏留一个小圆点）。**移动端**：隐藏侧边栏，保留 48px 顶栏（`backdrop-blur` + 上深下淡的渐变底，免得压出一条硬边）与底部 5 个图标 tab（设置仍占一格，带文字） | `web/src/components/AppShell.svelte` |
+| 布局 | **桌面端**：**悬浮式**侧边导航——`fixed left-3 top-3 bottom-3`、240px 宽的圆角玻璃块（`rounded-xl` + 白 5% 底 + `backdrop-blur`，四边留 12px 空隙、不贴视口边缘，自身可滚动），内容区让出 `16.5rem`（`lg:pl-[16.5rem]`）；网格按「扣掉侧边栏后的剩余宽度」定档——1440 宽 4 列、1536 以上 5 列。导航项只有**关注 / 艺人 / 发现 / 下载**四项，**「设置」单独摆在栏底右下角，只显示齿轮图标**（36px 圆形命中区，`aria-label` + `title` 兜住可访问性；**不铺底色**，未选中白 60%、弹窗打开时白 95%），栏底只留这一个齿轮，不再显示实时连接状态（连接状态只在移动端顶栏留一个小圆点）。齿轮点开的是**弹窗**而不是页面，见 §7.7。**移动端**：隐藏侧边栏，保留 48px 顶栏（`backdrop-blur` + 上深下淡的渐变底，免得压出一条硬边）与底部 5 个图标 tab（设置仍占一格，带文字） | `web/src/components/AppShell.svelte` |
 | 环境光 | `.canvas-glow`：照搬 beeg 的实现——`web/src/assets/glow.webp`（1000×563、8KB，取自 `beeg.com/dist/assets/glow.webp`）铺满顶部 **49vh** 高的色带（`background-size: cover`），上面压一层 `linear-gradient(to bottom, rgba(0,0,0,.6), 画布色)`。`absolute` 定位，**跟着内容一起滚走**（不是 `fixed`）；承载容器必须 `isolate`，否则 `-z-10` 会被 `body` 的画布底色盖掉 | `web/src/app.css`、`web/src/assets/glow.webp`、`web/src/components/AppShell.svelte`、`web/src/routes/Login.svelte` |
 | 卡片 | 封面（16:9、r12）→ 左上时长药丸 / 新片白药丸 → 36px 圆形艺人头像 + 标题 + `艺人 · 时间` | `web/src/components/VideoCard.svelte` |
 | 艺人卡 | 圆形头像**封顶** 88px（移动）/ 96px（`sm` 以上）——`w-full max-w-[5.5rem] sm:max-w-24`，不随格子宽度撑大（曾经撑满一格，1440 下会到 170px+）；姓名 + 同步状态点居中排在下方；网格 3/4/5/6/7/8 列 | `web/src/components/PerformerCard.svelte`、`web/src/routes/Performers.svelte` |
 | 复用类 | `.btn` / `.btn-primary`（白底黑字药丸）/ `.btn-ghost` / `.btn-danger` / `.field` / `.panel` / `.chip` / `.label-meta` | `web/src/app.css` |
 
-约定：交互元素一律药丸，媒体与容器一律 12px 圆角；不用边框区分层级，只靠白 5%/9% 的底与间距（悬浮侧边栏也一样：不描边，靠 12px 圆角 + 四边空隙 + 毛玻璃从画布里"浮"起来）；流式页面（关注/艺人）的标题由外壳 `TopBar` 渲染，**发现 / 下载 / 设置三页是居中单栏**（`mx-auto` + `max-w-2xl / 5xl / 3xl`），标题连同内容一起放进这一栏里，所以外壳标题留空；详情页（影片/艺人）也不渲染外壳标题，改由页面自己带返回按钮与 28px 标题。
+约定：交互元素一律药丸，媒体与容器一律 12px 圆角；不用边框区分层级，只靠白 5%/9% 的底与间距（悬浮侧边栏也一样：不描边，靠 12px 圆角 + 四边空隙 + 毛玻璃从画布里"浮"起来）；流式页面（关注/艺人）的标题由外壳 `TopBar` 渲染，**发现 / 下载两页是居中单栏**（`mx-auto` + `max-w-2xl / 5xl`），标题连同内容一起放进这一栏里，所以外壳标题留空（**设置不是页面，是弹窗**，见 §7.7）；详情页（影片/艺人）也不渲染外壳标题，改由页面自己带返回按钮与 28px 标题。
 
 ### 7.5 包体预算
 
@@ -164,6 +164,24 @@ Service Worker 要求 **secure context**：从 `http://192.168.x.x` 这类局域
 
 - 解法：反代加 HTTPS（Caddy 自签证书 / 内网证书），或在本机用 `localhost` 访问；
 - 不解决也能用：降级为普通网页 + 主屏书签，播放/下载/任务全部正常，只是没有离线壳与独立窗口。
+
+### 7.7 设置弹窗（分类 + 侧边栏）
+
+设置不是页面，是**一个能盖在任何页面上的弹窗**：侧边栏右下角的齿轮、下载页的「管理本地库」、
+下载对话框里的「去创建库」都只是调用 `ui.openSettings(pane)`（`web/src/lib/ui.svelte.ts` 里的 runes store），
+由 `App.svelte` 挂着的 `<SettingsDialog />` 统一渲染。
+
+- **布局**：`max-w-4xl` 的圆角面板，左边 208px 分类栏（`bg-ink/50`，比面板略暗）+ 右边滚动内容；
+  没有描边没有投影，靠 `bg-sheet`（不透明面板色）压在 `bg-ink/80` + 毛玻璃的遮罩上分层。
+  **面板底色必须不透明**——用 `bg-raise` 这类半透明表面的话，背后页面的模糊会整片透上来。
+- **分类**：同步 / 网络与代理 / 上传 / 下载 / 本地库 / 账号。右侧只渲染当前分类（不滚动整页找区块），
+  表头显示分类名 + 一句说明；`<sm` 没有左侧栏，换成一条可横滑的胶囊分类条。
+- **表单**：前四个分类共用一个 `<form id="settings-form">`，保存按钮在页脚，用 `form="settings-form"` 挂回去；
+  本地库（`LibraryPanel`，内部自带 `<form>`）与账号两个分类不在 form 里，页脚也不出现保存按钮。
+- **交互**：`Esc` / 点遮罩 / 右上角 ✕ 关闭（保存中不关），打开时锁 `body` 滚动并把焦点交给弹窗；
+  齿轮的 `aria-expanded` 与白色高亮跟随弹窗开关。
+- **旧地址**：`/settings` 仍然可用——`App.svelte` 里一个 effect 把路由重定向到打开弹窗（`#libraries` 直接落在本地库分类），
+  地址栏 replace 回 `/`，不会留下一个空页面。
 
 ---
 

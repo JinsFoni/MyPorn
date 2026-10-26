@@ -38,6 +38,10 @@
   --color-panel: #f5faff0d; /* 冷白 5%：区块、媒体底、输入框 */
   --color-raise: #f5faff17; /* 冷白 9%：悬停、抬升层、药丸 */
 
+  /* 弹窗底：画布再压一层白 5% 后的等效实色。必须不透明——半透明的话
+     背后的页面会连着模糊一起透上来，观感很脏 */
+  --color-sheet: #0e1217;
+
   /* 线条（只有发丝线） */
   --color-line: #f5faff1a;
   --color-line-strong: #f5faff33;

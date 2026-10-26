@@ -5,11 +5,12 @@
   import Feed from './routes/Feed.svelte';
   import Performers from './routes/Performers.svelte';
   import Discover from './routes/Discover.svelte';
-  import Settings from './routes/Settings.svelte';
+  import SettingsDialog from './components/SettingsDialog.svelte';
   import Downloads from './routes/Downloads.svelte';
   import NotFound from './routes/NotFound.svelte';
   import { api } from './lib/api';
   import { navigate, router } from './lib/router.svelte';
+  import { ui } from './lib/ui.svelte';
   import type { RouteName } from './lib/router.svelte';
   import type { Component } from 'svelte';
 
@@ -51,6 +52,14 @@
   };
 
   const shellTitle = $derived(DEFAULT_TITLE[match.name]);
+
+  // 设置改成弹窗后，/settings 这个旧地址仍然可用：直接开弹窗，然后把地址换回首页
+  // （带 #libraries 的老链接——下载对话框以前就是这么跳的——落在「本地库」分类上）
+  $effect(() => {
+    if (match.name !== 'settings') return;
+    ui.openSettings(window.location.hash === '#libraries' ? 'libraries' : 'sync');
+    navigate('/', { replace: true });
+  });
 
   onMount(() => {
     void (async () => {
@@ -100,10 +109,9 @@
       {/await}
     {:else if match.name === 'downloads'}
       <Downloads />
-    {:else if match.name === 'settings'}
-      <Settings />
     {:else}
       <NotFound />
     {/if}
   </AppShell>
+  <SettingsDialog />
 {/if}

@@ -7,6 +7,7 @@
   import { installScrollProbe } from '../lib/scroll';
   import { connectEvents } from '../lib/sse';
   import { router } from '../lib/router.svelte';
+  import { ui } from '../lib/ui.svelte';
   import type { JobType } from '../lib/types';
 
   interface Props {
@@ -42,7 +43,11 @@
 
   // 设置不进侧边列表，单独摆在侧边栏右下角（只显示齿轮图标）；移动端底部 tab 仍保留五项
   const SIDE_NAV = NAV.filter((item) => item.icon !== 'settings');
-  const settingsActive = $derived(activeHref === '/settings');
+  const settingsActive = $derived(ui.settingsOpen);
+
+  /** 移动端底部 tab 的共用样式 */
+  const TAB_CLASS = (active: boolean): string =>
+    `flex flex-col items-center gap-1 pb-2 pt-2.5 transition-colors ${active ? 'text-fg' : 'text-dim'}`;
 
   onMount(() => {
     installScrollProbe();
@@ -134,6 +139,21 @@
   </svg>
 {/snippet}
 
+{#snippet tabInner(item: NavItem)}
+  <span class="relative">
+    {@render navIcon(item.icon)}
+    {#if item.href === '/downloads' && live.activeDownloads > 0}
+      <span
+        class="absolute -right-2 -top-1 min-w-[0.9375rem] rounded-full bg-hi px-1 text-[0.625rem] font-medium leading-[0.9375rem] text-ink tabular-nums"
+        aria-hidden="true"
+      >
+        {live.activeDownloads}
+      </span>
+    {/if}
+  </span>
+  <span class="text-[0.6875rem] leading-none">{item.label}</span>
+{/snippet}
+
 <!-- isolate：让 -z-10 的环境光留在这一层里，否则会被 body 的画布底色盖掉 -->
 <div class="relative isolate min-h-dvh">
   <!-- 环境光：beeg 同款——顶部 49vh 的彩色底图 + 压暗层，跟着内容一起滚走 -->
@@ -218,19 +238,21 @@
     </nav>
 
     <div class="mt-auto flex items-center justify-end pt-6">
-      <!-- 设置：右下角，只有齿轮图标，不给底色（命中区仍是 36px 圆形，只靠颜色表示状态） -->
-      <a
-        data-link
-        href="/settings"
-        aria-current={settingsActive ? 'page' : undefined}
+      <!-- 设置：右下角，只有齿轮图标，不给底色（命中区仍是 36px 圆形，只靠颜色表示状态）。
+           点开的是弹窗（SettingsDialog），不跳页面；打开时齿轮变白 -->
+      <button
+        type="button"
         aria-label="设置"
         title="设置"
+        aria-haspopup="dialog"
+        aria-expanded={settingsActive}
+        onclick={() => ui.openSettings()}
         class="grid h-9 w-9 shrink-0 place-items-center rounded-full transition-colors {settingsActive
           ? 'text-fg'
           : 'text-muted hover:text-fg'}"
       >
         {@render navIcon('settings')}
-      </a>
+      </button>
     </div>
   </aside>
 
@@ -254,28 +276,30 @@
   >
     <ul class="grid grid-cols-5">
       {#each NAV as item (item.href)}
+        {@const isActive = item.icon === 'settings' ? settingsActive : activeHref === item.href}
         <li>
-          <a
-            data-link
-            href={item.href}
-            aria-current={activeHref === item.href ? 'page' : undefined}
-            class="flex flex-col items-center gap-1 pb-2 pt-2.5 transition-colors {activeHref === item.href
-              ? 'text-fg'
-              : 'text-dim'}"
-          >
-            <span class="relative">
-              {@render navIcon(item.icon)}
-              {#if item.href === '/downloads' && live.activeDownloads > 0}
-                <span
-                  class="absolute -right-2 -top-1 min-w-[0.9375rem] rounded-full bg-hi px-1 text-[0.625rem] font-medium leading-[0.9375rem] text-ink tabular-nums"
-                  aria-hidden="true"
-                >
-                  {live.activeDownloads}
-                </span>
-              {/if}
-            </span>
-            <span class="text-[0.6875rem] leading-none">{item.label}</span>
-          </a>
+          {#if item.icon === 'settings'}
+            <!-- 设置同样开弹窗，不跳页面 -->
+            <button
+              type="button"
+              aria-label="设置"
+              aria-haspopup="dialog"
+              aria-expanded={isActive}
+              onclick={() => ui.openSettings()}
+              class="{TAB_CLASS(isActive)} w-full"
+            >
+              {@render tabInner(item)}
+            </button>
+          {:else}
+            <a
+              data-link
+              href={item.href}
+              aria-current={isActive ? 'page' : undefined}
+              class={TAB_CLASS(isActive)}
+            >
+              {@render tabInner(item)}
+            </a>
+          {/if}
         </li>
       {/each}
     </ul>

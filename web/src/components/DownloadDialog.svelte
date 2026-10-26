@@ -3,6 +3,7 @@
   import { formatBytes, formatDuration } from '../lib/format';
   import { live } from '../lib/live.svelte';
   import { navigate } from '../lib/router.svelte';
+  import { ui } from '../lib/ui.svelte';
   import type { DownloadOptions } from '../lib/types';
 
   interface Props {
@@ -143,7 +144,7 @@
               class="btn btn-primary mt-3 w-full"
               onclick={() => {
                 onClose();
-                navigate('/settings#libraries');
+                ui.openSettings('libraries');
               }}
             >
               去创建设置库

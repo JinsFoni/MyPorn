@@ -6,6 +6,7 @@
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
   import { navigate } from '../lib/router.svelte';
+  import { ui } from '../lib/ui.svelte';
   import type { DownloadItem, JobStatus } from '../lib/types';
 
   let error = $state('');
@@ -86,7 +87,9 @@
         最高画质原片 + Emby 元数据 · 当前占用 <span class="tabular-nums text-fg/90">{formatBytes(live.totalDownloadBytes)}</span>
       </p>
       <div class="flex items-center gap-2">
-        <a data-link href="/settings#libraries" class="btn btn-ghost h-9">管理本地库</a>
+        <button type="button" class="btn btn-ghost h-9" onclick={() => ui.openSettings('libraries')}>
+          管理本地库
+        </button>
         <button type="button" class="btn h-9" onclick={() => void refresh()}>刷新</button>
       </div>
     </div>
