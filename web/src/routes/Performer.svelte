@@ -1,5 +1,6 @@
 <script lang="ts">
   import InfiniteList from '../components/InfiniteList.svelte';
+  import PlatformIcon from '../components/PlatformIcon.svelte';
   import VideoCard from '../components/VideoCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import Skeleton from '../components/Skeleton.svelte';
@@ -273,7 +274,10 @@
       <div class="min-w-0 flex-1">
         <div class="flex flex-wrap items-center gap-2">
           <h2 class="text-hero font-normal tracking-[-0.01em] text-fg">{performer.name}</h2>
-          <span class="chip">{PLATFORM_LABEL[performer.platform] ?? performer.platform}</span>
+          <PlatformIcon
+            platform={performer.platform}
+            label={PLATFORM_LABEL[performer.platform] ?? performer.platform}
+          />
           {#if !performer.enabled}
             <span class="chip">已暂停</span>
           {/if}
