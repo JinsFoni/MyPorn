@@ -18,6 +18,7 @@
     sortVariantsDesc,
     sourceTypeFor,
     variantLabel,
+    type QualityOption,
   } from '../lib/player';
   import { navigate } from '../lib/router.svelte';
   import type { PlaybackInfo, VideoDetail } from '../lib/types';
@@ -140,12 +141,6 @@
     void loadPlayback();
   }
 
-  function onQualityChange(event: Event): void {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLSelectElement)) return;
-    applyVariant(target.value);
-  }
-
   function applyVariant(variantId: string): void {
     const variant = playback?.variants.find((v) => v.id === variantId);
     if (!variant) return;
@@ -174,6 +169,21 @@
         /* 上报失败不影响播放 */
       });
   }
+
+  /** 播放器左上角清晰度菜单的条目（顺序即 sortVariantsDesc 的顺序，最高在最上） */
+  const qualities = $derived<QualityOption[]>(
+    variants.map((variant) => ({
+      id: variant.id,
+      label: variantLabel(variant),
+      hint: [
+        codecTag(variant),
+        formatBandwidth(variant.bandwidth),
+        variant.id === playback?.defaultVariantId ? '最高' : null,
+      ]
+        .filter((part) => part !== null && part !== '')
+        .join(' · '),
+    })),
+  );
 
   const specs = $derived.by((): { label: string; value: string }[] => {
     const v = video;
@@ -229,42 +239,54 @@
       </p>
     {/if}
 
-    <div class="relative overflow-hidden rounded-xl bg-black">
-      {#if source}
-        {#key attempt}
-          <VideoPlayer
-            src={source.src}
-            type={source.type}
-            engine={engine}
-            poster={poster}
-            title={video.title}
-            onStarted={onStarted}
-            onFailed={onFailed}
-          />
-        {/key}
-      {:else}
-        <div class="aspect-video w-full"></div>
-      {/if}
-
-      {#if loadingPlayback && !playError}
-        <div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/50">
-          <p class="text-ui text-muted">正在解析播放地址…</p>
-        </div>
-      {/if}
-
-      {#if playError}
-        <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center">
-          <p class="max-w-md text-ui text-fg/90">{playError}</p>
-          <div class="flex flex-wrap items-center justify-center gap-2">
-            <button type="button" class="btn" onclick={retryPlayback}>重新解析</button>
-            {#if proxyAvailable && !usingProxy}
-              <button type="button" class="btn btn-primary" onclick={switchToProxy}>用代理播放</button>
+    {#if source}
+      {#key attempt}
+        <VideoPlayer
+          src={source.src}
+          type={source.type}
+          engine={engine}
+          poster={poster}
+          title={video.title}
+          {qualities}
+          selectedQuality={selectedVariantId}
+          onSelectQuality={applyVariant}
+          onStarted={onStarted}
+          onFailed={onFailed}
+        >
+          {#snippet overlay()}
+            {#if loadingPlayback && !playError}
+              <div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/50">
+                <p class="text-ui text-muted">正在解析播放地址…</p>
+              </div>
+            {:else if playError}
+              <div class="pointer-events-auto absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center">
+                <p class="max-w-md text-ui text-fg/90">{playError}</p>
+                <div class="flex flex-wrap items-center justify-center gap-2">
+                  <button type="button" class="btn" onclick={retryPlayback}>重新解析</button>
+                  {#if proxyAvailable && !usingProxy}
+                    <button type="button" class="btn btn-primary" onclick={switchToProxy}>用代理播放</button>
+                  {/if}
+                </div>
+                <p class="text-meta text-dim">空格 暂停 · ← → 快退快进 10 秒 · F 全屏 · M 静音</p>
+              </div>
             {/if}
+          {/snippet}
+        </VideoPlayer>
+      {/key}
+    {:else}
+      <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-black">
+        {#if loadingPlayback}
+          <div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/50">
+            <p class="text-ui text-muted">正在解析播放地址…</p>
           </div>
-          <p class="text-meta text-dim">空格 暂停 · ← → 快退快进 10 秒 · F 全屏 · M 静音</p>
-        </div>
-      {/if}
-    </div>
+        {:else if playError}
+          <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+            <p class="max-w-md text-ui text-fg/90">{playError}</p>
+            <button type="button" class="btn" onclick={retryPlayback}>重新解析</button>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <div class="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_17rem]">
       <div class="min-w-0">
@@ -326,29 +348,6 @@
       </div>
 
       <aside class="lg:pt-1">
-        <div>
-          <label for="quality" class="label-meta mb-1.5">清晰度</label>
-          <select
-            id="quality"
-            class="field"
-            value={selectedVariantId ?? ''}
-            onchange={onQualityChange}
-            disabled={variants.length === 0}
-          >
-            {#if variants.length === 0}
-              <option value="">无可用片源</option>
-            {/if}
-            {#each variants as variant (variant.id)}
-              <option value={variant.id}>
-                {variantLabel(variant)}{codecTag(variant) ? ` · ${codecTag(variant)}` : ''}{variant.id ===
-                playback?.defaultVariantId
-                  ? '（最高）'
-                  : ''} · {formatBandwidth(variant.bandwidth)}
-              </option>
-            {/each}
-          </select>
-        </div>
-
         <dl class="mt-4 divide-y divide-line">
           {#each specs as spec (spec.label)}
             <div class="flex items-baseline justify-between gap-3 py-2">

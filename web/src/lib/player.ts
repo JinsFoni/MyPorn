@@ -46,6 +46,15 @@ export function needsHlsEngine(variants: readonly PlaybackVariant[]): boolean {
   return variants.some((v) => v.hls);
 }
 
+/** 播放器清晰度菜单里的一项（格式化在页面侧做，播放器只管展示） */
+export interface QualityOption {
+  id: string;
+  /** 主文案，例如 `1080p` */
+  label: string;
+  /** 副文案，例如 `av1 · 4.0 Mbps` */
+  hint: string;
+}
+
 /** 变体 → Video.js `source.type` */
 export function sourceTypeFor(isHls: boolean): string {
   return isHls ? HLS_TYPE : MP4_TYPE;
