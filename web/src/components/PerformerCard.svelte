@@ -12,7 +12,6 @@
 
   const avatar = $derived(imageUrl(performer.avatarUrl, 320));
   let avatarFailed = $state(false);
-  const newCount = $derived(performer.newVideoCount);
   const monogram = $derived(performer.name.trim().charAt(0).toUpperCase());
 
   type SyncTone = 'error' | 'paused' | 'idle' | 'ok';
@@ -36,10 +35,10 @@
   href={`/performer/${String(performer.id)}`}
   data-link
   class="group flex min-w-0 flex-col text-center"
-  aria-label={`${performer.name}${newCount > 0 ? `，${String(newCount)} 部新片` : ''}`}
+  aria-label={`${performer.name}${performer.newVideoCount > 0 ? `，${String(performer.newVideoCount)} 部新片` : ''}`}
 >
   <!-- 头像宽度由栅格轨道固定（88/96px），所以左边缘和页面标题对齐；间距只由 gap 决定 -->
-  <div class="relative aspect-square w-full">
+  <div class="aspect-square w-full">
     <div class="h-full w-full overflow-hidden rounded-full bg-panel">
       {#if avatar && !avatarFailed}
         <img
@@ -66,14 +65,6 @@
       {/if}
     </div>
 
-    {#if newCount > 0}
-      <span
-        class="absolute right-[13%] top-[13%] min-w-6 rounded-full bg-hi px-1.5 py-[0.1875rem] text-center text-meta font-medium tabular-nums text-ink"
-        aria-hidden="true"
-      >
-        {newCount > 99 ? '99+' : newCount}
-      </span>
-    {/if}
   </div>
 
   <!-- 名字最多两行（格子只有 96px 宽，单行会被截得只剩半句）；状态行用 mt-auto 贴底，同一行卡片仍对齐 -->

@@ -1,5 +1,6 @@
 <script lang="ts">
   import InfiniteList from '../components/InfiniteList.svelte';
+  import PerformerRail from '../components/PerformerRail.svelte';
   import VideoCard from '../components/VideoCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import { api, messageFor } from '../lib/api';
@@ -173,6 +174,8 @@
     void refreshNewCount();
   });
 </script>
+
+<PerformerRail />
 
 <div class="mb-3 flex items-center gap-2 overflow-x-auto pb-1 lg:mb-5">
   <button
