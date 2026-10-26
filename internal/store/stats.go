@@ -351,6 +351,17 @@ func (s *Store) statsRecent(limit int) ([]RecentVideo, error) {
 	return out, rows.Err()
 }
 
+// LocalVideoCount 返回某位艺人**本地已收录**的影片数。
+// 平台资料页并不给「影片总数」（Pornhub 只给播放量和订阅数），所以艺人页那个「N 部影片」
+// 用的是这个本地数——它是我们在库里确实收着的片子，和下面的影片列表一一对应。
+func (s *Store) LocalVideoCount(performerID int64) (int, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM video_performers WHERE performer_id = ?`, performerID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // PerformerLocalCounts 返回每位艺人本地收录的影片数、已落盘数与体积，键是艺人 id。
 func (s *Store) PerformerLocalCounts() (map[int64]PerformerLocal, error) {
 	out := map[int64]PerformerLocal{}

@@ -98,6 +98,59 @@ func TestParsePerformerPage(t *testing.T) {
 	}
 }
 
+// 真实的中文资料页布局：顶部三块读数是 .infoBox，影片卡片是 li.pcVideoListItem。
+// 早先这里会把卡片里的播放量当成影片总数（库里的 48949 就是这么来的），
+// 而且资料页根本没有「影片总数」，所以 videoCount 必须是 nil。
+func TestParsePerformerPageRealLayout(t *testing.T) {
+	html := `<html><body>
+<div class="infoBoxes">
+  <div class="rankingInfo" data-title="前往查看更多排名信息">
+    <div class="infoBox"><span class="big">269</span><div class="title">模特排名</div></div>
+  </div>
+  <div class="tooltipTrig infoBox videoViews" data-title="视频播放量: 561,906,285">
+    <span class="big">561M</span><div class="title">视频播放量</div>
+  </div>
+  <div class="tooltipTrig infoBox" data-title="订阅者: 1,430,831">
+    <span class="big">1.4M</span><div class="title">订阅者</div>
+  </div>
+</div>
+<div class="infoPiece"><span>身高:</span><span class="smallInfo">167cm</span></div>
+<ul>
+  <li class="pcVideoListItem videoblock" data-video-id="489525165">
+    <span class="duration">11:23</span>
+    <span class="views">489,601 views</span>
+  </li>
+</ul>
+<div class="nameSubscribe"><h1>Mini Diva</h1></div>
+</body></html>`
+	p, err := parsePerformerPage([]byte(html))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.VideoCount != nil {
+		t.Errorf("资料页没有影片总数，videoCount 应为 nil，实际 %d", *p.VideoCount)
+	}
+	if p.SubscriberCount == nil || *p.SubscriberCount != 1430831 {
+		t.Errorf("订阅数应取 data-title 里的完整数字 1430831，实际 %v", p.SubscriberCount)
+	}
+}
+
+// 英文文案 "Subscribers: 1,430,831" 里的 b 不能被当成 billion 倍率。
+func TestParseCountFromLabel(t *testing.T) {
+	cases := map[string]int{
+		"订阅者: 1,430,831":        1430831,
+		"Subscribers: 1,430,831": 1430831,
+		"订阅者：1.4M":              1400000,
+		"1.4M":                   1400000,
+	}
+	for in, want := range cases {
+		got := countValue(in)
+		if got == nil || *got != want {
+			t.Errorf("%q 解析错误: %v（应为 %d）", in, got, want)
+		}
+	}
+}
+
 func TestParseVideoListPage(t *testing.T) {
 	html := `<html><body><ul>
 <li class="pcVideoListItem">

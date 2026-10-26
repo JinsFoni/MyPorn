@@ -40,7 +40,8 @@ type Performer = {
   url: string                // 平台主页
   avatarUrl: string | null   // 经过本地 /api/img 代理后的 URL
   bio: string | null
-  videoCount: number | null      // 平台粉丝量信息（若可获取）
+  videoCount: number | null      // 平台资料页声明的影片总数；Pornhub 资料页**没有**这个数，通常为 null
+  localVideoCount?: number       // 本地已收录的影片数（仅详情接口给；界面上的「N 部影片」用它）
   subscriberCount: number | null
   subscriptionId: number | null  // null = 未订阅
   enabled: boolean
@@ -194,6 +195,9 @@ type Video = {
    `since` 参数保留但当前忽略。
 3. **`Settings.platformProxy`** 为 `{ "pornhub": "http://..." }`，空串表示回退到 `globalProxy`。
 4. **`Performer.videoCount`** 是平台侧影片数量（不是粉丝数）；粉丝数用 `subscriberCount`。
+   注意 **Pornhub 的资料页只有「视频播放量」和「订阅者」，没有影片总数**，所以 `videoCount` 经常是 `null`；
+   艺人页显示的「N 部影片」用 `localVideoCount`（本地收录数，与下面影片列表一致），订阅数用 `subscriberCount`
+   （从 `.infoBox[data-title="订阅者: 1,430,831"]` 里取完整数字）。
 5. **`Performer.backfillProgress`** 为 `{donePages, totalPages}`，百分比由前端计算；`totalPages` 未知时为 0。
 6. 没有批量同步端点：多艺人同步需逐个 `POST /api/subscriptions/{id}/sync`。
 7. 没有 OpenList 连通性测试端点（设置页因此无"测试连接"按钮）。

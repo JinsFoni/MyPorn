@@ -35,7 +35,10 @@ export interface Performer {
   /** 已经过本地 /api/img 代理 */
   avatarUrl: string | null;
   bio: string | null;
+  /** 平台声明的影片总数（Pornhub 资料页其实不给，常为 null） */
   videoCount: number | null;
+  /** 本地已收录的影片数（艺人详情接口才给；「N 部影片」显示的是这个） */
+  localVideoCount?: number;
   subscriberCount: number | null;
   /** null = 未订阅 */
   subscriptionId: number | null;

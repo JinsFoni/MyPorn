@@ -114,6 +114,16 @@ func ldString(m map[string]any, keys ...string) string {
 
 var reNum = regexp.MustCompile(`[\d.,]+`)
 
+// countValue 取「标签: 数字」这种文案里冒号后半段的数字。
+// 不能直接拿整串喂 parseCount：英文 "Subscribers: 1,430,831" 里的 b 会被当成 billion 的倍率。
+func countValue(text string) *int {
+	cut := text
+	if i := strings.LastIndexAny(text, ":："); i >= 0 {
+		cut = strings.TrimSpace(strings.TrimLeft(text[i:], ":： "))
+	}
+	return parseCount(cut)
+}
+
 func parseCount(text string) *int {
 	m := reNum.FindString(strings.ReplaceAll(text, " ", ""))
 	if m == "" {
@@ -261,8 +271,28 @@ func parsePerformerPage(body []byte) (*model.Performer, error) {
 		p.Bio = pickText(doc, ".aboutMeText", "[itemprop=description]")
 	}
 
+	// 头部读数：模特资料页顶部只有三块（模特排名 / 视频播放量 / 订阅者），
+	// 都用 .infoBox 承载，`data-title` 里是完整数字（"订阅者: 1,430,831"），
+	// 比页面显示的 "1.4M" 精确得多。**资料页没有「影片总数」**，所以 video_count 可能一直为空。
+	doc.Find(".infoBox").Each(func(_ int, s *goquery.Selection) {
+		raw, _ := s.Attr("data-title")
+		label := strings.ToLower(raw)
+		if label == "" {
+			label = strings.ToLower(s.Find(".title").First().Text())
+		}
+		if p.SubscriberCount == nil &&
+			(strings.Contains(label, "订阅") || strings.Contains(label, "subscriber")) {
+			p.SubscriberCount = countValue(raw)
+			if p.SubscriberCount == nil {
+				p.SubscriberCount = parseCount(s.Find(".big").First().Text())
+			}
+		}
+	})
+
 	// 计数：从详情区块里按标签文字就近取数。
-	doc.Find(".infoPiece, .info, li").Each(func(_ int, s *goquery.Selection) {
+	// 只认资料区块（.infoPiece / .info）——早先这里还带了 `li`，结果把影片列表卡片
+	// 里的「播放量」当成了影片总数（48949 这种数字就是这么来的）。
+	doc.Find(".infoPiece, .info").Each(func(_ int, s *goquery.Selection) {
 		txt := strings.ToLower(strings.TrimSpace(s.Text()))
 		if len(txt) > 120 {
 			return

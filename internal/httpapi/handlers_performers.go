@@ -90,7 +90,12 @@ func (s *Server) handleGetPerformer(w http.ResponseWriter, r *http.Request) {
 	}
 	s.selfHealAvatar(p)
 	n, _ := s.st.NewVideoCountByPerformer(p.ID)
-	writeJSON(w, http.StatusOK, s.performerDTO(p, n))
+	dto := s.performerDTO(p, n)
+	// 本地收录数：平台资料页没有「影片总数」，艺人页显示的就是这个。
+	if local, err := s.st.LocalVideoCount(p.ID); err == nil {
+		dto["localVideoCount"] = local
+	}
+	writeJSON(w, http.StatusOK, dto)
 }
 
 type resolveReq struct {

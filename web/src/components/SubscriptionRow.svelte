@@ -2,6 +2,7 @@
   import PlatformIcon from './PlatformIcon.svelte';
   import { formatCount, formatBytes, relativeFuture, relativeTime } from '../lib/format';
   import { imageUrl } from '../lib/img';
+  import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
   import type { ManageSubscription } from '../lib/types';
 
@@ -45,6 +46,14 @@
   const avatar = $derived(imageUrl(item.avatarUrl, 96));
   // 回填还没结束时显示页数进度（历史影片是一页页往前翻的）
   const backfill = $derived(item.backfillProgress);
+
+  /** 正在跑同步时，这一行就地显示进度条（艺人页已经不放同步信息了，进度统一看这里） */
+  const sync = $derived(live.syncState(item.id));
+  const percent = $derived(
+    sync && sync.totalPages && sync.totalPages > 0
+      ? Math.min(100, Math.round((sync.page / sync.totalPages) * 100))
+      : null,
+  );
 </script>
 
 <li class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
@@ -93,7 +102,26 @@
   </a>
 
   <div class="min-w-0 flex-1 text-meta text-dim sm:flex-none sm:basis-44">
-    {#if backfill}
+    {#if sync}
+      <p class="flex items-baseline justify-between gap-2">
+        <span class="min-w-0 truncate text-fg/85">
+          {sync.phase === 'backfill' ? '回填历史' : '增量同步'}{#if sync.totalPages} · 第 {sync.page}/{sync.totalPages} 页{/if}
+        </span>
+        {#if percent !== null}
+          <span class="shrink-0 tabular-nums">{percent}%</span>
+        {/if}
+      </p>
+      <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-raise">
+        {#if percent !== null}
+          <div class="h-full rounded-full bg-hi transition-[width] duration-500" style="width: {percent}%"></div>
+        {:else}
+          <div class="h-full w-1/3 animate-pulse rounded-full bg-hi/70"></div>
+        {/if}
+      </div>
+      {#if sync.videosFound > 0}
+        <p class="mt-1 tabular-nums">已入库 {formatCount(sync.videosFound)} 部</p>
+      {/if}
+    {:else if backfill}
       <p class="tabular-nums">
         回填历史 {backfill.donePages}{#if backfill.totalPages}/{backfill.totalPages}{/if} 页
       </p>
@@ -102,7 +130,9 @@
     {:else}
       <p>还没同步过</p>
     {/if}
-    {#if item.enabled && item.nextSyncAt}
+    {#if sync}
+      <!-- 正在同步时不再报「下次同步」：这一格里已经全是进度，多一行只会让行变高 -->
+    {:else if item.enabled && item.nextSyncAt}
       <p class="tabular-nums">下次 {relativeFuture(item.nextSyncAt)}</p>
     {:else if !item.enabled}
       <p>已停用，不参与定时同步</p>

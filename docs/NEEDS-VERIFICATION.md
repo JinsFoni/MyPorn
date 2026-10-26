@@ -26,7 +26,8 @@ make backend           # 先编译
 | 名称 | JSON-LD `Person.name` → `.nameSubscribe h1` → `h1` | 若 JSON-LD 无 `Person`，需改选择器 |
 | 头像 | JSON-LD `Person.image` → `.avatarWrapper img[data-src]` → `img[src*='/av/']` | 注意懒加载属性可能是 `data-src` / `data-image` |
 | 简介 | JSON-LD `description` → `.aboutMeText` | — |
-| 视频数 / 订阅数 | 遍历 `.infoPiece`、`.info`、`li`，按含 "video"/"视频"、"subscriber"/"订阅" 的文本就近取数 | **最易失效**：确认标签文案（中文站可能是「视频」「订阅者」） |
+| 订阅数 | `.infoBox` 的 `data-title`（"订阅者: 1,430,831"）里冒号后的数字，取不到时退到 `.big` 文本（"1.4M"） | 2026-10 已核对：头部三块读数是「模特排名 / 视频播放量 / 订阅者」，`data-title` 里的完整数字比 `1.4M` 精确 |
+| 视频数 | 遍历 `.infoPiece` / `.info`（**不再含 `li`**），按含 "video"/"视频" 的文本就近取数 | 2026-10 核对结论：**资料页没有「影片总数」**，只有播放量，所以这个字段常为 `NULL`；早先带上 `li` 会把影片卡片里的播放量当成总数（库里 48949 这种数字就是这么来的）。界面上的「N 部影片」用的是本地收录数 `localVideoCount` |
 
 ### 2. 影片列表 `GET /model/{slug}/videos?page=N`
 

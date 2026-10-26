@@ -6,7 +6,7 @@
   import Skeleton from '../components/Skeleton.svelte';
   import { ApiError, api, messageFor } from '../lib/api';
   import { imageUrl } from '../lib/img';
-  import { formatCount, relativeFuture, relativeTime } from '../lib/format';
+  import { formatCount } from '../lib/format';
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
     import type { Performer, Video } from '../lib/types';
@@ -26,8 +26,9 @@
     url: 'https://example.invalid/model/mini-diva',
     avatarUrl: null,
     bio: '示例数据：后端未连接。',
-    videoCount: 412,
-    subscriberCount: 45600,
+    videoCount: null,
+    localVideoCount: 42,
+    subscriberCount: 1430831,
     subscriptionId: 11,
     enabled: true,
     backfillDone: false,
@@ -77,13 +78,6 @@
     },
   ];
 
-  interface ProgressView {
-    done: number;
-    total: number | null;
-    found: number | null;
-    phase: 'backfill' | 'incremental';
-  }
-
   const performerId = $derived(Number.parseInt(id, 10));
 
   let performer = $state<Performer | null>(null);
@@ -94,28 +88,6 @@
   let lastBump = 0;
 
   const avatar = $derived(performer ? imageUrl(performer.avatarUrl, 240) : null);
-
-  const progress = $derived.by((): ProgressView | null => {
-    const p = performer;
-    if (!p) return null;
-    const s = live.syncState(p.id);
-    if (s) return { done: s.page, total: s.totalPages, found: s.videosFound, phase: s.phase };
-    // 回填已经完成就不要再显示「正在回填历史影片」；后端也可能给出空进度对象。
-    if (!p.backfillDone) {
-      const bp = p.backfillProgress;
-      if (bp && (bp.donePages > 0 || (bp.totalPages ?? 0) > 0)) {
-        return { done: bp.donePages, total: bp.totalPages ?? null, found: null, phase: 'backfill' };
-      }
-      return { done: 0, total: null, found: null, phase: 'backfill' };
-    }
-    return null;
-  });
-
-  const percent = $derived(
-    progress && progress.total && progress.total > 0
-      ? Math.min(100, Math.round((progress.done / progress.total) * 100))
-      : null,
-  );
 
   async function loadPerformer(): Promise<void> {
     error = '';
@@ -214,58 +186,25 @@
             label={platformLabel(performer.platform)}
             href={performer.url}
           />
-          {#if !performer.enabled}
-            <span class="chip">已暂停</span>
-          {/if}
-          {#if performer.lastError}
-            <span class="chip text-brick" title={performer.lastError}>同步出错</span>
-          {/if}
         </div>
 
         {#if performer.bio}
           <p class="mt-1.5 line-clamp-2 max-w-2xl text-ui text-muted">{performer.bio}</p>
         {/if}
 
-        <!-- 一行元信息，用中点分隔（beeg 的艺人页也是这么写的：数字直接跟着图标/词走） -->
+        <!-- 一行元信息，用中点分隔（beeg 的艺人页也是这么写的：数字直接跟着图标/词走）。
+             本页不再显示任何同步信息（未看数、上次/下次同步、已暂停、同步出错、进度条），
+             那些都在「管理 → 关注管理」里看：这儿只回答「这是谁、有多少片子」。 -->
         <p class="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">
-          <span class="tabular-nums">{formatCount(performer.videoCount)}部影片</span>
+          <span class="tabular-nums">{formatCount(performer.localVideoCount ?? performer.videoCount ?? 0)}部影片</span>
           {#if performer.subscriberCount !== null}
             <span aria-hidden="true">·</span>
-            <span class="tabular-nums">{formatCount(performer.subscriberCount)}粉丝</span>
+            <span class="tabular-nums">{formatCount(performer.subscriberCount)}订阅</span>
           {/if}
-          {#if performer.newVideoCount > 0}
-            <span aria-hidden="true">·</span>
-            <span class="tabular-nums text-fg">{performer.newVideoCount}部未看</span>
-          {/if}
-          <span aria-hidden="true">·</span>
-          <span title={performer.lastSyncAt ?? ''}>{relativeTime(performer.lastSyncAt)}同步</span>
-          <span aria-hidden="true">·</span>
-          <span>{performer.enabled ? `下次同步 ${relativeFuture(performer.nextSyncAt)}` : '已暂停同步'}</span>
         </p>
       </div>
     </div>
 
-    {#if progress}
-      <div class="panel mt-4 px-3.5 py-3" role="status" aria-live="polite">
-        <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-meta">
-          <span class="text-fg/85">
-            {progress.phase === 'backfill' ? '正在回填历史影片' : '正在增量同步'}
-            {#if progress.total}· 第 {progress.done}/{progress.total} 页{/if}
-            {#if progress.found !== null}· 已入库 {progress.found} 部{/if}
-          </span>
-          {#if percent !== null}
-            <span class="tabular-nums text-dim">{percent}%</span>
-          {/if}
-        </div>
-        <div class="mt-2 h-1 overflow-hidden rounded-full bg-raise">
-          {#if percent !== null}
-            <div class="h-full rounded-full bg-hi transition-[width] duration-500" style="width: {percent}%"></div>
-          {:else}
-            <div class="h-full w-1/3 animate-pulse rounded-full bg-hi/70"></div>
-          {/if}
-        </div>
-      </div>
-    {/if}
   </section>
 
   <section class="mt-6">
