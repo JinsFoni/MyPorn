@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
   import DownloadDialog from '../components/DownloadDialog.svelte';
   import VideoCard from '../components/VideoCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import Skeleton from '../components/Skeleton.svelte';
+  import VideoPlayer from '../components/VideoPlayer.svelte';
   import { api, messageFor } from '../lib/api';
   import { formatBandwidth, formatCount, formatDate, formatDuration, relativeTime } from '../lib/format';
   import { imageUrl } from '../lib/img';
@@ -11,14 +11,12 @@
   import { platformLabel } from '../lib/platform';
   import {
     codecTag,
-    levelIndexForHeight,
-    loadHls,
+    needsHlsEngine,
     pickVariant,
     rememberHeight,
     rememberedHeight,
     sortVariantsDesc,
-    supportsNativeHls,
-    toggleFullscreen,
+    sourceTypeFor,
     variantLabel,
   } from '../lib/player';
   import { navigate } from '../lib/router.svelte';
@@ -29,8 +27,6 @@
   }
 
   let { id }: Props = $props();
-
-  type HlsInstance = import('hls.js').default;
 
   /** 仅 DEV：后端未就绪时的示例数据（不请求任何外部地址） */
   const MOCK_VIDEO: VideoDetail = {
@@ -65,23 +61,28 @@
   let proxyAvailable = $state(false);
   let usingProxy = $state(false);
   let selectedVariantId = $state<string | null>(null);
-  let activeHeight = $state<number | null>(null);
-  let levelHeights = $state<number[]>([]);
   let mockNote = $state('');
   let downloadOpen = $state(false);
+  /** 「重新解析」时 +1，用来重建播放器（地址没变也要重新挂） */
+  let attempt = $state(0);
   /** 标签默认只露这么多，剩下的折在「+N」里 */
   const TAG_PREVIEW = 8;
   let tagsExpanded = $state(false);
-
-  let videoEl = $state<HTMLVideoElement | null>(null);
-  let playerWrap = $state<HTMLDivElement | null>(null);
-  let hls: HlsInstance | null = null;
   let seenSent = false;
-  let suppressMediaError = false;
 
   const variants = $derived(playback ? sortVariantsDesc(playback.variants) : []);
   const selectedVariant = $derived(variants.find((v) => v.id === selectedVariantId) ?? null);
   const poster = $derived(video ? imageUrl(video.thumbUrl, 1280) : null);
+  /** 这批片源里只要有一条 HLS，就整个用 hls.js 引擎（它也能放 mp4） */
+  const engine = $derived(needsHlsEngine(playback?.variants ?? []) ? 'hls' : 'native');
+  const source = $derived.by((): { src: string; type: string } | null => {
+    const info = playback;
+    const variant = selectedVariant;
+    if (!info || !variant) return null;
+    const isHls = usingProxy ? true : variant.hls;
+    const src = usingProxy && info.proxyPlaybackUrl ? info.proxyPlaybackUrl : variant.url;
+    return { src, type: sourceTypeFor(isHls) };
+  });
 
   async function loadVideo(): Promise<void> {
     loadingVideo = true;
@@ -107,6 +108,8 @@
     playError = '';
     try {
       const info = await api.playback(videoId);
+      // HLS 引擎是单独一个 chunk（含 hls.js）：只有真要放 HLS 时才下载
+      if (needsHlsEngine(info.variants)) await import('@videojs/html/media/hlsjs-video');
       playback = info;
       // 标签只在详情页里有：解析播放地址时一起带回来，别让用户看到空标签或刷新才出现。
       if (info.tags?.length && video && video.tags.length === 0) {
@@ -114,7 +117,6 @@
       }
       const preferred = pickVariant(info, rememberedHeight());
       selectedVariantId = preferred?.id ?? info.defaultVariantId;
-      activeHeight = preferred?.height ?? null;
       proxyAvailable = info.proxyPlaybackUrl !== null;
     } catch (err) {
       playError = messageFor(err);
@@ -123,98 +125,19 @@
     }
   }
 
-  function destroyPlayer(): void {
-    suppressMediaError = true;
-    if (hls) {
-      hls.destroy();
-      hls = null;
-    }
-    levelHeights = [];
-    const el = videoEl;
-    if (el) {
-      el.pause();
-      el.removeAttribute('src');
-      el.load();
-    }
-    window.setTimeout(() => {
-      suppressMediaError = false;
-    }, 0);
-  }
-
-  function handleFatal(detail?: string): void {
-    destroyPlayer();
+  function onFailed(detail: string): void {
     if (playback?.proxyPlaybackUrl && !usingProxy) {
       proxyAvailable = true;
       playError = '直链播放失败，通常是 Referer/UA 或跨域限制。可以试试代理播放。';
       return;
     }
-    playError = detail ? `播放失败（${detail}）` : '播放失败，请重试。';
+    playError = detail === '' ? '播放失败，请重试。' : `播放失败（${detail}）`;
   }
 
-  function onMediaError(): void {
-    if (suppressMediaError) return;
-    handleFatal();
-  }
-
-  async function attachSource(): Promise<void> {
-    const el = videoEl;
-    const info = playback;
-    const variantId = untrack(() => selectedVariantId);
-    if (!el || !info || variantId === null) return;
-    const variant = info.variants.find((v) => v.id === variantId) ?? pickVariant(info, null);
-    if (!variant) {
-      playError = '没有可用的播放地址';
-      return;
-    }
-    destroyPlayer();
+  function retryPlayback(): void {
     playError = '';
-    activeHeight = variant.height;
-    // 播放地址已由后端同源代理（/api/stream），这里只需区分清单与直链：
-    // 直链 mp4 交给原生 video，交给 hls.js 反而会报“不是清单”。
-    const src = usingProxy && info.proxyPlaybackUrl ? info.proxyPlaybackUrl : variant.url;
-    const isPlaylist = usingProxy ? true : variant.hls;
-
-    if (!isPlaylist) {
-      el.src = src;
-      void el.play().catch(() => {
-        /* 自动播放被拦截，用户点一下即可 */
-      });
-      return;
-    }
-
-    if (supportsNativeHls(el)) {
-      el.src = src;
-      void el.play().catch(() => {
-        /* 自动播放被拦截，用户点一下即可 */
-      });
-      return;
-    }
-
-    const Hls = await loadHls();
-    if (!Hls.isSupported()) {
-      el.src = src;
-      return;
-    }
-
-    const instance = new Hls({ enableWorker: true, maxBufferLength: 30, backBufferLength: 30 });
-    hls = instance;
-    instance.on(Hls.Events.MANIFEST_PARSED, () => {
-      levelHeights = instance.levels.map((level) => level.height);
-      const index = levelIndexForHeight(instance.levels, variant.height);
-      if (index >= 0) instance.currentLevel = index;
-      void el.play().catch(() => {
-        /* 同上 */
-      });
-    });
-    instance.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
-      const level = instance.levels[data.level];
-      if (level) activeHeight = level.height;
-    });
-    instance.on(Hls.Events.ERROR, (_event, data) => {
-      if (data.fatal) handleFatal(typeof data.details === 'string' ? data.details : undefined);
-    });
-    instance.loadSource(src);
-    instance.attachMedia(el);
+    attempt += 1;
+    void loadPlayback();
   }
 
   function onQualityChange(event: Event): void {
@@ -224,32 +147,22 @@
   }
 
   function applyVariant(variantId: string): void {
-    const info = playback;
-    if (!info) return;
-    const variant = info.variants.find((v) => v.id === variantId);
+    const variant = playback?.variants.find((v) => v.id === variantId);
     if (!variant) return;
+    playError = '';
     selectedVariantId = variantId;
     rememberHeight(variant.height);
-    const instance = hls;
-    if (instance && !usingProxy) {
-      const index = levelIndexForHeight(instance.levels, variant.height);
-      if (index >= 0) {
-        instance.currentLevel = index;
-        activeHeight = variant.height;
-        return;
-      }
-    }
-    void attachSource();
   }
 
   function switchToProxy(): void {
     if (!playback?.proxyPlaybackUrl) return;
     usingProxy = true;
     proxyAvailable = false;
+    playError = '';
     live.toast('已切换到代理播放', 'info');
   }
 
-  function onPlaying(): void {
+  function onStarted(): void {
     if (seenSent) return;
     seenSent = true;
     void api
@@ -260,42 +173,6 @@
       .catch(() => {
         /* 上报失败不影响播放 */
       });
-  }
-
-  function onKeydown(event: KeyboardEvent): void {
-    const target = event.target;
-    if (target instanceof HTMLElement) {
-      const tag = target.tagName;
-      if (
-        tag === 'INPUT' ||
-        tag === 'TEXTAREA' ||
-        tag === 'SELECT' ||
-        tag === 'BUTTON' ||
-        tag === 'A' ||
-        target.isContentEditable
-      ) {
-        return;
-      }
-    }
-    const el = videoEl;
-    if (!el) return;
-    if (event.key === ' ') {
-      event.preventDefault();
-      if (el.paused) void el.play().catch(() => {});
-      else el.pause();
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault();
-      el.currentTime = Math.max(0, el.currentTime - 5);
-    } else if (event.key === 'ArrowRight') {
-      event.preventDefault();
-      el.currentTime = Math.min(el.duration > 0 ? el.duration : el.currentTime + 5, el.currentTime + 5);
-    } else if (event.key === 'f' || event.key === 'F') {
-      const wrap = playerWrap;
-      if (wrap) {
-        event.preventDefault();
-        void toggleFullscreen(wrap);
-      }
-    }
   }
 
   const specs = $derived.by((): { label: string; value: string }[] => {
@@ -321,22 +198,15 @@
     void loadPlayback();
   });
 
-  // 片源变化（playback / 代理开关 / DOM 挂载）才重新挂；单纯切档位走 applyVariant
+  // 先把封面塞进浏览器缓存：播放器挂载时会立刻要这张图，否则会闪一下它自带的占位插画
   $effect(() => {
-    const info = playback;
-    const el = videoEl;
-    if (!info || !el) return;
-    void attachSource();
+    const url = poster;
+    if (!url) return;
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = url;
   });
-
-  $effect(
-    () => () => {
-      destroyPlayer();
-    },
-  );
 </script>
-
-<svelte:window onkeydown={onKeydown} />
 
 {#if pageError}
   <EmptyState title="打不开这个影片" hint={pageError} icon="error">
@@ -359,20 +229,24 @@
       </p>
     {/if}
 
-    <div class="relative overflow-hidden rounded-xl bg-black" bind:this={playerWrap}>
-      <video
-        bind:this={videoEl}
-        class="block aspect-video w-full bg-black"
-        controls
-        playsinline
-        preload="metadata"
-        poster={poster ?? undefined}
-        aria-label={video.title}
-        onplaying={onPlaying}
-        onerror={onMediaError}
-      ></video>
+    <div class="relative overflow-hidden rounded-xl bg-black">
+      {#if source}
+        {#key attempt}
+          <VideoPlayer
+            src={source.src}
+            type={source.type}
+            engine={engine}
+            poster={poster}
+            title={video.title}
+            onStarted={onStarted}
+            onFailed={onFailed}
+          />
+        {/key}
+      {:else}
+        <div class="aspect-video w-full"></div>
+      {/if}
 
-      {#if loadingPlayback}
+      {#if loadingPlayback && !playError}
         <div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/50">
           <p class="text-ui text-muted">正在解析播放地址…</p>
         </div>
@@ -382,14 +256,12 @@
         <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center">
           <p class="max-w-md text-ui text-fg/90">{playError}</p>
           <div class="flex flex-wrap items-center justify-center gap-2">
-            <button type="button" class="btn" onclick={() => void loadPlayback()}>重新解析</button>
-            {#if proxyAvailable || usingProxy}
-              {#if !usingProxy}
-                <button type="button" class="btn btn-primary" onclick={switchToProxy}>用代理播放</button>
-              {/if}
+            <button type="button" class="btn" onclick={retryPlayback}>重新解析</button>
+            {#if proxyAvailable && !usingProxy}
+              <button type="button" class="btn btn-primary" onclick={switchToProxy}>用代理播放</button>
             {/if}
           </div>
-          <p class="text-meta text-dim">空格 暂停 · ← → 快退快进 5 秒 · F 全屏</p>
+          <p class="text-meta text-dim">空格 暂停 · ← → 快退快进 10 秒 · F 全屏 · M 静音</p>
         </div>
       {/if}
     </div>
@@ -475,11 +347,6 @@
               </option>
             {/each}
           </select>
-          {#if levelHeights.length > 1}
-            <p class="mt-1.5 text-meta text-dim">
-              当前播放 {activeHeight !== null ? `${String(activeHeight)}p` : '—'}
-            </p>
-          {/if}
         </div>
 
         <dl class="mt-4 divide-y divide-line">
@@ -519,7 +386,7 @@
         </a>
 
         <p class="mt-4 text-meta leading-relaxed text-dim">
-          空格 暂停 · ← → 快退快进 5 秒 · F 全屏
+          播放器快捷键：空格/K 播放暂停 · ← → 快退快进 10 秒 · ↑ ↓ 音量 · M 静音 · F 全屏；画面单击暂停，双击左右两侧快退快进、双击中间全屏。
         </p>
       </aside>
     </div>

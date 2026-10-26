@@ -14,9 +14,12 @@ importers:
       '@fontsource/saira-extra-condensed':
         specifier: ^5.3.0
         version: 5.3.0
-      hls.js:
-        specifier: ^1.7.3
-        version: 1.7.3
+      '@videojs/hlsjs-video':
+        specifier: 10.2.0
+        version: 10.2.0
+      '@videojs/html':
+        specifier: 10.2.0
+        version: 10.2.0(@videojs/hlsjs-video@10.2.0)(react@19.3.1)
       svelte:
         specifier: ^5.57.2
         version: 5.57.2
@@ -584,6 +587,15 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
+  '@lit-labs/ssr-dom-shim@1.6.0':
+    resolution: {integrity: sha512-VHb0ALPMTlgKjM6yIxxoQNnpKyUKLD04VzeQdsiXkMqkvYlAHxq9glGLmgbb889/1GsohSOAjvQYoiBppXFqrQ==}
+
+  '@lit/context@1.1.6':
+    resolution: {integrity: sha512-M26qDE6UkQbZA2mQ3RjJ3Gzd8TxP+/0obMgE5HfkfLhEEyYE3Bui4A5XHiGPjy0MUGAyxB3QgVuw2ciS0kHn6A==}
+
+  '@lit/reactive-element@2.1.2':
+    resolution: {integrity: sha512-pbCDiVMnne1lYUIaYNN5wrwQXDtHaYtg7YEFPeW+hws6U47WeFvISGUWekPGKWOP1ygrs0ef0o1VJMk1exos5A==}
+
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
     engines: {node: ^22.20 || ^24.12 || >=25}
@@ -1003,6 +1015,88 @@ packages:
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
 
+  '@videojs/core@10.2.0':
+    resolution: {integrity: sha512-xYF4aWKq4Us0SzxwAZmpbeONgTSogH3gF0yfDlZEusaPrpx1rsXwAELas1PjcwzUC+jwMAQ54C6q3RAZ/xbHwA==}
+
+  '@videojs/element@10.2.0':
+    resolution: {integrity: sha512-eGsRhK7nxUkPbjrXGHZDlNJsVTovJCzg6w1+B3aOOWOpfxvLSEUwR8KJ+VPtzqAcbS3lZ5LQjxFyomv1dirh+Q==}
+
+  '@videojs/hlsjs-video@10.2.0':
+    resolution: {integrity: sha512-sNr7B7erfveBVlQj2GKZerOImjotubqHkj04ji6SlH3hKuOfi1qp/aYwMoAj8zrtI3flUZB9Ya0Ft2qk09V+Nw==}
+
+  '@videojs/html@10.2.0':
+    resolution: {integrity: sha512-Bas9JqHlbiLx9oLhLvCWJr+UoUQ9Xb/Z156O7d/DQ8ujxuV8I7f6vWgkcLOjUjp78rBZjPIy/O+wMPBNbIJpSw==}
+    peerDependencies:
+      '@videojs/cloudflare-video': 10.2.0
+      '@videojs/dash-video': 10.2.0
+      '@videojs/google-cast': 10.2.0
+      '@videojs/hlsjs-video': 10.2.0
+      '@videojs/mux-audio': 10.2.0
+      '@videojs/mux-data': 10.2.0
+      '@videojs/mux-video': 10.2.0
+      '@videojs/playerjs-video': 10.2.0
+      '@videojs/shaka-video': 10.2.0
+      '@videojs/spotify-audio': 10.2.0
+      '@videojs/tiktok-video': 10.2.0
+      '@videojs/twitch-video': 10.2.0
+      '@videojs/vimeo-video': 10.2.0
+      '@videojs/wistia-video': 10.2.0
+      '@videojs/youtube-video': 10.2.0
+    peerDependenciesMeta:
+      '@videojs/cloudflare-video':
+        optional: true
+      '@videojs/dash-video':
+        optional: true
+      '@videojs/google-cast':
+        optional: true
+      '@videojs/hlsjs-video':
+        optional: true
+      '@videojs/mux-audio':
+        optional: true
+      '@videojs/mux-data':
+        optional: true
+      '@videojs/mux-video':
+        optional: true
+      '@videojs/playerjs-video':
+        optional: true
+      '@videojs/shaka-video':
+        optional: true
+      '@videojs/spotify-audio':
+        optional: true
+      '@videojs/tiktok-video':
+        optional: true
+      '@videojs/twitch-video':
+        optional: true
+      '@videojs/vimeo-video':
+        optional: true
+      '@videojs/wistia-video':
+        optional: true
+      '@videojs/youtube-video':
+        optional: true
+
+  '@videojs/media@10.2.0':
+    resolution: {integrity: sha512-bdlq1nav3xeuWsmxN1eWEdJcbS1QxHoMZq2+4DJ19yWAGSheXDt52xDNTgNhoKY0FoJFTdNEsv/4qxR/eW+IjA==}
+
+  '@videojs/native-hls-video@10.2.0':
+    resolution: {integrity: sha512-+0ISYTxbPtXc530CvTqCkoKrOPzxpAqvdgw79cRTOAG/7sR4xgQqt341O+P0HesH5kYeMwkLfWcSM964FAcMTw==}
+
+  '@videojs/spf@10.2.0':
+    resolution: {integrity: sha512-ovoHDqR5td0nfeZeCu2GWbdb3SVqP9udEAZr/4/VNUKYKstOg21rlGYS/We/our17kkxcp6Dvg7H98xLzn83pQ==}
+
+  '@videojs/store@10.2.0':
+    resolution: {integrity: sha512-rKV2tCigF1ifVFk1n+svGMpWLdEsBl3LHYbD9hrHQZtSI2SAwgwvD5W5vA0hcc0W3f9cblsrS0zgT/JxQlKfrw==}
+    peerDependencies:
+      '@videojs/element': 10.2.0
+      react: ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@videojs/element':
+        optional: true
+      react:
+        optional: true
+
+  '@videojs/utils@10.2.0':
+    resolution: {integrity: sha512-+uV+rg5Dtq0OpPT3OQsybA+grWyDaluFIQ6f5X8Jqb98gy0momQBo7yPA92TlVL7eiUrPpYb4eX0xeTXLKL73Q==}
+
   acorn@8.19.0:
     resolution: {integrity: sha512-oJlA3XiRm7Cyk6qFD2Jn8ak9B7jSy0qy00ADO3+8dpT0LSjFihQYv4C02LFCSYJV3Q37xYwwRy5m+IpIiUzqWw==}
     engines: {node: '>=0.4.0'}
@@ -1350,8 +1444,8 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
-  hls.js@1.7.3:
-    resolution: {integrity: sha512-MsPlx6yVW4Qv4C7mEVou4/gk/5cN2dVxOTnrNjPSmyH2f0Ln+/UkG10Ax1PE6OvrmTVPKgQYozTtBaPOuCzq7A==}
+  hls.js@1.6.19:
+    resolution: {integrity: sha512-A//aZeaAgM5rgUCbTURD4gkfyw5Uag2/4Jky7CfDOukL/DN+P5DjbgK2BYteyP3/KnCkPfkGVkbLxQG2T0AbUQ==}
 
   idb@7.1.1:
     resolution: {integrity: sha512-gchesWBzyvGHRO9W8tzUWFDycow5gwjvFKfyV9FF32Y7F50yZMp7mP+T2mJIWFx49zicqyC4uefHM17o6xKIVQ==}
@@ -1772,6 +1866,15 @@ packages:
     resolution: {integrity: sha512-mQUvGU6aUFQ+rNvTIAcZuWGRT9a6f6Yrg9bHs4ImKF+HZCEK+plBvnAZYSIQztknZF2qnzNtr6F8s0+IuptdlQ==}
     engines: {node: ^14.13.1 || >=16.0.0}
 
+  react-compiler-runtime@1.0.0:
+    resolution: {integrity: sha512-rRfjYv66HlG8896yPUDONgKzG5BxZD1nV9U6rkm+7VCuvQc903C4MjcoZR4zPw53IKSOX9wMQVpA1IAbRtzQ7w==}
+    peerDependencies:
+      react: ^17.0.0 || ^18.0.0 || ^19.0.0 || ^0.0.0-experimental
+
+  react@19.3.1:
+    resolution: {integrity: sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw==}
+    engines: {node: '>=0.10.0'}
+
   readdirp@4.1.2:
     resolution: {integrity: sha512-GDhwkLfywWL2s6vEjyhri+eXmfH6j1L7JE27WhqLeYzoh/A3DBaYGEj2H/HFZCn/kMfim73FXxEJTw06WtxQwg==}
     engines: {node: '>= 14.18.0'}
@@ -1884,6 +1987,9 @@ packages:
   signal-exit@4.1.0:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
     engines: {node: '>=14'}
+
+  signal-polyfill@0.2.2:
+    resolution: {integrity: sha512-p63Y4Er5/eMQ9RHg0M0Y64NlsQKpiu6MDdhBXpyywRuWiPywhJTpKJ1iB5K2hJEbFZ0BnDS7ZkJ+0AfTuL37Rg==}
 
   smob@1.6.2:
     resolution: {integrity: sha512-RQsvleCbF8cVHEv+xuDGaA4pOizFqJ0GgjtMSRo6oP8pnN7WsigHgVGey6aILRBKv4W2YOMHLqbKdnB6hpB9fw==}
@@ -2034,6 +2140,9 @@ packages:
     hasBin: true
     peerDependencies:
       browserslist: '>= 4.21.0'
+
+  video.js@10.2.0:
+    resolution: {integrity: sha512-YoezDYXY6iDkuhLGnyOz96XBKjwB0cQbPNq5ck1FAf2JcqfLnnwkNQ4ofbwhlpAM55RFp6VDhSvKe5wVcFV11Q==}
 
   vite-plugin-pwa@2.0.0:
     resolution: {integrity: sha512-6G9dsPKT9QKYpeTuTLJM28zZL3HsXUTUM/QUZBEgQk2jbfrPJDq2i8gTewAKqi1c9Mt6MiidrL4SFI+HthiQMg==}
@@ -2875,6 +2984,16 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
 
+  '@lit-labs/ssr-dom-shim@1.6.0': {}
+
+  '@lit/context@1.1.6':
+    dependencies:
+      '@lit/reactive-element': 2.1.2
+
+  '@lit/reactive-element@2.1.2':
+    dependencies:
+      '@lit-labs/ssr-dom-shim': 1.6.0
+
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
 
@@ -3140,6 +3259,68 @@ snapshots:
   '@types/resolve@1.20.2': {}
 
   '@types/trusted-types@2.0.7': {}
+
+  '@videojs/core@10.2.0(@videojs/element@10.2.0)(react@19.3.1)':
+    dependencies:
+      '@videojs/media': 10.2.0
+      '@videojs/store': 10.2.0(@videojs/element@10.2.0)(react@19.3.1)
+      '@videojs/utils': 10.2.0
+      video.js: 10.2.0
+    transitivePeerDependencies:
+      - '@videojs/element'
+      - react
+
+  '@videojs/element@10.2.0':
+    dependencies:
+      '@lit/context': 1.1.6
+
+  '@videojs/hlsjs-video@10.2.0':
+    dependencies:
+      '@videojs/media': 10.2.0
+      '@videojs/native-hls-video': 10.2.0
+      '@videojs/spf': 10.2.0
+      '@videojs/utils': 10.2.0
+      hls.js: 1.6.19
+
+  '@videojs/html@10.2.0(@videojs/hlsjs-video@10.2.0)(react@19.3.1)':
+    dependencies:
+      '@videojs/core': 10.2.0(@videojs/element@10.2.0)(react@19.3.1)
+      '@videojs/element': 10.2.0
+      '@videojs/media': 10.2.0
+      '@videojs/native-hls-video': 10.2.0
+      '@videojs/spf': 10.2.0
+      '@videojs/store': 10.2.0(@videojs/element@10.2.0)(react@19.3.1)
+      '@videojs/utils': 10.2.0
+    optionalDependencies:
+      '@videojs/hlsjs-video': 10.2.0
+    transitivePeerDependencies:
+      - react
+
+  '@videojs/media@10.2.0':
+    dependencies:
+      '@videojs/utils': 10.2.0
+
+  '@videojs/native-hls-video@10.2.0':
+    dependencies:
+      '@videojs/media': 10.2.0
+      '@videojs/spf': 10.2.0
+      '@videojs/utils': 10.2.0
+
+  '@videojs/spf@10.2.0':
+    dependencies:
+      '@videojs/media': 10.2.0
+      '@videojs/utils': 10.2.0
+      signal-polyfill: 0.2.2
+
+  '@videojs/store@10.2.0(@videojs/element@10.2.0)(react@19.3.1)':
+    dependencies:
+      '@videojs/utils': 10.2.0
+      react-compiler-runtime: 1.0.0(react@19.3.1)
+    optionalDependencies:
+      '@videojs/element': 10.2.0
+      react: 19.3.1
+
+  '@videojs/utils@10.2.0': {}
 
   acorn@8.19.0: {}
 
@@ -3546,7 +3727,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hls.js@1.7.3: {}
+  hls.js@1.6.19: {}
 
   idb@7.1.1: {}
 
@@ -3891,6 +4072,12 @@ snapshots:
 
   pretty-bytes@6.1.1: {}
 
+  react-compiler-runtime@1.0.0(react@19.3.1):
+    dependencies:
+      react: 19.3.1
+
+  react@19.3.1: {}
+
   readdirp@4.1.2: {}
 
   reflect.getprototypeof@1.0.10:
@@ -4080,6 +4267,8 @@ snapshots:
       side-channel-weakmap: 1.0.2
 
   signal-exit@4.1.0: {}
+
+  signal-polyfill@0.2.2: {}
 
   smob@1.6.2: {}
 
@@ -4274,6 +4463,8 @@ snapshots:
       browserslist: 4.29.4
       escalade: 3.2.0
       picocolors: 1.1.1
+
+  video.js@10.2.0: {}
 
   vite-plugin-pwa@2.0.0(vite@8.3.5(jiti@2.7.0)(terser@5.51.2))(workbox-build@7.4.1)(workbox-window@7.4.1):
     dependencies:

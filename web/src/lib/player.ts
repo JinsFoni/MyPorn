@@ -1,20 +1,13 @@
 /**
- * 播放器辅助逻辑（hls.js 只在这里动态 import，不进首屏包）。
+ * 播放器辅助逻辑：画质/编码策略 + 片源种类判定。
+ * 播放器本体是 Video.js 10（`<video-player>` + `<video-skin>`，见 components/VideoPlayer.svelte），
+ * 清晰度仍然由后端返回的变体列表驱动（每个变体一条独立清单/直链），所以这里保留的是「选哪条」的规则。
+ *
  * 画质策略见 REQUIREMENTS FR-16：默认最高（含 4K，不设上限），手动切档并记忆。
  * 编码策略：分辨率优先，同分辨率内 AV1 > HEVC > VP9 > H.264（与后端 model.SortVariantsDesc 同口径）；
  * 浏览器解不了的编码排到最后，绝不让「优先 AV1」变成黑屏。
  */
 import type { PlaybackInfo, PlaybackVariant } from './types';
-
-type HlsCtor = typeof import('hls.js').default;
-
-let hlsModule: Promise<HlsCtor> | null = null;
-
-/** 动态加载 hls.js（仅视频页触发） */
-export function loadHls(): Promise<HlsCtor> {
-  hlsModule ??= import('hls.js').then((m) => m.default);
-  return hlsModule;
-}
 
 const QUALITY_KEY = 'myporn.quality.height';
 
@@ -36,6 +29,26 @@ export function rememberHeight(height: number): void {
   } catch {
     /* 隐私模式下 localStorage 可能不可写，忽略 */
   }
+}
+
+// ---------- 片源种类 ----------
+
+/** Video.js 里 HLS 的 MIME（`application/x-mpegURL` 是它的别名，两种都认） */
+export const HLS_TYPE = 'application/vnd.apple.mpegurl';
+export const MP4_TYPE = 'video/mp4';
+
+/**
+ * 这一批变体要不要走 hls.js。
+ * 只要有一条是 HLS 就用 `<hlsjs-video>`（它放 mp4 时退回原生解码），
+ * 全都不是才用原生 `<video>`——那样连 hls.js 都不用下载。
+ */
+export function needsHlsEngine(variants: readonly PlaybackVariant[]): boolean {
+  return variants.some((v) => v.hls);
+}
+
+/** 变体 → Video.js `source.type` */
+export function sourceTypeFor(isHls: boolean): string {
+  return isHls ? HLS_TYPE : MP4_TYPE;
 }
 
 // ---------- 编码偏好 ----------
@@ -145,47 +158,6 @@ export function variantLabel(variant: PlaybackVariant): string {
   return `${String(variant.height)}p`;
 }
 
-export interface LevelLike {
-  height: number;
-  bitrate: number;
-  /** hls.js 的 Level 上编码信息可能在 videoCodec / codecSet / attrs.CODECS 任一处 */
-  codec?: string;
-  videoCodec?: string;
-  attrs?: Record<string, string>;
-}
-
-function levelCodec(level: LevelLike): string {
-  return level.codec ?? level.videoCodec ?? level.attrs?.['CODECS'] ?? '';
-}
-
-/**
- * 找到与目标高度最接近的 hls 音视频流索引；-1 = 没有。
- * 同一高度有多个编码时（H.264 + AV1 各一条），选编码偏好靠前的那个。
- */
-export function levelIndexForHeight(levels: readonly LevelLike[], height: number): number {
-  let best = -1;
-  let bestDelta = Number.POSITIVE_INFINITY;
-  levels.forEach((level, index) => {
-    const delta = Math.abs(level.height - height);
-    if (delta > bestDelta) return;
-    if (delta < bestDelta) {
-      bestDelta = delta;
-      best = index;
-      return;
-    }
-    // 同高度：谁的编码偏好靠前用谁
-    const rank = codecRankOf(levelCodec(level));
-    const bestRank = best >= 0 ? codecRankOf(levelCodec(levels[best]!)) : 99;
-    if (rank < bestRank) best = index;
-  });
-  return best;
-}
-
-/** Safari/iOS 原生支持 HLS，可跳过 hls.js */
-export function supportsNativeHls(video: HTMLVideoElement): boolean {
-  return video.canPlayType('application/vnd.apple.mpegurl') !== '';
-}
-
 export function prefersReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
@@ -193,13 +165,4 @@ export function prefersReducedMotion(): boolean {
 /** 有精确指针（鼠标）才做悬停预览，触屏不做 */
 export function canHover(): boolean {
   return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
-}
-
-export async function toggleFullscreen(el: HTMLElement): Promise<void> {
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await el.requestFullscreen();
-  } catch {
-    /* 用户拒绝或浏览器不支持，静默 */
-  }
 }

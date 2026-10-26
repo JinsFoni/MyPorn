@@ -41,7 +41,7 @@
 | 媒体探测 | `ffprobe`（子进程，一次性） | 校验实际分辨率/时长，写进 nfo |
 | 定时任务 | 进程内 `time.Ticker` + `subscriptions.next_sync_at` | 无需 cron 容器 |
 | 实时进度 | **SSE**（`text/event-stream`） | 单向推送足够，反代友好，比 WebSocket 省连接管理 |
-| 前端 | **Svelte 5 + Vite + Tailwind**，产物 `go:embed` 进二进制 | 编译期无运行时框架、包体小（详见 §7）；配 `hls.js`（唯一重依赖 ~150KB gzip） |
+| 前端 | **Svelte 5 + Vite + Tailwind**，产物 `go:embed` 进二进制 | 编译期无运行时框架、包体小（详见 §7）；播放器用 **Video.js 10**（`@videojs/html` 自定义元素），hls.js 只在 HLS 片源时才下载 |
 | 前端路由 | `svelte-spa-router`（或手写 hash 路由） | 够用、无 SSR 负担 |
 | PWA | manifest + Service Worker（仅缓存 app shell） | 可加主屏；**不缓存视频** |
 | 打包 | 多阶段 Dockerfile，`alpine` + `ffmpeg` | 最终镜像 ~80–100MB |
@@ -95,7 +95,7 @@
 
 ### 7.1 结论
 
-**Svelte 5（runes）+ TypeScript + Vite 6 + Tailwind CSS 4 + hls.js**，构建产物 `go:embed` 进二进制，无 SSR、无 Node 运行时。
+**Svelte 5（runes）+ TypeScript + Vite 6 + Tailwind CSS 4 + Video.js 10**，构建产物 `go:embed` 进二进制，无 SSR、无 Node 运行时。
 
 ### 7.2 框架对比（框架运行时体积为 gzip **估算**）
 
@@ -111,7 +111,7 @@
 
 ### 7.3 依赖清单（刻意极简）
 
-- 运行依赖：`svelte`、`hls.js`
+- 运行依赖：`svelte`、`@videojs/html`（播放器外壳与皮肤）、`@videojs/hlsjs-video`（HLS 适配器，自带 hls.js）
 - 开发依赖：`vite`、`@sveltejs/vite-plugin-svelte`、`typescript`、`svelte-check`、`tailwindcss` + `@tailwindcss/vite`、`vite-plugin-pwa`
 - **不引入**：UI 组件库（有 Tailwind 够）、状态库（runes 内置）、axios（fetch 够）、表单库、图表库、zod（TS 类型手写对齐）
 
@@ -124,7 +124,7 @@
 | 状态 | Svelte 5 runes（`$state/$derived/$effect`），跨页共享放 `.svelte.ts` 模块 |
 | 实时进度 | `EventSource('/api/events')` 单连接，页面卸载即关；不用 WebSocket |
 | 长列表 | IntersectionObserver 分页 + keyset 游标；先用「页淘汰」（离屏页卸载 DOM），万条库足够；真卡再上虚拟滚动 |
-| 播放器 | `<video>` + hls.js，`import('hls.js')` 动态加载，只在视频页下载；**编码偏好见 §7.4.1** |
+| 播放器 | **Video.js 10**：`<video-player>`+`<video-skin>` 自定义元素（皮肤自带进度条/音量/倍速/画中画/全屏/快捷键/手势），皮肤只用 `--media-*` 变量调成站点的单色冷调；mp4 用原生 `<video>`，HLS 用 `<hlsjs-video>` 且 `await import()` 按需加载；**编码偏好见 §7.4.1** |
 | 图片 | `loading=lazy` + 宽高占位防跳动；缩略图走 `/api/img?u=`（后端代理 + 磁盘缓存，绕开 Referer/403） |
 | 主题 | Tailwind 原子类，**暗色为默认**，移动端优先布局（视觉基线见 §7.6） |
 | PWA | `vite-plugin-pwa`，`registerType: 'prompt'`，precache 仅 app shell（html/js/css/icon），**不缓存视频与 API 响应** |
@@ -173,13 +173,39 @@
 - **当前实况**：Pornhub 只给 H.264，库里 168 条变体全是 `avc1`，所以这条逻辑现在不改变任何选择，
   是为 xHamster / beeg 这类可能给 AV1 的平台预先铺好的。
 
+### 7.4.2 播放器实现：Video.js 10 自定义元素
+
+选择 Video.js **10**（`@videojs/html`），不是 v8 也不是 React 版：v10 把「状态」和「渲染器」拆开，
+UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，皮肤自带一整套控件，不用自己撸进度条。
+
+- **结构**：`<video-player>`（`display: contents`，只做 store 边界）› `<video-skin>`（媒体容器 + 控件 + 快捷键 + 手势）› 媒体元素。
+  页面里的圆角/裁剪由外层的 `relative overflow-hidden rounded-xl` 负责，皮肤自己的圆角设 0。
+- **中文化**：`<media-i18n>` 包一层，locale 从 `<html lang="zh-CN">` 继承，`@videojs/html` 自带 zh-CN 语言包
+  （`画质 / 播放速度 / 字幕 / 静音 / 全屏` 等都是中文）。
+- **皮肤样式只能靠变量**：`--media-accent-color`（白 `#f5faff`）、`--media-accent-text-color`（画布黑）、
+  `--media-font-family`（Roboto）、`--media-border-radius`、`--media-border-color`，其余交给皮肤，不改它的内部类名。
+- **片源策略不变**：每个清晰度仍是**一条独立清单/直链**，由侧边栏下拉框切换，切换时读 store 的进度再 `seek` 回去续播；
+  皮肤里那个「画质」菜单因此只有当前这一条（自动 + 当前档），不用它当主入口。这样 §7.4.1 的排序与「默认最高画质」都说了算。
+- **两个媒体元素**：全是直链 mp4 用原生 `<video>`（连 hls.js 都不下载），只要有一条 HLS 就整页切 `<hlsjs-video>`
+  （hls.js 引擎，也能放 mp4，切档后仍是同一个元素）。`engine` 由 `needsHlsEngine()` 在拿到片源时定一次。
+- **自动起播的坑**：原生 `<video>` 设完 `src` 立刻 `play()` 就能成；HLS 要等清单解析、MediaSource 挂上，
+  之前的 `play()` 会被 `AbortError` 打断。所以首次起播走 `kickPlay()`：120ms 一次重试，最多 40 次，
+  被浏览器拦自动播放（`NotAllowedError`）就停在海报上等用户点。
+- **错误处理**：皮肤自带错误弹窗会跟本站的「重新解析 / 用代理播放」浮层打架，所以订阅 `store.error` 后立刻
+  `dismissError()`，把文案交给页面自己的浮层。
+- **快捷键**：皮肤自带（空格/K、←→ ±10s、↑↓ 音量、M 静音、F 全屏、单击暂停、双击左右 ±10s、双击中间全屏）；
+  页面再挂一个 window 监听，让焦点不在播放器里时也能用同一套键。
+- **音量记忆**：存 `localStorage` 的 `myporn.player.volume`，但必须等媒体就绪（`canPlay`）再套用，
+  否则会被播放器默认的满音量盖掉，并且会把默认值写回去污染记忆。
+
 ### 7.5 包体预算
 
-| 范围 | 目标（gzip） |
-|---|---|
-| 首屏列表页 | ≤45 KB |
-| 视频页（含动态加载的 hls.js） | ≤195 KB |
-| 全部路由合计 | ≤220 KB |
+| 范围 | 目标（gzip） | 实测（2026-10） |
+|---|---|---|
+| 首屏列表页（index + CSS） | ≤60 KB | 49.0 + 8.6 = 57.6 KB |
+| 视频页（Video.js 10 播放器，不含 HLS 引擎） | ≤95 KB | 84.3 KB |
+| 仅 HLS 片源额外下载（hls.js 适配器） | ≤180 KB | 173.0 KB |
+| 全部路由合计 | ≤300 KB | ≈ 300 KB |
 
 ### 7.6 PWA 的前置坑（必须知道）
 
