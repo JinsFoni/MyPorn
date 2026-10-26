@@ -19,7 +19,7 @@
     toggleFullscreen,
     variantLabel,
   } from '../lib/player';
-  import { back, navigate } from '../lib/router.svelte';
+  import { navigate } from '../lib/router.svelte';
   import type { PlaybackInfo, VideoDetail } from '../lib/types';
 
   interface Props {
@@ -353,19 +353,6 @@
   </div>
 {:else if video}
   <article>
-    <div class="flex items-center gap-2 pb-3 lg:pb-4">
-  <button
-    type="button"
-    class="flex h-9 w-9 items-center justify-center rounded-full bg-panel text-fg transition-colors hover:bg-raise"
-    aria-label="返回"
-    onclick={() => back()}
-  >
-    <svg viewBox="0 0 20 20" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M11.5 5 6.5 10l5 5" />
-    </svg>
-  </button>
-</div>
-
     {#if mockNote}
       <p class="mb-3 rounded-xl bg-panel px-3 py-2 text-meta text-dim">
         离线预览：正在使用内置示例数据（后端未连接：{mockNote}）

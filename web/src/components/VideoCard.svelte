@@ -140,27 +140,18 @@
         ></video>
       {/if}
 
-      <!-- 时长与"新"标记挤在左上角，和 beeg 一致：一行药丸，不压住画面主体 -->
-      <div class="pointer-events-none absolute left-0 top-0 flex items-center gap-1 p-2">
-        <span class="rounded-full bg-ink/80 px-2 py-[0.1875rem] text-meta text-fg">
+      <!-- 时长直接压在封面上（不要黑色药丸底），只给一层文字阴影保证亮封面上也能读；
+           "新"仍是白色药丸；已存不再做标识 -->
+      <div class="pointer-events-none absolute left-0 top-0 flex items-center gap-1.5 p-2">
+        <span
+          class="text-meta font-medium text-fg [text-shadow:0_1px_5px_rgba(0,0,0,1),0_0_12px_rgba(0,0,0,0.95),0_0_3px_rgba(0,0,0,1)]"
+        >
           {formatDuration(video.durationSec)}
         </span>
         {#if video.isNew}
           <span class="rounded-full bg-hi px-2 py-[0.1875rem] text-meta font-medium text-ink">新</span>
         {/if}
       </div>
-
-      {#if video.hasLocalFile}
-        <span
-          class="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-ink/80 px-2 py-[0.1875rem] text-meta text-fg"
-          title="已在本地库"
-        >
-          <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-            <path d="M3 8.5 6.2 11.7 13 4.9" />
-          </svg>
-          已存
-        </span>
-      {/if}
     </div>
 
     <div class="mt-2.5 flex items-start gap-2.5">
