@@ -42,6 +42,7 @@
     <div class="h-full w-full overflow-hidden rounded-full bg-panel">
       {#if avatar && !avatarFailed}
         <img
+          data-media
           src={avatar}
           onerror={() => (avatarFailed = true)}
           alt=""

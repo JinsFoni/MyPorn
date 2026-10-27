@@ -190,7 +190,7 @@
            （那组自己也是 `self-center`，所以资料表的中线跟着一起走）。 -->
       <div class="h-26 w-26 shrink-0 self-center overflow-hidden rounded-full bg-raise sm:h-32 sm:w-32">
         {#if avatar}
-          <img src={avatar} alt="" width="320" height="320" class="h-full w-full object-cover" />
+          <img data-media src={avatar} alt="" width="320" height="320" class="h-full w-full object-cover" />
         {:else}
           <div class="flex h-full w-full items-center justify-center text-dim">
             <svg viewBox="0 0 24 24" class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">

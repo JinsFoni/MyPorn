@@ -67,6 +67,7 @@
     <span class="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-raise">
       {#if avatar}
         <img
+          data-media
           src={avatar}
           alt=""
           class="h-full w-full object-cover"

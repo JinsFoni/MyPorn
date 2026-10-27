@@ -440,17 +440,20 @@
               {#each stats.recent as row (row.id)}
                 <li class="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
                   <a data-link href={`/video/${String(row.id)}`} class="flex min-w-0 flex-1 items-center gap-3">
-                    {#if row.thumbUrl}
-                      <img
-                        src={imageUrl(row.thumbUrl, 240) ?? ''}
-                        alt=""
-                        class="h-11 w-20 shrink-0 rounded-lg object-cover"
-                        loading="lazy"
-                        decoding="async"
-                      />
-                    {:else}
-                      <div class="h-11 w-20 shrink-0 rounded-lg bg-raise"></div>
-                    {/if}
+                    <span class="h-11 w-20 shrink-0 overflow-hidden rounded-lg">
+                      {#if row.thumbUrl}
+                        <img
+                          data-media
+                          src={imageUrl(row.thumbUrl, 240) ?? ''}
+                          alt=""
+                          class="h-full w-full object-cover"
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      {:else}
+                        <span class="block h-full w-full bg-raise"></span>
+                      {/if}
+                    </span>
                     <span class="min-w-0 flex-1">
                       <span class="block truncate text-ui text-fg/90">{row.title}</span>
                       <span class="mt-0.5 flex items-center gap-1.5 text-meta text-dim">

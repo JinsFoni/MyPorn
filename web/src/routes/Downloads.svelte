@@ -126,17 +126,20 @@
             {@const status = STATUS[item.status]}
             <li class="panel p-3">
               <div class="flex items-start gap-3">
-                {#if item.thumbUrl}
-                  <img
-                    src={imageUrl(item.thumbUrl, 240) ?? ''}
-                    alt=""
-                    class="h-14 w-24 shrink-0 rounded-lg object-cover"
-                    loading="lazy"
-                    decoding="async"
-                  />
-                {:else}
-                  <div class="h-14 w-24 shrink-0 rounded-lg bg-raise"></div>
-                {/if}
+                <span class="h-14 w-24 shrink-0 overflow-hidden rounded-lg">
+                  {#if item.thumbUrl}
+                    <img
+                      data-media
+                      src={imageUrl(item.thumbUrl, 240) ?? ''}
+                      alt=""
+                      class="h-full w-full object-cover"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  {:else}
+                    <span class="block h-full w-full bg-raise"></span>
+                  {/if}
+                </span>
 
                 <div class="min-w-0 flex-1">
                   <div class="flex items-baseline justify-between gap-2">

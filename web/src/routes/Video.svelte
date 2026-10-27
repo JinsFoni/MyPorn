@@ -10,6 +10,7 @@
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
+  import { privacy } from '../lib/privacy.svelte';
   import {
     codecTag,
     needsHlsEngine,
@@ -74,7 +75,12 @@
 
   const variants = $derived(playback ? sortVariantsDesc(playback.variants) : []);
   const selectedVariant = $derived(variants.find((v) => v.id === selectedVariantId) ?? null);
-  const poster = $derived(video ? imageUrl(video.thumbUrl, 1280) : null);
+  /**
+   * 播放器的 poster（就是封面）。隐私模式下干脆不给：这个封面是 <video> 自己的属性，
+   * CSS 没法只糊它而不糊画面。宁可在解析片源的这一两秒里黑着 + 转环，
+   * 也不把一张高清封面亮在屏幕正中央——这页本来就是为了看片，一闪而过的封面没有信息价值。
+   */
+  const poster = $derived(video && !privacy.on ? imageUrl(video.thumbUrl, 1280) : null);
   /** 这批片源里只要有一条 HLS，就整个用 hls.js 引擎（它也能放 mp4） */
   const engine = $derived(needsHlsEngine(playback?.variants ?? []) ? 'hls' : 'native');
   const source = $derived.by((): { src: string; type: string } | null => {

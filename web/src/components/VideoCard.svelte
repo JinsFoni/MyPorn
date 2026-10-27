@@ -2,6 +2,7 @@
   import DownloadDialog from './DownloadDialog.svelte';
   import { api } from '../lib/api';
   import { imageUrl } from '../lib/img';
+  import { privacy } from '../lib/privacy.svelte';
   import { formatDate, formatDuration, relativeTime } from '../lib/format';
   import { canHover, prefersReducedMotion } from '../lib/player';
   import { scrollingRecently } from '../lib/scroll';
@@ -60,6 +61,9 @@
   function schedulePreview(delay: number, attempt = 0): void {
     window.clearTimeout(previewTimer);
     previewTimer = window.setTimeout(() => {
+      // 隐私模式：封面是糊的就别再悬停放片——鼠标一扫整段画面就出来了，
+      // 比不糊封面还露骨
+      if (privacy.on) return;
       // 指针扫过或列表还在滚动：顺延，别和滚动抢主线程和解码器
       if (scrollingRecently()) {
         if (attempt < 6) schedulePreview(300, attempt + 1);
@@ -74,6 +78,11 @@
     window.clearTimeout(previewTimer);
     previewOn = false;
   }
+
+  // 正预览着的时候把隐私模式打开：立刻收掉，不用等指针离开
+  $effect(() => {
+    if (privacy.on) stopPreview();
+  });
 
   // 预览元素挂载后再 play；失败静默降级回缩略图
   $effect(() => {
@@ -98,6 +107,7 @@
     <div class="relative aspect-video overflow-hidden rounded-xl bg-panel">
       {#if thumb && !thumbFailed}
         <img
+          data-media
           src={thumb}
           onerror={() => (thumbFailed = true)}
           alt=""
@@ -155,6 +165,7 @@
       <span class="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-raise" aria-hidden="true">
         {#if avatar}
           <img
+            data-media
             src={avatar}
             onerror={() => (avatarFailed = true)}
             alt=""

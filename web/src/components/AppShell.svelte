@@ -8,6 +8,7 @@
   import { connectEvents } from '../lib/sse';
   import { router } from '../lib/router.svelte';
   import { ui } from '../lib/ui.svelte';
+  import { privacy } from '../lib/privacy.svelte';
   import type { JobType } from '../lib/types';
   import BrandMark from './BrandMark.svelte';
 
@@ -152,6 +153,26 @@
   </svg>
 {/snippet}
 
+{#snippet privacyIcon(on: boolean)}
+  <!-- 隐私模式：开着的时候是「眼睛被划掉」，关着是正常的眼睛——图标画的是当前状态 -->
+  <svg
+    viewBox="0 0 24 24"
+    class="h-[1.375rem] w-[1.375rem] shrink-0"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M2.4 12s3.6-6.1 9.6-6.1S21.6 12 21.6 12s-3.6 6.1-9.6 6.1S2.4 12 2.4 12z" />
+    <circle cx="12" cy="12" r="2.7" />
+    {#if on}
+      <path d="M3.6 19.6 20.4 4.4" />
+    {/if}
+  </svg>
+{/snippet}
+
 {#snippet tabInner(item: NavItem)}
   <span class="relative">
     {@render navIcon(item.icon)}
@@ -198,16 +219,32 @@
         MyPorn
       </a>
 
-      <span
-        class="flex items-center gap-1.5 px-1 text-meta text-dim"
-        title={live.connected ? '实时事件已连接' : '实时事件未连接，正在重试'}
-      >
+      <!-- 移动端没有侧边栏，隐私开关挪到顶栏右侧（放在连接状态点左边，点关闭也是右手拇指的落点） -->
+      <div class="flex items-center gap-1">
+        <button
+          type="button"
+          aria-label="隐私模式"
+          aria-pressed={privacy.on}
+          title={privacy.on ? '隐私模式已开启：封面与头像已模糊' : '隐私模式：模糊所有封面与头像'}
+          onclick={() => privacy.toggle()}
+          class="grid h-9 w-9 place-items-center rounded-full transition-colors {privacy.on
+            ? 'text-fg'
+            : 'text-dim'}"
+        >
+          {@render privacyIcon(privacy.on)}
+        </button>
+
         <span
-          class="h-1.5 w-1.5 rounded-full {live.connected ? 'bg-sage' : 'bg-dim'}"
-          aria-hidden="true"
-        ></span>
-        <span class="sr-only sm:not-sr-only">{live.connected ? '实时' : '重连中'}</span>
-      </span>
+          class="flex items-center gap-1.5 px-1 text-meta text-dim"
+          title={live.connected ? '实时事件已连接' : '实时事件未连接，正在重试'}
+        >
+          <span
+            class="h-1.5 w-1.5 rounded-full {live.connected ? 'bg-sage' : 'bg-dim'}"
+            aria-hidden="true"
+          ></span>
+          <span class="sr-only sm:not-sr-only">{live.connected ? '实时' : '重连中'}</span>
+        </span>
+      </div>
     </div>
   </header>
 
@@ -252,7 +289,22 @@
       {/each}
     </nav>
 
-    <div class="mt-auto flex items-center justify-end pt-6">
+    <div class="mt-auto flex items-center justify-between pt-6">
+      <!-- 隐私模式：左下角，和右下角的齿轮对称。开着时所有封面与头像都糊掉，
+           图标同时变成「眼睛被划掉」并且不压暗，一眼能看出当前状态 -->
+      <button
+        type="button"
+        aria-label="隐私模式"
+        aria-pressed={privacy.on}
+        title={privacy.on ? '隐私模式已开启：封面与头像已模糊' : '隐私模式：模糊所有封面与头像'}
+        onclick={() => privacy.toggle()}
+        class="grid h-9 w-9 shrink-0 place-items-center rounded-full transition-colors {privacy.on
+          ? 'text-fg'
+          : 'text-muted hover:text-fg'}"
+      >
+        {@render privacyIcon(privacy.on)}
+      </button>
+
       <!-- 设置：右下角，只有齿轮图标，不给底色（命中区仍是 36px 圆形，只靠颜色表示状态）。
            点开的是弹窗（SettingsDialog），不跳页面；打开时齿轮变白 -->
       <button

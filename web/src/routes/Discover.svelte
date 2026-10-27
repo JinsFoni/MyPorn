@@ -232,6 +232,7 @@
         <div class="h-12 w-12 shrink-0 overflow-hidden rounded-full bg-raise">
           {#if resolved.avatarUrl}
             <img
+              data-media
               src={imageUrl(resolved.avatarUrl, 120) ?? ''}
               alt=""
               width="120"
@@ -272,6 +273,7 @@
           <div class="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-raise">
             {#if item.avatarUrl}
               <img
+                data-media
                 src={imageUrl(item.avatarUrl, 96) ?? ''}
                 alt=""
                 width="96"

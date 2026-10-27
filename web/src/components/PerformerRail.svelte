@@ -55,6 +55,7 @@
             <span class="h-18 w-18 overflow-hidden rounded-full bg-panel">
               {#if performer.avatarUrl && !failed[performer.id]}
                 <img
+                  data-media
                   src={imageUrl(performer.avatarUrl, 180) ?? ''}
                   onerror={() => (failed = { ...failed, [performer.id]: true })}
                   alt=""
