@@ -1,8 +1,9 @@
-# 上线前必须验证的解析点（Pornhub）
+# 上线前必须验证的解析点（Pornhub / xHamster / beeg）
 
 > **状态（2026-10）**：已在真实站点（`cn.pornhub.com`）核对并通过——艺人主页资料（含身材、简介、资料区块与站外链接）、影片列表第 1 页、
 > 视频页 `mediaDefinitions`、播放地址解析、真机下载全部实测正常。下文保留为「站点改版后的自查清单」。
-> 所有解析逻辑集中在 `internal/platform/pornhub/parse.go`，改选择器不需要动业务代码。
+> 所有解析逻辑集中在 `internal/platform/<站>/`，改选择器不需要动业务代码。
+> xHamster 与 beeg 的核对点见本文末尾附录。
 
 ## 一、用调试命令逐层验证
 
@@ -104,3 +105,42 @@ make backend           # 先编译
 - 播放地址 2 小时后失效；下载任务若卡在「已解析画质」阶段过久，重新触发即可拿到新签名
 - 需要登录/会员才能看的内容无法解析（不做付费墙绕过）
 - 站点改版后只影响本目录内的解析文件，业务层与数据库无需迁移
+
+---
+
+# 附：xHamster / beeg 的待核对点
+
+两站都没有官方 API，用的都是「站点自己前端正在用的那份数据」，所以下列位置一旦改版就会失效。
+排查顺序同上：先 `-debug-parse`，再 `-debug-video`，最后才看界面。
+
+## 一、xHamster（`internal/platform/xhamster`）
+
+| 点 | 现状（2026-10 实测） | 改版后怎么发现 |
+|---|---|---|
+| `window.initials` | 艺人/影片/列表数据全在这段 JSON 里，花括号配平扫描取出 | `-debug-parse` 报「解析 window.initials 失败」 |
+| 字段名 | `infoComponent.pornstarTop`（名字/影片数/头像）、`aboutMeComponent.personalInfoList`、`trendingVideoSectionComponent.videoListProps.videoThumbProps`、`paginationComponent.lastPageNumber` | 名字或影片数为 0、列表为空 |
+| 播放地址密文 | `xplayerSettings.sources.standard.<codec>[quality=auto].url`，头 5 字节是算法号 + 种子 | `-debug-video` 报「xHamster 播放地址解密失败」 |
+| PRNG | 目前见到的 7 种算法都在 `decrypt.go`；出现第 8 种会解密失败（错误信息会带着原始密文前 32 字符） | 同上 |
+| `hostMap` | 键形如 `standard.<codec>.auto.prime`，值是 CDN 主机首段（`video7`） | 解出来的地址 404 → 主机没换对 |
+| 签名 | master 地址里 `end=<unix>`，约几小时后过期 | 播放 403/404 且地址里的 `end` 已过 → 重新解析即可（本来就每次现解） |
+| 搜索 | `/api/front/search/suggest` 被 Cloudflare 拦（服务端带 token/Referer/Cookie 也是 403），站内搜索退化为 slug 精确探测 | 搜索一直是空结果但粘贴链接能订阅 → 正常现象 |
+
+## 二、beeg（`internal/platform/beeg`）
+
+| 点 | 现状（2026-10 实测） | 改版后怎么发现 |
+|---|---|---|
+| 接口 | `store.externulls.com`：`/tag?slug=`、`/tag/videos/<slug>`、`/facts/file/<id>`、`/video/play_url/<id>` | 502 + 「beeg 接口返回 N」 |
+| slug | 大小写不敏感，**短横线不行**（`riley-reid` → 404） | 订阅报「找不到该艺人」 |
+| 播放地址 | `play_url` 返回纯文本相对路径，前面补 `https://video.beeg.com` | 播放 404 |
+| 缩略图 | `thumbs.externulls.com/videos/{fileId}/{thumb}.webp?size=480x270`，头像 `photos/{thumbId}/to.webp?crop_id=` | 封面全空 |
+| Referer | 图床拒绝自家根域 Referer，只认 `https://beeg.com/`（`refererOverrides`） | 图片 403 |
+| 限流 | 撞车时会 429/5xx，客户端已重试一次 | 偶发 502，重试或稍后再点 |
+| 标签 | `tg_name` 里的 `{}` 是图标占位，入库前去括号 | 标签里又出现 `{…}` 说明清理函数没跑 |
+
+## 三、两站共同注意
+
+- **播放地址带签名、几小时过期**：不要缓存、不要写库，`ResolvePlayback` 每次现解。
+- 两站都**没有**「新片通知」「Emby 自动扫库」相关接口约定，本轮也没做这两件事。
+- 真机验收（2026-10）：xHamster 订阅 → 回填 46 部/页 × 34 页 → 默认档 720p **AV1** 播放正常 →
+  下载 69.6 MB（AV1 720p）落盘 + nfo/poster/thumb/fanart；
+  beeg 订阅 → 回填 48 部/页 → 默认档 1080p 播放正常 → 下载 385 MB（H.264 1080p）落盘 + 元数据。

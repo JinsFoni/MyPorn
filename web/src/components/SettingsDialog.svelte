@@ -10,7 +10,7 @@
   const MOCK: Settings = {
     syncIntervalHours: 6,
     globalProxy: '',
-    platformProxy: { pornhub: 'socks5://127.0.0.1:1080' },
+    platformProxy: { pornhub: 'socks5://127.0.0.1:1080', xhamster: '', beeg: '' },
     namingTemplate: '{标题}',
     downloadConcurrency: 2,
     downloadRateKb: 0,
@@ -45,6 +45,8 @@
   let syncIntervalHours = $state(6);
   let globalProxy = $state('');
   let pornhubProxy = $state('');
+  let xhamsterProxy = $state('');
+  let beegProxy = $state('');
   let namingTemplate = $state('{标题}');
   let downloadConcurrency = $state(2);
   let downloadRateKb = $state(0);
@@ -61,6 +63,8 @@
     syncIntervalHours = value.syncIntervalHours;
     globalProxy = value.globalProxy;
     pornhubProxy = value.platformProxy.pornhub;
+    xhamsterProxy = value.platformProxy.xhamster;
+    beegProxy = value.platformProxy.beeg;
     namingTemplate = value.namingTemplate;
     downloadConcurrency = value.downloadConcurrency;
     downloadRateKb = value.downloadRateKb;
@@ -95,7 +99,7 @@
     const patch: SettingsPatch = {
       syncIntervalHours,
       globalProxy,
-      platformProxy: { pornhub: pornhubProxy },
+      platformProxy: { pornhub: pornhubProxy, xhamster: xhamsterProxy, beeg: beegProxy },
       namingTemplate,
       downloadConcurrency,
       downloadRateKb,
@@ -380,6 +384,32 @@
                           spellcheck="false"
                           autocomplete="off"
                           bind:value={pornhubProxy}
+                          disabled={saving}
+                        />
+                      </div>
+                      <div>
+                        <label for="xhamster-proxy" class="label-meta mb-1.5">xHamster 专用代理</label>
+                        <input
+                          id="xhamster-proxy"
+                          class="field"
+                          type="text"
+                          placeholder="留空则跟随全局代理"
+                          spellcheck="false"
+                          autocomplete="off"
+                          bind:value={xhamsterProxy}
+                          disabled={saving}
+                        />
+                      </div>
+                      <div>
+                        <label for="beeg-proxy" class="label-meta mb-1.5">beeg 专用代理</label>
+                        <input
+                          id="beeg-proxy"
+                          class="field"
+                          type="text"
+                          placeholder="留空则跟随全局代理"
+                          spellcheck="false"
+                          autocomplete="off"
+                          bind:value={beegProxy}
                           disabled={saving}
                         />
                       </div>

@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -30,12 +30,16 @@ func (s *Server) selfHealAvatar(p *model.Performer) {
 	}()
 }
 
+// proxyRequired 记录「从国内直连一般不通、建议配代理」的平台。
+// xHamster 与 beeg 实测可直连，所以不在此列——否则界面上会一直挂着一条没用的警告。
+var proxyRequired = map[string]bool{"pornhub": true}
+
 func (s *Server) handlePlatforms(w http.ResponseWriter, _ *http.Request) {
 	out := []map[string]any{}
 	for _, a := range s.reg.All() {
 		proxy := s.cfg.PlatformProxyFor(a.Key())
 		status := "ok"
-		if proxy == "" {
+		if proxy == "" && proxyRequired[a.Key()] {
 			status = "no_proxy"
 		}
 		out = append(out, map[string]any{
@@ -147,7 +151,11 @@ func (s *Server) adapterForURL(raw string) (platform.Adapter, string, error) {
 			return a, id, nil
 		}
 	}
-	return nil, "", errors.New("无法识别该链接所属平台（当前仅支持 Pornhub 艺人主页）")
+	keys := make([]string, 0, 4)
+	for _, a := range s.reg.All() {
+		keys = append(keys, a.Name())
+	}
+	return nil, "", fmt.Errorf("无法识别该链接所属平台（支持：%s）", strings.Join(keys, " / "))
 }
 
 type createSubReq struct {

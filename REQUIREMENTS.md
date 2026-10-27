@@ -204,7 +204,15 @@
 | M1 ✅ | Pornhub adapter + 艺人订阅（首次全量回填）+ 艺人搜索 + 影片流 + 在线播放（最高画质） | 搜到艺人 → 订阅 → 全量回填完成 → 点开即播 |
 | M2 ✅ | 本地库 + 下载 + Emby 元数据 + 队列 UI + PWA | 下载后目录被 Emby 正确刮削出海报/标题/艺人；手机加到主屏可用 |
 | M3 | OpenList 上传 + strm + 刷新（含 `/d/` 直链 spike） | 上传后 Emby 用 strm 直接播放远端文件并可拖动 |
-| M4 | xHamster / beeg adapter、新片通知、Emby API 自动扫库 | 三站统一体验 |
+| M4 🚧 | xHamster / beeg adapter（已完成）、新片通知、Emby API 自动扫库（本轮不做） | 三站统一体验 |
+
+M4 实测结论（2026-10，本轮只做两个 adapter）：xHamster（`window.initials` JSON 解析 +
+播放地址密文解密 + AV1/H.264 双清单合并）与 beeg（`store.externulls.com` 公开接口 +
+`play_url` 清单模板）都能走通「订阅 → 回填 → 播放 → 下载」全链路：
+xHamster 侧回填 46 部/页、共 34 页，播放默认选 720p AV1（1.4 Mbps，浏览器实测可解），
+下载产物 `{库}/xHamster/{艺人}/{片名}/` 69.6 MB / AV1 720p；
+beeg 侧回填 48 部/页，播放默认 1080p（6.8 Mbps），下载产物 385 MB / H.264 1080p。
+新片通知与 Emby 自动扫库按用户要求本轮不做。
 
 M2 实测结论（2026-10）：真机下载 7 部 Pornhub 影片全部成功，落盘 `{库}/Pornhub/{艺人}/{片名}/{片名}.mp4`
 + `.nfo`（标题/简介/标签/演职人员/工作室/唯一 ID）+ poster 1000×1500 / thumb 1280×720 / fanart 1920×1080；

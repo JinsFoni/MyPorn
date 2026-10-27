@@ -25,16 +25,23 @@
 [{ "key":"pornhub", "name":"Pornhub", "enabled":true,
    "baseUrl":"https://cn.pornhub.com",
    "hasProxy":true, "hasCookie":false,
-   "status":"ok" }]
+   "status":"ok" },
+ { "key":"xhamster", "name":"xHamster", "enabled":true,
+   "baseUrl":"https://xhamster.com", "hasProxy":false, "hasCookie":false, "status":"ok" },
+ { "key":"beeg", "name":"beeg", "enabled":true,
+   "baseUrl":"https://beeg.com", "hasProxy":false, "hasCookie":false, "status":"ok" }]
 ```
-`status`: `ok | no_proxy | error`（前端仅做提示，不阻塞）
+`status`: `ok | no_proxy | error`（前端仅做提示，不阻塞）。
+`no_proxy` 只对「直连一般不通」的平台报（目前仅 `pornhub`）；xHamster / beeg 实测可直连，没配代理也是 `ok`。
+
+**平台 key**：`pornhub` / `xhamster` / `beeg`。`platform` 字段在艺人、影片、订阅、搜索接口里都取这三个值之一。
 
 ## 2. 艺人
 
 ```ts
 type Performer = {
   id: number                 // 本地 id
-  platform: "pornhub"
+  platform: "pornhub" | "xhamster" | "beeg"
   performerId: string        // 平台侧 id 或 slug
   name: string
   url: string                // 平台主页
@@ -76,7 +83,7 @@ type Performer = {
 
 ### 远程艺人搜索
 
-`GET /api/search/performers?q=<kw>&platform=pornhub&page=1` →
+`GET /api/search/performers?q=<kw>&platform=pornhub|xhamster|beeg&page=1`（`platform` 缺省为 `pornhub`）→
 ```json
 { "items":[{"platform":"pornhub","performerId":"mini-diva","name":"Mini Diva",
             "avatarUrl":"/api/img?u=...","url":"https://cn.pornhub.com/model/mini-diva",
@@ -89,7 +96,7 @@ type Performer = {
 ```ts
 type Video = {
   id: number
-  platform: "pornhub"
+  platform: "pornhub" | "xhamster" | "beeg"
   platformVideoId: string
   title: string
   url: string                  // 平台观看页
@@ -163,7 +170,7 @@ type Video = {
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/settings` | `{syncIntervalHours, globalProxy, platformProxy:{pornhub},
+| GET | `/api/settings` | `{syncIntervalHours, globalProxy, platformProxy:{pornhub,xhamster,beeg},
   namingTemplate, downloadConcurrency, downloadRateKb, autoDownloadNew, libraryRoot,
   openlist:{baseUrl,root,hasToken}}`（**不含任何密钥明文**） |
 | PUT | `/api/settings` | 同结构，部分字段可选；密钥字段用 `{"openlist":{"token":"..."}}` 单独写，响应永不回显 |
@@ -197,7 +204,8 @@ type Video = {
    `openlist.token` 为 write-only，响应里只回 `hasToken`。
 2. **`GET /api/videos/new`** 与 `/api/videos` 同结构：接受 `cursor` / `limit`，返回 `{items, nextCursor, total}`；
    `since` 参数保留但当前忽略。
-3. **`Settings.platformProxy`** 为 `{ "pornhub": "http://..." }`，空串表示回退到 `globalProxy`。
+3. **`Settings.platformProxy`** 为 `{ "pornhub": "...", "xhamster": "...", "beeg": "..." }`，空串表示回退到 `globalProxy`；
+   对应环境变量 `PLATFORM_PROXY_PORNHUB` / `PLATFORM_PROXY_XHAMSTER` / `PLATFORM_PROXY_BEEG`。
 4. **`Performer.videoCount`** 是平台侧影片数量（不是粉丝数）；粉丝数用 `subscriberCount`。
    注意 **Pornhub 的资料页只有「视频播放量」和「订阅者」，没有影片总数**，所以 `videoCount` 经常是 `null`；
    艺人页显示的「N 部影片」用 `localVideoCount`（本地收录数，与下面影片列表一致），订阅数用 `subscriberCount`

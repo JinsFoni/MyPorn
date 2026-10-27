@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/mario/myporn/internal/hls"
 	"github.com/mario/myporn/internal/model"
 	"github.com/mario/myporn/internal/platform"
 )
@@ -897,83 +898,10 @@ func parseQualityToHeight(q string) int {
 	return n
 }
 
-// ParseMasterPlaylist 解析 HLS master playlist 的变体列表（相对 URI 会按 base 补全）。
+// ParseMasterPlaylist 解析 HLS master playlist 的变体列表。
+// 实现在 internal/hls：四个平台共用一份，省得各写一遍 BANDWIDTH/RESOLUTION/CODECS 的规矩。
 func ParseMasterPlaylist(content, baseURL string) []model.Variant {
-	lines := strings.Split(content, "\n")
-	var out []model.Variant
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if !strings.HasPrefix(line, "#EXT-X-STREAM-INF:") {
-			continue
-		}
-		attrs := parseAttrList(strings.TrimPrefix(line, "#EXT-X-STREAM-INF:"))
-		var v model.Variant
-		if bw, ok := attrs["BANDWIDTH"]; ok {
-			v.Bandwidth, _ = strconv.Atoi(bw)
-		}
-		if res, ok := attrs["RESOLUTION"]; ok {
-			if w, h, ok2 := strings.Cut(res, "x"); ok2 {
-				v.Width, _ = strconv.Atoi(w)
-				v.Height, _ = strconv.Atoi(h)
-			}
-		}
-		v.Codec = attrs["CODECS"]
-		// 下一非注释行是 URI
-		for j := i + 1; j < len(lines); j++ {
-			uri := strings.TrimSpace(lines[j])
-			if uri == "" || strings.HasPrefix(uri, "#") {
-				continue
-			}
-			v.URL = resolveURL(baseURL, uri)
-			i = j
-			break
-		}
-		if v.URL != "" {
-			out = append(out, v)
-		}
-	}
-	model.SortVariantsDesc(out)
-	return out
-}
-
-func parseAttrList(s string) map[string]string {
-	out := map[string]string{}
-	var cur strings.Builder
-	var inQuote bool
-	parts := []string{}
-	for _, r := range s {
-		switch {
-		case r == '"':
-			inQuote = !inQuote
-			cur.WriteRune(r)
-		case r == ',' && !inQuote:
-			parts = append(parts, cur.String())
-			cur.Reset()
-		default:
-			cur.WriteRune(r)
-		}
-	}
-	if cur.Len() > 0 {
-		parts = append(parts, cur.String())
-	}
-	for _, p := range parts {
-		k, v, ok := strings.Cut(strings.TrimSpace(p), "=")
-		if !ok {
-			continue
-		}
-		out[strings.ToUpper(strings.TrimSpace(k))] = strings.Trim(strings.TrimSpace(v), `"`)
-	}
-	return out
-}
-
-func resolveURL(base, ref string) string {
-	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
-		return ref
-	}
-	if i := strings.LastIndex(base, "/"); i >= 0 {
-		return base[:i+1] + ref
-	}
-	return ref
+	return hls.ParseMasterPlaylist(content, baseURL)
 }
 
 // ---------- 搜索页 ----------

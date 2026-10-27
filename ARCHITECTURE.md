@@ -170,8 +170,9 @@
   所以非 H.264 的 id 是 `1080p.av1` / `1080p.hevc`；H.264 保持 `1080p`，老会话记住的档位不受影响。
 - **下载下来的编码就是源编码**：仍然 `ffmpeg -c copy` 不转码，AV1 原样落盘；
   Emby 客户端对 AV1 的直接播放支持参差不齐，遇到播不了的会由 Emby 转码（这是接受了的代价，见 §10）。
-- **当前实况**：Pornhub 只给 H.264，库里 168 条变体全是 `avc1`，所以这条逻辑现在不改变任何选择，
-  是为 xHamster / beeg 这类可能给 AV1 的平台预先铺好的。
+- **当前实况**：Pornhub 只给 H.264；xHamster 同时给 AV1 与 H.264 两套清单，**默认档因此常常就是 AV1**
+  （实测同片 720p：AV1 1.4 Mbps vs H.264 1.9 Mbps，浏览器能解就直接播、也能直接下）；beeg 目前只给 H.264。
+  低分辨率档的 id 也按高度分开（`240p` / `144p`），不再一律叫 `sd`——否则四档低清晰度会撞成同一个 id。
 
 ### 7.4.2 播放器实现：Video.js 10 自定义元素
 
@@ -329,7 +330,7 @@ internal/store/               # sqlite, migrations/*.sql, 各表 repo
 internal/platform/            # Adapter 接口
     pornhub/ xhamster/ beeg/  # 每站一目录：parse.go + testdata/*.html
 internal/jobs/                # runner(claim/retry), fetch, download, upload
-internal/hls/                 # master 解析 + 分段下载器
+internal/hls/                 # master 解析（Pornhub/xHamster/beeg 共用）+ 分段下载器
 internal/media/               # ffmpeg/ffprobe 封装、nfo 生成、图片处理、命名模板
 internal/openlist/            # OpenList API client（put/mkdir/list/链接）
 internal/httpapi/             # handlers + SSE + auth 中间件
@@ -395,3 +396,53 @@ type AvatarProvider interface {
 **取舍**：接受「头像可能来自另一个站点」，换取头像不再随平台改版而丢失；
 代价是名字匹配不上时仍然没有头像（此时保持占位图，不做模糊猜测）。
 X 的账号名猜不出来的（艺名拼起来超过 15 字符、账号名里加了数字或自创缩写之类）同样放弃。
+
+## 12. 多站适配器：xHamster 与 beeg
+
+上层（订阅、同步、播放、下载、元数据）完全不认平台，差异全压在 `internal/platform/<站>/` 里。
+两站的取数方式刻意不同，都是「哪条路最不容易被改版打断就走哪条」。
+
+### 12.1 xHamster：读 `window.initials`，播放地址要解密
+
+- **数据源**：艺人页、影片页、列表页的真实数据都在页面里一段 `window.initials = {...}` 的 JSON 里
+  （`infoComponent` 艺人资料、`aboutMeComponent` 简介与资料行、`trendingVideoSectionComponent` 影片列表、
+  `paginationComponent` 页数、`xplayerSettings` 播放器设置）。**直接解析这段 JSON，不碰 DOM**：
+  CSS class 几乎每次改版都变，JSON 结构一年也不动。
+  花括号配平扫描即可取出（不能按行正则切，JSON 里有 `}`），并限长 8 MB。
+- **播放地址是密文**：`xplayerSettings.sources.standard.<codec>[quality=auto].url` 给的是十六进制串，
+  前 5 字节是「PRNG 算法号（1 字节）+ 种子（4 字节小端）」，其后每字节与密钥流 XOR。
+  7 种 PRNG（LCG/移位类/乘法异或）各一份实现，解出来是一段 master 清单模板地址。
+- **主机要换**：模板里的 host 是占位，按 `hostMap["standard.<codec>.auto.prime"]` 换成本次可用的
+  CDN 节点（`video7.xhcdn.com` 之类），只换第一段主机名、端口保留。
+- **两套清单都要**：站点把 AV1 与 H.264 分成两个 master（`_TPL_.av1.mp4.m3u8` / `_TPL_.h264.mp4.m3u8`），
+  两条都解析、合并后交给 `model.SortVariantsDesc`；清单里的 `CODECS` 缺失时用来源 codec 补上。
+  拿不到清单时退到 `downloadDropdownComponent.sources.mp4`（144p–720p 直链）。
+- **搜索退化**：`/api/front/search/suggest` 被 Cloudflare 挡住（带 csrf token、Referer、Cookie 也是 403），
+  `/pornstars?search=` 会被忽略并返回完整 A–Z 列表。所以站内搜索只做「按 slug 精确探测」：
+  名字打全（`Riley Reid` → `riley-reid`）能搜到，报出的名字还必须与输入一致，否则当没搜到。
+
+### 12.2 beeg：打它自己前端用的公开 JSON 接口
+
+| 用途 | 请求 |
+|---|---|
+| 艺人资料 | `GET store.externulls.com/tag?slug=<slug>&get_original=true&with_relations=true` |
+| 影片列表 | `GET store.externulls.com/tag/videos/<小写 slug>?limit=48&offset=N` |
+| 影片详情 | `GET store.externulls.com/facts/file/<fileId>` |
+| 播放地址 | `GET store.externulls.com/video/play_url/<fileId>`（纯文本路径，前面补 `https://video.beeg.com`） |
+
+- slug **大小写不敏感**（`MiniDiva` / `minidiva` 都 200），但**短横线不行**（`riley-reid` → 404），
+  所以搜索只把名字压扁去空格、不做连字符化。
+- 播放地址给的是 master 清单的相对路径，拼上 CDN 前缀后与其它两站共用 `internal/hls.ParseMasterPlaylist`。
+- 标签里的 `{}` 是前端换图标的占位（`Big {Tits}`），入库前去掉括号，避免和「Big Tits」变成两个标签。
+- 缩略图在 `thumbs.externulls.com`，该图床**拒绝自家根域的 Referer**，只认 `https://beeg.com/`
+  （`refererOverrides` 里特判）。
+
+### 12.3 共同约定
+
+- **播放地址现解现用**：两家都带签名、几小时过期（`end=…`），所以 `ResolvePlayback` 每次都重新解析，
+  不缓存、不落库。
+- **限速**：每站 500ms 起步 + 0–300ms 抖动；beeg 客户端遇到 429/5xx 歇半秒重试一次
+  （同步任务与浏览撞车时会遇到）。
+- **失败不拖累界面**：搜索接口失败返回 502 + 平台名，界面只显示提示，不影响已有数据。
+- **平台状态提示**：只有「从国内直连一般不通」的 Pornhub 在没配代理时才报 `no_proxy`，
+  xHamster / beeg 实测可直连，不再无意义地报警。

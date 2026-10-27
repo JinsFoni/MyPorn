@@ -122,6 +122,10 @@ func (v Variant) Quality() string {
 		return "480p"
 	case v.Height >= 360:
 		return "360p"
+	case v.Height >= 240:
+		return "240p"
+	case v.Height >= 120:
+		return "144p"
 	case v.Height > 0:
 		return "sd"
 	default:

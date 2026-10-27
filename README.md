@@ -2,14 +2,14 @@
 
 单用户自托管的视频聚合站：订阅艺人 → 在线看最高画质 → 下载进本地库 → 生成 Emby 元数据 → 上传 OpenList 生成 strm。
 
-当前进度：**M2（本地库 + 下载队列 + Emby 元数据）**。
+当前进度：**M4 的 xHamster / beeg 适配器**（新片通知与 Emby 自动扫库按要求暂缓）。
 
 - 需求：`REQUIREMENTS.md`
 - 架构与选型：`ARCHITECTURE.md`
 - 接口契约：`docs/API.md`
 - 上线前必读：`docs/NEEDS-VERIFICATION.md`（解析选择器需在能访问站点的机器上核对）
 
-## 当前状态（M2 已可运行）
+## 当前状态（三个站都能用）
 
 M1（订阅 + 影片流 + 在线播放）已实现并实测通过：
 
@@ -39,7 +39,33 @@ M2（本地库 + 下载队列 + Emby 元数据）已实现并实测通过：
 - 下载前自动补全影片详情（简介/标签/评分），一键「再下载一份」到别的库
 - **下载默认纯手动**：只有点卡片/详情页的下载按钮才会入队；设置里可选「同步到新片后自动下载」（默认关闭，首次全量回填永不自动下载）
 
-未开始（M3–M4）：OpenList 上传与 strm、xHamster/beeg、通知、Emby 自动扫描。
+M4 的 xHamster / beeg 适配器已实现并实测通过（详见下节）；新片通知、Emby API 自动扫库本轮不做。
+
+## 多站适配器（xHamster / beeg）
+
+各站自己维护自己的解析器，上层（订阅、同步、播放、下载、元数据）完全不区分平台。
+
+- **xHamster**：页面上的数据全在 `window.initials` 这段 JSON 里（分类、艺人、影片列表、播放器设置），
+  直接读 JSON 而不是爬 DOM——站点几乎每周都在改 class 名，JSON 结构反而稳。
+  播放地址是密文：`standard.<编码>.auto` 里是十六进制串，头 5 字节给了 PRNG 算法与种子，
+  剩下的是「明文 XOR 密钥流」；解出来是一个带 `_TPL_` 占位符的 master 清单模板，
+  再按 `hostMap` 把域名换成本次可用的 CDN 节点（`video7.xhcdn.com` 之类）。
+  站点同时提供 AV1 与 H.264 两套清单，两套都解析、合并后按「分辨率 → 编码 → 码率」排序，
+  所以默认档常常直接是 **AV1**（体积约为 H.264 的一半）。
+- **beeg**：站点自己的前端打的是 `store.externulls.com` 这组公开 JSON 接口，
+  我们照着打同一组接口（艺人 `GET /tag?slug=`、影片列表 `GET /tag/videos/{slug}`、
+  影片详情 `GET /facts/file/{id}`、播放地址 `GET /video/play_url/{id}`）。
+  播放地址是「模板 + CDN 前缀」：拼成 master 清单地址后照常解析出各档清晰度。
+  标签里的 `{...}` 是前端换图标的占位（`Big {Tits}`），入库时去掉括号。
+- **两站的播放地址都带签名、几小时就过期**，所以每次播放都现解析一次（`ResolvePlayback`），
+  不缓存、也不把地址写进库。
+- **搜索只在名字写全时命中**：xHamster 的联想搜索接口被 Cloudflare 挡住（服务端过不去），
+  beeg 也没有公开搜索，两家都退化成「按 slug 精确探测」——名字打全就能搜到，打半个查不到。
+  粘贴主页链接永远可用。
+- 代理：`PLATFORM_PROXY_XHAMSTER` / `PLATFORM_PROXY_BEEG` 或设置页里的专用代理，
+  留空跟随全局代理；两家实测在国内可直连，所以「没配代理」不会在界面上报警。
+
+未开始：M3（OpenList 上传 + strm + `/d/` 直链 spike）。
 
 首屏预算：index 48.3 KB + CSS 9.4 KB ≈ 57.7 KB gzip；影片页再加载 84.0 KB 的播放器（Video.js 10 + 清晰度菜单 + 氛围模式 + 加载态），只有 HLS 片源才额外下载 173 KB 的 hls.js。
 
@@ -72,7 +98,10 @@ cmd/myporn/            入口：配置 → 存储 → 调度 → HTTP
 internal/config/       环境变量与 .env.local
 internal/store/        SQLite、迁移、各表查询
 internal/platform/     适配器接口与注册表
-internal/platform/pornhub/  Pornhub 解析（唯一需要随站点改版维护的地方）
+internal/platform/pornhub/  Pornhub 解析（随站点改版维护的地方）
+internal/platform/xhamster/  xHamster 解析（window.initials JSON + 播放地址解密）
+internal/platform/beeg/      beeg 解析（store.externulls.com 公开接口）
+internal/hls/                HLS master 清单解析（三个站共用，保证编码偏好一致）
 internal/jobs/         任务队列：同步、下载、进度与取消
 internal/events/       进程内事件中心（SSE）
 internal/httpapi/      HTTP 接口、图片/媒体代理、静态资源

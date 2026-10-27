@@ -54,8 +54,11 @@ type settingsDTO struct {
 	OpenList            olDTO    `json:"openlist"`
 }
 
+// proxyDTO 是各平台的专用代理。留空表示跟随全局代理。
 type proxyDTO struct {
-	Pornhub string `json:"pornhub"`
+	Pornhub  string `json:"pornhub"`
+	Xhamster string `json:"xhamster"`
+	Beeg     string `json:"beeg"`
 }
 
 type olDTO struct {
@@ -86,9 +89,13 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 	}
 	ffmpegOK := s.runner != nil && s.runner.Encoder().Check(context.Background()) == nil
 	return settingsDTO{
-		SyncIntervalHours:   syncHours,
-		GlobalProxy:         get("global_proxy", s.cfg.GlobalProxy),
-		PlatformProxy:       proxyDTO{Pornhub: get("proxy_pornhub", s.cfg.PlatformProxyFor("pornhub"))},
+		SyncIntervalHours: syncHours,
+		GlobalProxy:       get("global_proxy", s.cfg.GlobalProxy),
+		PlatformProxy: proxyDTO{
+			Pornhub:  get("proxy_pornhub", s.cfg.PlatformProxyFor("pornhub")),
+			Xhamster: get("proxy_xhamster", s.cfg.PlatformProxyFor("xhamster")),
+			Beeg:     get("proxy_beeg", s.cfg.PlatformProxyFor("beeg")),
+		},
 		NamingTemplate:      get("naming_template", library.DefaultTemplate),
 		DownloadConcurrency: conc,
 		DownloadRateKB:      rateKB,
@@ -140,6 +147,8 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.PlatformProxy != nil {
 		set("proxy_pornhub", strings.TrimSpace(p.PlatformProxy.Pornhub))
+		set("proxy_xhamster", strings.TrimSpace(p.PlatformProxy.Xhamster))
+		set("proxy_beeg", strings.TrimSpace(p.PlatformProxy.Beeg))
 	}
 	if p.NamingTemplate != nil {
 		set("naming_template", strings.TrimSpace(*p.NamingTemplate))

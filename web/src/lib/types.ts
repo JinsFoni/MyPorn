@@ -203,7 +203,7 @@ export interface Settings {
   syncIntervalHours: number;
   globalProxy: string;
   /** 按平台覆盖代理；空字符串 = 直连 */
-  platformProxy: { pornhub: string };
+  platformProxy: { pornhub: string; xhamster: string; beeg: string };
   namingTemplate: string;
   downloadConcurrency: number;
   /** 单任务下载限速（KB/s），0 = 不限 */
@@ -222,7 +222,7 @@ export interface Settings {
 export interface SettingsPatch {
   syncIntervalHours?: number;
   globalProxy?: string;
-  platformProxy?: { pornhub?: string };
+  platformProxy?: { pornhub?: string; xhamster?: string; beeg?: string };
   namingTemplate?: string;
   autoDownloadNew?: boolean;
   downloadConcurrency?: number;

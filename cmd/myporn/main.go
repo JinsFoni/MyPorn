@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/mario/myporn/internal/platform/beeg"
 	"github.com/mario/myporn/internal/platform/pornhub"
 	"github.com/mario/myporn/internal/platform/xcom"
+	"github.com/mario/myporn/internal/platform/xhamster"
 	"github.com/mario/myporn/internal/secret"
 	"github.com/mario/myporn/internal/store"
 	"github.com/mario/myporn/internal/webui"
@@ -158,6 +160,32 @@ func buildRegistry(cfg *config.Config, st *store.Store, box *secret.Box, log *sl
 	if err := st.SeedPlatform(ph.Key(), ph.Name(), baseURL); err != nil {
 		log.Warn("写入平台信息失败", "err", err)
 	}
+
+	xhBase, _ := st.GetSetting("xhamster_base_url")
+	if xhBase == "" {
+		xhBase = "https://xhamster.com"
+	}
+	xh, err := xhamster.New(xhBase, cfg.PlatformProxyFor("xhamster"))
+	if err != nil {
+		return nil, fmt.Errorf("初始化 xHamster 适配器: %w", err)
+	}
+	reg.Register(xh)
+	if err := st.SeedPlatform(xh.Key(), xh.Name(), xhBase); err != nil {
+		log.Warn("写入平台信息失败", "err", err)
+	}
+
+	bgBase, _ := st.GetSetting("beeg_base_url")
+	if bgBase == "" {
+		bgBase = "https://beeg.com"
+	}
+	bg, err := beeg.New(bgBase, cfg.PlatformProxyFor("beeg"))
+	if err != nil {
+		return nil, fmt.Errorf("初始化 beeg 适配器: %w", err)
+	}
+	reg.Register(bg)
+	if err := st.SeedPlatform(bg.Key(), bg.Name(), bgBase); err != nil {
+		log.Warn("写入平台信息失败", "err", err)
+	}
 	return reg, nil
 }
 
@@ -234,7 +262,7 @@ func runDebugParse(reg *platform.Registry, rawURL string) {
 			fmt.Println("抓取艺人失败:", err)
 			return
 		}
-		fmt.Printf("艺人: %q 头像=%s 视频数=%v 订阅数=%v\n", p.Name, p.AvatarURL, p.VideoCount, p.SubscriberCount)
+		fmt.Printf("艺人: %q 头像=%s 视频数=%s 订阅数=%s\n", p.Name, p.AvatarURL, countText(p.VideoCount), countText(p.SubscriberCount))
 		if p.Bio != "" {
 			fmt.Printf("简介: %s\n", strings.ReplaceAll(p.Bio, "\n", " / "))
 		}
@@ -299,6 +327,14 @@ func runBackfillMeta(st *store.Store, reg *platform.Registry, logger *slog.Logge
 		fmt.Printf("[%d] %s -> %d 个标签\n", v.ID, shortTitle(v.Title), len(meta.Tags))
 	}
 	fmt.Printf("补齐完成：检查 %d 部，写入 %d 部\n", total, filled)
+}
+
+// countText 把可空的计数字段打成可读文本（nil 显示 -）。
+func countText(n *int) string {
+	if n == nil {
+		return "-"
+	}
+	return strconv.Itoa(*n)
 }
 
 func shortTitle(s string) string {

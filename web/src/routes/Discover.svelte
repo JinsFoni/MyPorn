@@ -1,12 +1,14 @@
 <script lang="ts">
   import EmptyState from '../components/EmptyState.svelte';
+  import PlatformIcon from '../components/PlatformIcon.svelte';
   import Skeleton from '../components/Skeleton.svelte';
   import TopBar from '../components/TopBar.svelte';
   import { api, messageFor } from '../lib/api';
   import { imageUrl } from '../lib/img';
   import { formatCount } from '../lib/format';
   import { live } from '../lib/live.svelte';
-  import type { RemotePerformer, ResolvedPerformer } from '../lib/types';
+  import { platformLabel } from '../lib/platform';
+  import type { PlatformInfo, RemotePerformer, ResolvedPerformer } from '../lib/types';
 
   /** 仅 DEV：后端未就绪时的示例数据 */
   const MOCK_RESULTS: RemotePerformer[] = [
@@ -51,6 +53,9 @@
   let mockNote = $state('');
   let backfillLimit = $state(0);
   let platformHint = $state('');
+  /** 搜索用的平台：三个站各有各的艺人库，名字搜起来也更准。 */
+  let platform = $state('pornhub');
+  let platforms = $state<PlatformInfo[]>([]);
 
   const isUrl = $derived(/^https?:\/\//i.test(q.trim()));
 
@@ -70,7 +75,7 @@
   async function search(keyword: string): Promise<void> {
     searching = true;
     try {
-      const res = await api.searchPerformers({ q: keyword, platform: 'pornhub' });
+      const res = await api.searchPerformers({ q: keyword, platform });
       results = res.items;
       searched = true;
       mockNote = '';
@@ -130,13 +135,24 @@
     void (async () => {
       try {
         const list = await api.platforms();
-        const pornhub = list.find((p) => p.key === 'pornhub');
-        if (pornhub && pornhub.status === 'no_proxy') platformHint = 'Pornhub 没有配置代理，抓取可能失败。';
-        else if (pornhub && pornhub.status === 'error') platformHint = 'Pornhub 最近抓取出错，订阅可能失败。';
+        platforms = list;
       } catch {
-        /* 平台状态只是提示，拿不到就算了 */
+        /* 平台列表只是辅助，拿不到就只显示默认那几个 */
       }
     })();
+  });
+
+  // 只提示当前选中平台的状态：别的平台出问题不该在这里吓人。
+  $effect(() => {
+    const hit = platforms.find((p) => p.key === platform);
+    if (!hit) {
+      platformHint = '';
+      return;
+    }
+    const name = platformLabel(hit.key);
+    if (hit.status === 'no_proxy') platformHint = `${name} 没有配置代理，抓取可能失败。`;
+    else if (hit.status === 'error') platformHint = `${name} 最近抓取出错，订阅可能失败。`;
+    else platformHint = '';
   });
 </script>
 
@@ -163,6 +179,27 @@
       </button>
     </div>
   </form>
+
+  <div class="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="搜索平台">
+    {#each (platforms.length > 0 ? platforms : [{ key: 'pornhub' }, { key: 'xhamster' }, { key: 'beeg' }]) as p (p.key)}
+      <button
+        type="button"
+        class="chip h-8 gap-1.5 pl-1.5 pr-3 text-meta transition-colors {platform === p.key
+          ? 'bg-hi text-ink hover:bg-hi'
+          : 'hover:bg-raise'}"
+        aria-pressed={platform === p.key}
+        onclick={() => {
+          platform = p.key;
+          results = [];
+          searched = false;
+          resolved = null;
+        }}
+      >
+        <PlatformIcon platform={p.key} label={platformLabel(p.key)} size="xs" />
+        {platformLabel(p.key)}
+      </button>
+    {/each}
+  </div>
 
   <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
     <label class="flex items-center gap-2 text-meta text-dim">
@@ -205,8 +242,9 @@
         </div>
         <div class="min-w-0 flex-1">
           <p class="truncate text-ui font-medium text-fg">{resolved.name}</p>
-          <p class="mt-0.5 text-meta tabular-nums text-dim">
-            {formatCount(resolved.videoCount)} 部影片 · {resolved.platform === 'pornhub' ? 'Pornhub' : resolved.platform}
+          <p class="mt-0.5 flex items-center gap-1.5 text-meta tabular-nums text-dim">
+            {formatCount(resolved.videoCount)} 部影片
+            <PlatformIcon platform={resolved.platform} label={platformLabel(resolved.platform)} size="xs" />
           </p>
         </div>
         <button
@@ -246,7 +284,8 @@
           <div class="min-w-0 flex-1">
             <p class="truncate text-ui font-medium text-fg/90">{item.name}</p>
             <p class="mt-0.5 text-meta tabular-nums text-dim">
-              {formatCount(item.videoCount)} 部影片 · {formatCount(item.subscriberCount)} 关注
+              {formatCount(item.videoCount)} 部影片{#if item.subscriberCount !== null}
+                · {formatCount(item.subscriberCount)} 关注{/if}
             </p>
           </div>
           {#if item.subscribedId !== null}
@@ -270,7 +309,7 @@
   {:else if !searched && !resolved}
     <EmptyState
       title="搜艺人，或者直接贴链接"
-      hint="输入名字走站内搜索；粘贴 Pornhub 艺人主页链接可直接解析并订阅。只做艺人搜索，不含影片与分类浏览。"
+      hint="输入名字按所选平台搜索（名字要写全）；粘贴艺人主页链接可直接解析并订阅。只做艺人搜索，不含影片与分类浏览。"
       icon="search"
     />
   {:else if searched}
