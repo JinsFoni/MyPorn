@@ -250,7 +250,12 @@ POST   /api/yt/channels/{id}/download-unseen  {libraryId} → 整频道批量入
 GET    /api/manage/youtube                    管理页总览
 GET    /api/yt/health                         yt-dlp 路径 / 版本 / 是否过期 / ffmpeg 可用
 PUT    /api/settings                          + platformProxy.youtube / yt_* 五项
+GET    /api/yt/videos/{id}/stream             站内播放：解析结果 + 画质清单（§14）
+GET    /api/yt/videos/{id}/stream.m3u8[?q=]   改写后的单变体 master
+GET    /api/yt/seg/{sid}/{n}                  会话取物口（子清单 / 分片）
 ```
+
+上面三条是 §14 后补的「站内播放」口子，细节见 `docs/API.md` C19。
 
 错误码沿用 `docs/API.md` 那张表：`needs_auth` / `rate_limited`（带 `resetAt`）/ `blocked`（不带）/ `stale_parser` / `not_found`。
 
@@ -259,7 +264,7 @@ PUT    /api/settings                          + platformProxy.youtube / yt_* 五
 1. 贴 `@handle`、`/channel/UC…`、`watch?v=…` 三种链接都能加成频道，10 秒内出频道信息与最近 15 条
 2. 深度回填跑完（200 条 / 一个频道）**≤ 15 秒**，墙上出现带**时长**角标的卡片
 3. 6h 后自动抓到新视频，侧边栏未看角标 +1，打开页面即清
-4. 点卡片能站内播；断网时给「在 YouTube 打开」，不是白屏
+4. 点卡片能站内播（服务端 HLS，最高画质到 4K）；断网时给「在 YouTube 打开」，不是白屏
 5. 隐私模式下封面糊掉（与影片卡片一致）
 6. 下载单个视频 → `ffprobe` 确认 **`av1` 视频流 + `aac` 音频流在同一个 mp4 里**、无重新编码痕迹（码流与源一致）、体积与源相近
 7. 下载完成后：下载记录出现、影片详情页能播、`{库}/YouTube/{频道}/{片名}/` 下有 mp4 + nfo + 海报，Emby 能刮到标题与频道
@@ -338,7 +343,7 @@ https://i.ytimg.com/vi/<id>/maxresdefault.jpg → 200 image/jpeg 271KB
 | 首次回填 200 条上限 | 老频道历史远多于此 | 可配；管理页提供「再拉一批」（改 `--playlist-start` 续接） |
 | AV1 只有视频轨 | 必须封装一次 | 已是既定方案；`-c copy` 不损画质，产物单 mp4 兼容 Chrome / Firefox / Safari 17+ / Emby |
 | 高分辨率体积 | 8K AV1 90 秒就有 358 MB（实测），整频道批量下载很容易把盘吃满 | 不设高度上限（用户要「最高画质」）；`CheckSpace` 兜底 + 只做手动/整频道批量，不做全自动 |
-| 嵌播依赖出站 | 断网就是黑框 | 卡片始终保留「在 YouTube 打开」 |
+| 站内播放依赖出口 | HLS 分片要服务端去 googlevideo 拉，断网/代理挂了就是黑框 | 弹窗里留「重试」与「改用 YouTube 播放器」两条退路，卡片始终保留「在 YouTube 打开」 |
 | 没有 adapter 的 platform 进「关注」 | 刷新 / 在线播放 / 重下三条路径都可能踩空 | `reg.Get` 失败按「只有本地文件」降级，补单测 |
 | 法律 / 条款 | 下载 YouTube 内容与 ToS 冲突 | 只做用户在自己机器上的自选行为，不做分发；默认手动下载，不自动批量 |
 
@@ -358,8 +363,88 @@ https://i.ytimg.com/vi/<id>/maxresdefault.jpg → 200 image/jpeg 271KB
 | 未读数 | `yt_videos.seen` + `stats.unseen`，侧边栏角标复用 `live.ytUnseen` | 与动态页同一套手感 |
 | 下载页 | 混入 `yt_download`；`target_id` 用 `videos.id` | 用户在「下载」页应该看到同一件事 |
 | 完成后进度 | `FinishJob` 落库时把进度补成 100 | 最后一次 `Progress` 常被 800ms 节流吞掉，否则页面出现「完成 · 92.0%」 |
-| 隐私模式 | 弹窗里不嵌 iframe，只放封面 + 提示 | 一嵌就等于让浏览器直连 YouTube 拉整段视频 |
+| 隐私模式 | 弹窗里默认走**站内播放**（同源 HLS，浏览器不直连 YouTube）；只有解析失败时的「改用 YouTube 播放器」兜底按钮在隐私模式下隐藏 | §14 之后站内播放本身就是隐私友好的：一嵌 iframe 就等于让浏览器直连 YouTube 拉整段视频 |
 | 详情页播放 | **新增本地播放**：`GET /api/videos/{id}/file`（ServeFile，支持 Range），`/playback` 把本地档排第一并作默认档 | 下完点开详情页原来是 `unsupported_platform`——没有 adapter 就没有播放地址，这是 §6.3 预警过的那条路，实测确实踩到了 |
 | 详情页下载 | `POST /api/videos/{id}/download` 在没有 adapter 时用 `platform_video_id` 反查 `yt_videos`，落到 `yt_download` | 否则详情页那个「下载到本地库」按钮点了就报错 |
 | 取消 / 暂停 | 下载期间每秒查一次取消标志；`Download` 先 `cmd.Wait()` 再收管道（`WaitDelay=3s`） | 原来点了取消要等整段下完：yt-dlp 调起来的 ffmpeg 也攥着管道，只等 EOF 会一直挂着（实测 60 秒） |
 | 已看语义 | 点开一条视频才标已看（另有「全部标为已看」）；**不会因为打开页面就全清** | 照片墙那种「打开即清」对视频墙不成立：200 条历史没人会一口气看完 |
+
+## 14. 站内在线播放（2026-10-28 后补的一条线）
+
+### 14.1 起因：iframe 会拒播
+
+M6 上线时弹窗里放的是 `https://www.youtube-nocookie.com/embed/<id>`。实测发现**一批版权音乐视频
+在嵌入里直接被拒**，显示「此视频不能观看 / この動画は再生できません」：
+
+| 视频 | iframe 嵌入 | 直接打开 watch 页 |
+|---|---|---|
+| `s8OtOH_Vfa0`（T-Series《Ek Onkar》） | ❌ 此视频不能观看 | ✅ 正常 |
+| 多条 T-Series 官方 MV | ❌ 同上 | ✅ 正常 |
+| `lTRiuFIWV54`（Lofi Girl 直播录像） | ✅ | ✅ |
+| `jNQXAC9IVRw`（Me at the zoo） | ✅ | ✅ |
+
+排查结论（写下来省得以后再查一遍）：
+
+- **不是本应用的锅**：用一张裸 HTML 页面（不含任何本项目代码）嵌同一个 id，一样被拒。
+- `oEmbed` 接口对所有样本都返回 200，说明**不是上传者关闭了嵌入**——是 YouTube 按内容/版权方策略拒绝嵌播。
+- `file://` 下嵌会报 **error 153**（缺 Referer）；`http://127.0.0.1:…` 下就正常，说明 loopback Referer 是被接受的。
+  所以「起个本地页面验证一下」这件事是可行的，别被 153 误导。
+
+于是决定不再依赖 iframe：**由服务端解析 HLS 并代理，浏览器只跟本机说话**。
+
+### 14.2 做法：不碰 `streamingData`，走 yt-dlp 给的 HLS
+
+§11 已经记录过：观看页的 `streamingData` 里没有混流文件、只有 av01 纯视频轨，自己拼 DASH 太脆。
+这次换一条路——`yt-dlp -j` 的输出里本来就有 HLS 清单（`formats[].protocol == "m3u8_native"`，
+`manifest_url` 就是签名过的 `hls_variant` master，寿命约 6 小时、绑出口 IP）。于是：
+
+1. `internal/ytsub.ResolveStream` 跑一次 `yt-dlp -j --no-playlist`（**故意不带 `-f`**：这里要的是清单，
+   不是可下载格式），从 `formats[]` 里挑第一个有 `manifest_url` 的，顺带从地址里解析出 `expire=`。
+2. `internal/ytstream.Manager` 做「地址簿 + 解析缓存」：按 `videoId` 缓存 30 分钟（或被签名寿命截断），
+   每次播放开一个 **Session**，把上游签名地址登记成 `序号 → 地址`，对外只发 `/api/yt/seg/{sid}/{n}`。
+3. `internal/hls.ParseMaster` 解析出变体与音轨，`PickVariant` 选最高一档、`AudioFor` 找到配套音轨。
+4. `internal/httpapi` 把 master 改写成**单变体**清单（顺手把 `#EXT-X-MEDIA` 音轨搬进来），
+   子清单再改写一层，分片走既有的 `proxyMedia`（Range 透传、按平台补 Referer / UA / 代理）。
+
+浏览器全程只看到 `/api/yt/…`，**googlevideo 的签名链接一次都没出过服务端**。
+
+### 14.3 为什么只留一档画质
+
+用户要的是「最高画质」，那就别让 ABR 自己挑：
+
+- 清单里只放一个变体 ⇒ hls.js 没有第二档可选，不会在网络抖动时把画面从 4K 掉到 480p。
+- 手动降档仍然支持（播放器里的「画质」菜单 → `/stream.m3u8?q=720`），菜单里的档位就是 master 里
+  全部变体的高度去重（2160p / 1440p / 1080p / 720p / 480p / 360p / 240p / 144p），带 `VP9 · 18.7 Mbps`
+  这种编码与码率提示。
+- 带宽是免费的：本机 / 局域网播放，4K 也就 18 Mbps。
+
+### 14.4 实测数据（2026-10-28，本机直连）
+
+| 项 | 结果 |
+|---|---|
+| 解析（`yt-dlp -j`） | 4~5 秒，YouTube 侧缓存后 30 分钟内不再付这个成本 |
+| master 清单 | 24 KB，`hls_variant`，含 8 档视频 + 2 组音轨（233=Opus / 234=AAC） |
+| 子清单 | 877 KB / 1369 行，分片地址是 `rr1---sn-….googlevideo.com/videoplayback/…` 的绝对地址 |
+| 分片 | 200，`Content-Type` 有时是 `application/octet-stream`；**Range 被忽略**，永远整段返回 |
+| 浏览器实播 | Chrome 起播 `readyState=4`、`videoWidth=3840`、`currentTime` 秒级推进，全程只有 `/api/yt/seg/…` 请求 |
+| 切画质 | 点 720p → 新请求 `?q=720` → `videoWidth=1280`，播放不中断 |
+| 隐私模式 | 同样能播（同源，不触发任何 YouTube 域名请求） |
+
+### 14.5 失败语义
+
+| 情况 | 表现 | 文案 / 处理 |
+|---|---|---|
+| 没有 yt-dlp | `409 no_ytdlp` | 指向「设置 → YouTube 路径」 |
+| 这条没有 HLS 清单（直播 / 会员专享 / 分区限制） | `502 upstream` | 「这条视频没有可用的 HLS 清单（直播/会员专属/分区限制时会出现）」 |
+| 会话过期（关掉页面放了几小时再回来） | 分片 `410 session_expired` | 前端「重试」会重新解析一次，不用刷新页面 |
+| 上游分片 403（签名过期） | 分片非 2xx → hls.js 报错 | 同上，走「重试」重新开一个会话 |
+| 任何播放失败 | 播放器覆盖层 | 「重试」+「改用 YouTube 播放器」（隐私模式下只留「重试」） |
+
+`embedUrl` 仍然留在 C8 的响应里，就是给这个兜底用的。
+
+### 14.6 已知限制
+
+- **直播**：`is_live` 的条目理论上也能播（HLS），但清单会滚动，会话里的序号会一直增长；
+  实测只验了点播，直播没验。
+- 4K VP9 在软件解码的老机器上会卡——这是本地解码能力问题，不是链路问题，手动降到 1080p 即可。
+- 后台标签页播放会被浏览器的节能策略降频（与本应用无关）。

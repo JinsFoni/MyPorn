@@ -14,13 +14,16 @@
   import EmptyState from '../components/EmptyState.svelte';
   import YtCard from '../components/YtCard.svelte';
   import SocialTabs from '../components/SocialTabs.svelte';
+  import VideoPlayer from '../components/VideoPlayer.svelte';
+  import VideoLoading from '../components/VideoLoading.svelte';
   import { api, messageFor } from '../lib/api';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
   import { privacy } from '../lib/privacy.svelte';
   import { ui } from '../lib/ui.svelte';
-  import { formatCount, formatDateTime, relativeTime } from '../lib/format';
-  import type { YtChannel, YtHealth, YtResolve, YtVideo } from '../lib/types';
+  import { formatBandwidth, formatCount, formatDateTime, relativeTime } from '../lib/format';
+  import { HLS_TYPE, codecFamily, type QualityOption } from '../lib/player';
+  import type { YtChannel, YtHealth, YtResolve, YtStreamInfo, YtVideo } from '../lib/types';
 
   type Mode = 'all' | 'unseen' | 'saved';
 
@@ -53,6 +56,21 @@
   let addBusy = $state(false);
   let addError = $state('');
   let preview = $state<YtResolve | null>(null);
+
+  // ---- 站内播放 ----
+  // 不走 YouTube 的 iframe：实测一批版权音乐视频在嵌入里直接被拒播（见 handlers_ytstream.go 顶部）。
+  // 这里放的是后端代理出来的 HLS，画质能到 4K，也没有广告。
+  let stream = $state<YtStreamInfo | null>(null);
+  let streamLoading = $state(false);
+  let streamError = $state('');
+  let playError = $state('');
+  /** 选中的画质高度；null = 最高 */
+  let streamHeight = $state<number | null>(null);
+  let selectedQualityId = $state<string | null>(null);
+  /** 解析失败时的兜底：改用 YouTube 内嵌播放器（隐私模式下不给这个选项） */
+  let useEmbed = $state(false);
+  /** 重试用：变一下就重建播放器 */
+  let streamAttempt = $state(0);
 
   // ---- 正在下载的条目（按钮转圈） ----
   let downloading = $state<Set<number>>(new Set());
@@ -171,9 +189,96 @@
   function openDetail(video: YtVideo): void {
     detail = video;
     detailOpen = true;
+    stream = null;
+    streamError = '';
+    playError = '';
+    useEmbed = false;
+    streamHeight = null;
+    selectedQualityId = null;
     if (!video.seen) void markSeen([video.id]);
     // 深度回填来的条目没有发布时间：点开时单独补一条（4 秒），不批量拉
     if (!video.dateKnown && health?.found) void fillMeta(video);
+    void loadStream(video);
+  }
+
+  /** 解析播放地址（后端跑一次 yt-dlp，结果缓存半小时，切画质不会再解析）。 */
+  async function loadStream(video: YtVideo): Promise<void> {
+    streamLoading = true;
+    streamError = '';
+    playError = '';
+    try {
+      // hls.js 是单独一个 chunk：只有真要放视频时才下载
+      await import('@videojs/html/media/hlsjs-video');
+      stream = await api.ytStream(video.id);
+      selectedQualityId = qualityIdFor(stream, null);
+    } catch (err) {
+      streamError = messageFor(err);
+    } finally {
+      streamLoading = false;
+    }
+  }
+
+  /** 画质 id：用「高度p」；null 表示最高那档。 */
+  function qualityIdFor(info: YtStreamInfo | null, height: number | null): string | null {
+    if (!info || info.qualities.length === 0) return null;
+    const h = height ?? info.default;
+    return `${h}p`;
+  }
+
+  /** 当前片源地址：切画质就是换 ?q=。 */
+  const streamSrc = $derived(
+    stream ? (streamHeight ? `${stream.src}?q=${streamHeight}` : stream.src) : '',
+  );
+
+  const qualityOptions = $derived<QualityOption[]>(
+    (stream?.qualities ?? []).map((q) => ({
+      id: q.label,
+      label: q.label,
+      hint: [codecLabel(q.codecs), q.bandwidth > 0 ? formatBandwidth(q.bandwidth) : '']
+        .filter((part) => part !== '')
+        .join(' · '),
+    })),
+  );
+
+  function codecLabel(codecs: string): string {
+    switch (codecFamily(codecs)) {
+      case 'av1':
+        return 'AV1';
+      case 'hevc':
+        return 'HEVC';
+      case 'vp9':
+        return 'VP9';
+      case 'avc':
+        return 'H.264';
+      default:
+        return '';
+    }
+  }
+
+  function applyQuality(id: string): void {
+    const height = Number.parseInt(id, 10);
+    streamHeight = Number.isFinite(height) && height > 0 ? height : null;
+    selectedQualityId = id;
+    playError = '';
+  }
+
+  function retryStream(): void {
+    playError = '';
+    // 重建播放器并重新要一份清单：上游签名过期（会话 410/分片 403）是这里最常见的失败，
+    // 光重挂同一个地址没用，得让后端重新解析、重新开一个会话。
+    streamAttempt += 1;
+    stream = null;
+    streamError = '';
+    if (detail) void loadStream(detail);
+  }
+
+  function switchToEmbed(): void {
+    useEmbed = true;
+    playError = '';
+  }
+
+  function onStreamFailed(message: string): void {
+    playError = message === '' ? '站内播放失败，请重试。' : `站内播放失败（${message}）`;
   }
 
   function closeDetail(): void {
@@ -462,17 +567,9 @@
         </button>
       </div>
 
-      <!-- 隐私模式下不嵌 iframe：一嵌就等于让浏览器直连 YouTube 拉整段视频 -->
-      {#if privacy.on}
-        <div class="relative mt-3 overflow-hidden rounded-xl bg-panel">
-          {#if v.thumbUrl}
-            <img src={imageUrl(v.thumbUrl, 960) ?? ''} alt="" class="aspect-video w-full object-cover opacity-70" />
-          {/if}
-          <div class="absolute inset-0 grid place-items-center px-6 text-center">
-            <p class="text-meta text-muted">隐私模式下不内嵌播放器。</p>
-          </div>
-        </div>
-      {:else}
+      <!-- 播放器：默认走服务端出的 HLS（画质到 4K、无广告、隐私模式下也能看）。
+           内嵌 iframe 只在解析失败时当兜底，隐私模式下连这个兜底也不给。 -->
+      {#if useEmbed}
         <iframe
           class="mt-3 aspect-video w-full rounded-xl bg-ink"
           src={v.embedUrl}
@@ -480,6 +577,62 @@
           allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen"
           allowfullscreen
         ></iframe>
+      {:else if stream}
+        {#key streamAttempt}
+          <div class="mt-3 overflow-hidden rounded-xl bg-black">
+            <VideoPlayer
+              src={streamSrc}
+              type={HLS_TYPE}
+              engine="hls"
+              poster={v.posterUrl || v.thumbUrl}
+              title={v.title}
+              videoKey={v.id}
+              qualities={qualityOptions}
+              selectedQuality={selectedQualityId}
+              onSelectQuality={applyQuality}
+              onFailed={onStreamFailed}
+            >
+              {#snippet overlay()}
+                {#if playError}
+                  <div
+                    class="pointer-events-auto absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center"
+                  >
+                    <p class="max-w-md text-ui text-fg/90">{playError}</p>
+                    <div class="flex flex-wrap items-center justify-center gap-2">
+                      <button type="button" class="btn" onclick={retryStream}>重试</button>
+                      {#if !privacy.on}
+                        <button type="button" class="btn btn-primary" onclick={switchToEmbed}>
+                          改用 YouTube 播放器
+                        </button>
+                      {/if}
+                    </div>
+                  </div>
+                {/if}
+              {/snippet}
+            </VideoPlayer>
+          </div>
+        {/key}
+      {:else}
+        <div class="relative mt-3 aspect-video w-full overflow-hidden rounded-xl bg-black">
+          {#if streamLoading}
+            <VideoLoading poster={v.posterUrl || v.thumbUrl} label="正在解析最高画质" />
+          {/if}
+          {#if streamError}
+            <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+              <p class="max-w-md text-ui text-fg/90">{streamError}</p>
+              <div class="flex flex-wrap items-center justify-center gap-2">
+                <button type="button" class="btn" onclick={() => void loadStream(v)}>重新解析</button>
+                {#if !privacy.on}
+                  <button type="button" class="btn btn-primary" onclick={switchToEmbed}>改用 YouTube 播放器</button>
+                {/if}
+              </div>
+            </div>
+          {:else if !streamLoading}
+            <div class="absolute inset-0 grid place-items-center px-6 text-center">
+              <p class="text-meta text-muted">没有可播的地址。</p>
+            </div>
+          {/if}
+        </div>
       {/if}
 
       <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">

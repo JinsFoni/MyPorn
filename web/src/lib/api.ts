@@ -36,6 +36,7 @@ import type {
   YtHealth,
   YtManageResponse,
   YtResolve,
+  YtStreamInfo,
   YtVideo,
   YtVideosPage,
   VideoDetail,
@@ -476,6 +477,10 @@ export const api = {
       method: 'POST',
       body: { saved },
     });
+  },
+  /** 站内在线播放：解析上游 HLS 清单（后端跑一次 yt-dlp，结果缓存半小时） */
+  ytStream(videoId: number | string): Promise<YtStreamInfo> {
+    return request<YtStreamInfo>(`/api/yt/videos/${id(videoId)}/stream`);
   },
   /** yt-dlp 能不能用、版本多新（「过期」是最常见的失败原因） */
   ytHealth(): Promise<YtHealth> {

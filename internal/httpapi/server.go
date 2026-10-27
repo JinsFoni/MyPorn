@@ -2,6 +2,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -23,35 +24,57 @@ import (
 	"github.com/mario/myporn/internal/secret"
 	"github.com/mario/myporn/internal/social"
 	"github.com/mario/myporn/internal/store"
+	"github.com/mario/myporn/internal/ytstream"
 )
 
 type Server struct {
-	cfg     *config.Config
-	st      *store.Store
-	reg     *platform.Registry
-	social  *social.Registry   // 社交动态（M5）适配器
-	px      *proxying.Resolver // 代理解析器：设置里的代理改完立刻生效
-	hub     *events.Hub
-	runner  *jobs.Runner
-	box     *secret.Box
-	log     *slog.Logger
-	static  fs.FS
-	images  *imgcache.Service // 图片缓存（与同步任务共用同一份磁盘缓存）
-	limiter *loginLimiter
-	started time.Time
-	clients map[string]*http.Client // 平台出网客户端（图片代理 / 串流共用）
-	mu      sync.Mutex
+	cfg    *config.Config
+	st     *store.Store
+	reg    *platform.Registry
+	social *social.Registry   // 社交动态（M5）适配器
+	px     *proxying.Resolver // 代理解析器：设置里的代理改完立刻生效
+	hub    *events.Hub
+	runner *jobs.Runner
+	box    *secret.Box
+	log    *slog.Logger
+	static fs.FS
+	images *imgcache.Service // 图片缓存（与同步任务共用同一份磁盘缓存）
+	// ytStream 是 YouTube「站内播放」的地址簿与解析缓存（M6 补的那条线）。
+	ytStream *ytstream.Manager
+	limiter  *loginLimiter
+	started  time.Time
+	clients  map[string]*http.Client // 平台出网客户端（图片代理 / 串流共用）
+	mu       sync.Mutex
 }
 
 func New(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg *social.Registry,
 	hub *events.Hub, runner *jobs.Runner, box *secret.Box, log *slog.Logger, static fs.FS,
 	images *imgcache.Service) *Server {
-	return &Server{
+	s := &Server{
 		cfg: cfg, st: st, reg: reg, social: socialReg, hub: hub, runner: runner, box: box, log: log,
 		px:     proxying.New(st, cfg),
 		static: static, images: images, limiter: newLoginLimiter(), started: time.Now(),
 		clients: map[string]*http.Client{},
 	}
+	// 解析器现取 yt-dlp：设置页换完路径，下一个请求就用新的。
+	s.ytStream = ytstream.NewManager(func(ctx context.Context, videoID string) (ytstream.Upstream, error) {
+		dlp := s.ytDlp()
+		if dlp == nil || !dlp.Available() {
+			return ytstream.Upstream{}, social.StaleParser("没有找到 yt-dlp：站内播放依赖它解析清单，去设置 → YouTube 里填路径")
+		}
+		info, err := dlp.ResolveStream(ctx, videoID)
+		if err != nil {
+			return ytstream.Upstream{}, err
+		}
+		return ytstream.Upstream{
+			VideoID:     info.VideoID,
+			Title:       info.Title,
+			DurationSec: info.DurationSec,
+			MasterURL:   info.MasterURL,
+			ExpiresAt:   info.ExpiresAt,
+		}, nil
+	}, log)
+	return s
 }
 
 // platformClient 取某个平台出网用的客户端。
@@ -172,6 +195,10 @@ func (s *Server) Routes() http.Handler {
 			pr.Post("/yt/videos/{id}/save", s.handleYtSave)
 			pr.Post("/yt/videos/{id}/refresh", s.handleYtRefresh)
 			pr.Post("/yt/videos/{id}/download", s.handleYtDownload)
+			// 站内在线播放：清单（改写成会话地址）+ 画质清单 + 会话取物口。
+			pr.Get("/yt/videos/{id}/stream", s.handleYtStreamInfo)
+			pr.Get("/yt/videos/{id}/stream.m3u8", s.handleYtStreamMaster)
+			pr.Get("/yt/seg/{sid}/{n}", s.handleYtStreamSeg)
 			pr.Get("/yt/health", s.handleYtHealth)
 			pr.Get("/manage/youtube", s.handleManageYt)
 
@@ -200,6 +227,10 @@ func isLongLived(path string) bool {
 	}
 	// 本地文件下发是整片传输，一部 4K 片子看两小时也可能一直连着。
 	if strings.HasSuffix(path, "/file") && strings.HasPrefix(path, "/api/videos/") {
+		return true
+	}
+	// YouTube 站内播放的分片：单片几秒，但接着一个 CDN 慢慢吐的时候也可能超 60s。
+	if strings.HasPrefix(path, "/api/yt/seg/") {
 		return true
 	}
 	return false

@@ -20,6 +20,9 @@ var streamHostSuffixes = []string{
 	"pornhub.com", "phncdn.com",
 	"xhcdn.com", "xhamster.com", "xhamster.desi", "xhwebsite.com",
 	"beeg.com", "beeg.porn",
+	// YouTube 的 HLS（清单 + 分片）都在 googlevideo 上。地址是签名且绑定出口 IP 的，
+	// 只有本进程能取——浏览器拿到的永远是 /api/yt/seg/... 这种站内地址。
+	"googlevideo.com",
 }
 
 func streamHostAllowed(host string) bool {
@@ -45,11 +48,20 @@ func streamURL(platformKey, raw string) string {
 	return "/api/stream?" + q.Encode()
 }
 
+// refMapper 把上游地址改写成站内地址。nil 表示用 /api/stream?u= 这套通用包装，
+// YouTube 那边换成播放会话的 /api/yt/seg/{sid}/{n}（见 handlers_ytstream.go）。
+type refMapper func(abs string) string
+
 // handleStream 代理播放地址：透传 Range 以满足拖动进度条，
 // 顺带补上平台 Referer/UA（Pornhub CDN 没有 Referer 直接 404）。
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimSpace(r.URL.Query().Get("u"))
-	platformKey := r.URL.Query().Get("p")
+	s.proxyMedia(w, r, raw, r.URL.Query().Get("p"), nil)
+}
+
+// proxyMedia 是流代理的本体：校验地址 → 带上头去取 → 清单就地改写、媒体原样透传。
+// mapRef 决定改写后的地址长什么样（nil = /api/stream 的通用包装）。
+func (s *Server) proxyMedia(w http.ResponseWriter, r *http.Request, raw, platformKey string, mapRef refMapper) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !streamHostAllowed(u.Hostname()) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "非法的播放地址")
@@ -86,7 +98,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	ct := resp.Header.Get("Content-Type")
 	if isHLSPlaylist(u, ct) {
-		s.serveRewrittenPlaylist(w, r, resp.Body, u, platformKey)
+		s.serveRewrittenPlaylist(w, r, resp.Body, u, platformKey, mapRef)
 		return
 	}
 
@@ -101,13 +113,15 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveRewrittenPlaylist 把 m3u8 里的分片/子清单地址改写成代理地址。
-func (s *Server) serveRewrittenPlaylist(w http.ResponseWriter, r *http.Request, body io.Reader, playlistURL *url.URL, platformKey string) {
-	data, err := io.ReadAll(io.LimitReader(body, 4<<20))
+func (s *Server) serveRewrittenPlaylist(w http.ResponseWriter, r *http.Request, body io.Reader,
+	playlistURL *url.URL, platformKey string, mapRef refMapper) {
+	// 一小时的片子分片表就有上千行，YouTube 的能到接近 1MB，留足余量。
+	data, err := io.ReadAll(io.LimitReader(body, 16<<20))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "resolve_failed", "读取清单失败")
 		return
 	}
-	out := rewritePlaylist(data, playlistURL, platformKey)
+	out := rewritePlaylist(data, playlistURL, platformKey, mapRef)
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "private, max-age=30")
 	w.WriteHeader(http.StatusOK)
@@ -115,7 +129,7 @@ func (s *Server) serveRewrittenPlaylist(w http.ResponseWriter, r *http.Request, 
 }
 
 // rewritePlaylist 处理相对地址与 URI="..." 属性。
-func rewritePlaylist(data []byte, base *url.URL, platformKey string) []byte {
+func rewritePlaylist(data []byte, base *url.URL, platformKey string, mapRef refMapper) []byte {
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -123,16 +137,16 @@ func rewritePlaylist(data []byte, base *url.URL, platformKey string) []byte {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "#") {
-			lines[i] = rewriteURIAttrs(line, base, platformKey)
+			lines[i] = rewriteURIAttrs(line, base, platformKey, mapRef)
 			continue
 		}
 		abs := resolveRef(base, trimmed)
-		lines[i] = streamURL(platformKey, abs.String())
+		lines[i] = mapStreamURL(platformKey, abs.String(), mapRef)
 	}
 	return []byte(strings.Join(lines, "\n"))
 }
 
-func rewriteURIAttrs(line string, base *url.URL, platformKey string) string {
+func rewriteURIAttrs(line string, base *url.URL, platformKey string, mapRef refMapper) string {
 	const marker = `URI="`
 	idx := strings.Index(line, marker)
 	for idx >= 0 {
@@ -143,8 +157,9 @@ func rewriteURIAttrs(line string, base *url.URL, platformKey string) string {
 		}
 		ref := line[start : start+end]
 		abs := resolveRef(base, ref)
-		line = line[:idx] + marker + streamURL(platformKey, abs.String()) + `"` + line[start+end+1:]
-		next := idx + len(marker) + len(streamURL(platformKey, abs.String())) + 1
+		mapped := mapStreamURL(platformKey, abs.String(), mapRef)
+		line = line[:idx] + marker + mapped + `"` + line[start+end+1:]
+		next := idx + len(marker) + len(mapped) + 1
 		more := strings.Index(line[next:], marker)
 		if more < 0 {
 			break
@@ -152,6 +167,14 @@ func rewriteURIAttrs(line string, base *url.URL, platformKey string) string {
 		idx = next + more
 	}
 	return line
+}
+
+// mapStreamURL 是改写规则的唯一分叉点：要么走通用 /api/stream，要么交给调用方给的映射。
+func mapStreamURL(platformKey, abs string, mapRef refMapper) string {
+	if mapRef != nil {
+		return mapRef(abs)
+	}
+	return streamURL(platformKey, abs)
 }
 
 // resolveRef 复用 hls.ResolveURL：签名参数要跟着相对地址一起带过去，

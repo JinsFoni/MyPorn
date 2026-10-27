@@ -765,3 +765,57 @@ GET /api/videos/{id}/file?libraryId=1
 
 它同时被算作「长连接」接口（`isLongLived`）：一部 8K 看两小时也一直连着，
 套上 60 秒超时中间件会在播放中途被掐断。
+
+### C19. YouTube 站内在线播放（服务端 HLS 代理）
+
+三个口子凑成一次播放。前端只认第一个和第三个数出来的地址，**永远不会拿到 googlevideo 的签名链接**。
+
+```
+GET /api/yt/videos/{id}/stream
+→ 200 {
+    "videoId": "s8OtOH_Vfa0",
+    "title": "Ek Onkar (Full Video)…",
+    "durationSec": 184,
+    "src": "/api/yt/videos/477/stream.m3u8",
+    "default": 2160,
+    "qualities": [
+      { "height": 2160, "label": "2160p", "bandwidth": 18679803, "codecs": "vp09.00.50.08" },
+      { "height": 1080, "label": "1080p", "bandwidth": 2399383,  "codecs": "avc1.640028" },
+      …
+    ],
+    "expiresAt": "2026-10-28T03:56:04Z"
+  }
+→ 409 no_ytdlp        没有 yt-dlp（站内播放靠它解析清单）
+→ 502 upstream        yt-dlp 解析失败 / 这条没有 HLS 清单
+→ 404 not_found       库里没有这条视频
+```
+
+解析一次 4~5 秒（跑一次 `yt-dlp -j`），结果在服务端缓存 **30 分钟**，或被上游签名寿命
+（`expire=`，实测约 6 小时）截断 —— 切画质、重开弹窗都不会重新解析。
+
+```
+GET /api/yt/videos/{id}/stream.m3u8[?q=高度]
+→ 200 application/vnd.apple.mpegurl   Cache-Control: private, max-age=10
+```
+
+返回的是**改写过的单变体 master**：只留一档画质（默认最高），把音频 rendition
+（`#EXT-X-MEDIA:TYPE=AUDIO`）一起搬进来，所有 URI 换成下面的会话地址。
+`?q=720` 这种手动降档也走这里——每次请求重新拉一次上游 master（20KB，几十毫秒）。
+
+```
+GET /api/yt/seg/{sid}/{n}
+→ 200 application/vnd.apple.mpegurl    这里放的是子清单（还会再改写一层）
+→ 200 video/mp4 | audio/mp4            真正的分片字节（Range 透传）
+→ 410 session_expired                  会话没了/过期了：前端重新解析一次即可
+```
+
+`{sid}` 是后端随机生成的会话号（16 字节 hex），`{n}` 是会话内自增序号。会话里存的是
+「序号 → 上游签名地址」，所以浏览器看到的分片地址不带签名、也不带 googlevideo 域名。
+同一个上游地址登记两次拿到同一个序号（清单被重拉时，播放器手里的旧地址还能用）。
+
+会话寿命跟着上游的 `expire` 走，另加 10 分钟宽限（播放器可能攥着上一版清单）；
+另有上限 64 个会话、满了按 FIFO 淘汰。`handleYtStreamSeg` 被算作长连接接口。
+
+**为什么不用 iframe**：一批版权音乐视频在 `youtube-nocookie.com/embed/…` 里直接显示
+「此视频不能观看」（用一张裸 HTML 页面复现过，跟本应用无关），而服务端代理出来能正常播。
+详情见 `docs/M6-YOUTUBE.md` §14。

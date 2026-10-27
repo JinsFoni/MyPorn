@@ -706,6 +706,30 @@ export interface YtVideo {
   channel: YtChannelBrief;
 }
 
+/** 站内播放的一档画质（后端从 HLS master 里折出来的） */
+export interface YtStreamQuality {
+  height: number;
+  /** 例如 1080p */
+  label: string;
+  bandwidth: number;
+  codecs: string;
+}
+
+/** 站内在线播放的解析结果：一个 HLS 地址 + 可选画质 */
+export interface YtStreamInfo {
+  videoId: string;
+  title: string;
+  durationSec: number;
+  /** 站内 master 清单地址（/api/yt/videos/{id}/stream.m3u8） */
+  src: string;
+  /** 按高度降序 */
+  qualities: YtStreamQuality[];
+  /** 默认档（最高） */
+  default: number;
+  /** 上游签名到期时间（RFC3339） */
+  expiresAt: string;
+}
+
 export interface YtVideosPage {
   items: YtVideo[];
   nextCursor?: string;

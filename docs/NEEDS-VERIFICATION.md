@@ -197,9 +197,18 @@ make backend           # 先编译
 | 限流 | 页面/RSS 之间固定 1200ms 间隔（`social.NewThrottle`）；429 按 `Retry-After`（1–3600 秒，缺省 15 分钟）冷却 | 批量同步时偶发 429 → 间隔调大或换出口 |
 | 取消语义 | 下载期间每秒查一次取消/暂停标志，`SIGINT` 给 yt-dlp（`.part` 留着续传），`WaitDelay=3s` 兜底 kill | 点了取消没反应 → 先看是不是又变成"只等管道 EOF"的写法：ffmpeg 这类孙进程攥着管道时，EOF 要等它们退出才来 |
 | 本地播放 | 下载完的影片走 `GET /api/videos/{id}/file`（`http.ServeFile`，206 Range），不再依赖平台解析 | 详情页黑屏/「平台未注册」→ 检查 `library_files.video_path` 是否还在磁盘上、是否在库根之内 |
+| 嵌播（iframe） | `youtube-nocookie.com/embed/<id>` 对**一批版权音乐视频直接拒播**（「此视频不能观看」），裸 HTML 页面也能复现，与本应用无关；`lTRiuFIWV54`、`jNQXAC9IVRw` 正常；`oEmbed` 全部 200（不是上传者关了嵌入） | 弹窗黑框/拒播 → 别看前端，直接拿 id 拼一张裸 HTML 试嵌；同时确认站内播放（下一条）是否可用 |
+| 站内播放（HLS 代理） | `yt-dlp -j` 的 `formats[]` 里有 `protocol=m3u8_native` + `manifest_url`（签名 `hls_variant`，寿命约 6 小时、**绑出口 IP**）；master 24 KB、子清单 877 KB/1369 行、分片 `Content-Type` 常是 `application/octet-stream` 且**忽略 Range**；实测 Chrome 4K 起播 `readyState=4`、`videoWidth=3840` | 全部报 `no_ytdlp`/`upstream` → 先看 `GET /api/yt/health` 的版本；单条报「没有可用的 HLS 清单」→ 该视频可能直播/会员/分区限制；分片 410 → 会话过期，前端「重试」会重新解析 |
+| 站内播放的音轨 | 视频变体与音轨在 master 里是**分开列**的（`AUDIO="233"`/`"234"`，233=Opus、234=AAC）；改写时必须把 `#EXT-X-MEDIA` 一起搬过去 | 画面有、声音没有 → 改写的 master 里丢了 `EXT-X-MEDIA` 或 `AUDIO="aud"` 没对上 |
+| 签名寿命 | 清单地址里的 `expire` 在**路径**里（`/api/manifest/hls_variant/expire/1793159341/…`），只有分片地址放进查询串；只读查询串会读不到寿命 | 每次播放都重跑一遍 yt-dlp（4 秒）→ `expireFromURL` 又只看 `Query()` 了 |
 
 真机验收（2026-10-28，直连）：添加 `UCq-Fj5jknLsUf-MWSy4_brA`（T-Series）→ 深度回填 200 条 6 秒 →
 RSS 同步补齐最新 15 条时间 → 单条 refresh 补回 `2026-09-30` →
 下载 8K（4320p）AV1 + Opus → `-c copy` 合轨 → 358 MB 落盘 `YouTube/<频道>/<标题>/`，
 poster 1000×1500 / thumb 1280×720 / fanart 1920×1080 / nfo（含 `uniqueid type="youtube"`）齐全，
 `GET /api/downloads` 能看到该任务与本地路径。
+
+站内播放验收（2026-10-28，真机 Chrome，`127.0.0.1:18081`）：点开 `s8OtOH_Vfa0` →
+后端 4.9 秒解析出 8 档画质（最高 2160p VP9 18.7 Mbps）→ 播放器以 3840×2160 起播、
+`readyState=4`、7 个分片请求全部指向 `/api/yt/seg/<会话>/<n>` → 画质菜单切 720p 后
+`videoWidth=1280` 且播放不中断 → 隐私模式下同样能播、页面里没有 iframe。
