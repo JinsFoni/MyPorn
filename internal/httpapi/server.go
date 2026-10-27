@@ -200,6 +200,8 @@ func (s *Server) Routes() http.Handler {
 			pr.Get("/yt/videos/{id}/stream.m3u8", s.handleYtStreamMaster)
 			pr.Get("/yt/seg/{sid}/{n}", s.handleYtStreamSeg)
 			pr.Get("/yt/health", s.handleYtHealth)
+			// 深链接 /youtube?v=<videoId> 用：墙上那一页未必包含这条
+			pr.Get("/yt/videos/lookup", s.handleYtVideoLookup)
 			pr.Get("/manage/youtube", s.handleManageYt)
 
 			pr.Get("/settings", s.handleGetSettings)

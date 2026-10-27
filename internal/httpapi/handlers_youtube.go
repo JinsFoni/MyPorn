@@ -9,6 +9,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -297,6 +298,29 @@ func (s *Server) handleYtSeen(w http.ResponseWriter, r *http.Request) {
 	}
 	n, _ := s.st.CountUnseenYtVideos()
 	writeJSON(w, http.StatusOK, map[string]any{"unseen": n})
+}
+
+// handleYtVideoLookup 按 YouTube 视频 id（不是行 id）取一条。
+//
+// 用途只有一个：站内播放页的深链接 `/youtube?v=<videoId>`。刷新或从别处贴进来时，
+// 墙上那一页（36 条、还可能带着频道筛选）未必包含这条，得能单取。
+func (s *Server) handleYtVideoLookup(w http.ResponseWriter, r *http.Request) {
+	videoID := strings.TrimSpace(r.URL.Query().Get("videoId"))
+	if videoID == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "缺 videoId")
+		return
+	}
+	row, err := s.st.GetYtVideoByVideoID(videoID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", "没有这条视频：可能没订阅它的频道")
+			return
+		}
+		s.log.Error("查 YouTube 视频失败", "videoId", videoID, "err", err)
+		writeErr(w, http.StatusInternalServerError, "internal", "查询失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.ytVideoDTO(row))
 }
 
 // handleYtRefresh 单条视频按需补全信息（发布时间 / 时长）。

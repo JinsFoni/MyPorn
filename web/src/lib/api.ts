@@ -478,6 +478,10 @@ export const api = {
       body: { saved },
     });
   },
+  /** 按 YouTube 视频 id 单取一条（深链接 /youtube?v=… 用：墙上那一页未必包含这条） */
+  ytVideoLookup(videoId: string): Promise<YtVideo> {
+    return request<YtVideo>(`/api/yt/videos/lookup?videoId=${encodeURIComponent(videoId)}`);
+  },
   /** 站内在线播放：解析上游 HLS 清单（后端跑一次 yt-dlp，结果缓存半小时） */
   ytStream(videoId: number | string): Promise<YtStreamInfo> {
     return request<YtStreamInfo>(`/api/yt/videos/${id(videoId)}/stream`);

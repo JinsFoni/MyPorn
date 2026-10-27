@@ -21,6 +21,7 @@
   import { live } from '../lib/live.svelte';
   import { privacy } from '../lib/privacy.svelte';
   import { ui } from '../lib/ui.svelte';
+  import { navigate, router, setPageTitle } from '../lib/router.svelte';
   import { formatBandwidth, formatCount, formatDateTime, relativeTime } from '../lib/format';
   import { HLS_TYPE, codecFamily, type QualityOption } from '../lib/player';
   import type { YtChannel, YtHealth, YtResolve, YtStreamInfo, YtVideo } from '../lib/types';
@@ -186,7 +187,46 @@
 
   // ---- 播放弹窗 ----
 
+  /**
+   * 弹窗的唯一开关是 URL：`/youtube?v=<videoId>`。
+   * 这样刷新、后退、把链接贴到另一台机器都能落到同一条视频上，地址栏也不再永远是 /youtube。
+   */
+  const wantVideoId = $derived(router.query.get('v') ?? '');
+
   function openDetail(video: YtVideo): void {
+    if (router.query.get('v') === video.videoId) return;
+    navigate(`/youtube?v=${encodeURIComponent(video.videoId)}`);
+  }
+
+  // URL 一变就同步弹窗：点卡片、浏览器后退、刷新、贴深链接走的是同一条路。
+  $effect(() => {
+    const videoId = wantVideoId;
+    if (videoId === '') {
+      if (detailOpen) hideDetail();
+      return;
+    }
+    if (detailOpen && detail?.videoId === videoId) return;
+    void openByVideoId(videoId);
+  });
+
+  /** 墙上已经有这条就直接用；深链接进来时墙上（36 条 + 筛选）可能没有，单取一次。 */
+  async function openByVideoId(videoId: string): Promise<void> {
+    let video = videos.find((item) => item.videoId === videoId) ?? null;
+    if (!video) {
+      try {
+        video = await api.ytVideoLookup(videoId);
+      } catch (err) {
+        live.toast(messageFor(err), 'error');
+        navigate('/youtube', { replace: true });
+        return;
+      }
+      // 等查询的这段时间用户可能已经退回去了，别再弹出来
+      if (router.query.get('v') !== videoId) return;
+    }
+    showDetail(video);
+  }
+
+  function showDetail(video: YtVideo): void {
     detail = video;
     detailOpen = true;
     stream = null;
@@ -195,10 +235,23 @@
     useEmbed = false;
     streamHeight = null;
     selectedQualityId = null;
+    setPageTitle(video.title);
     if (!video.seen) void markSeen([video.id]);
     // 深度回填来的条目没有发布时间：点开时单独补一条（4 秒），不批量拉
     if (!video.dateKnown && health?.found) void fillMeta(video);
     void loadStream(video);
+  }
+
+  async function copyLink(): Promise<void> {
+    const v = detail;
+    if (!v) return;
+    const url = `${window.location.origin}/youtube?v=${encodeURIComponent(v.videoId)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      live.toast('播放链接已复制', 'success');
+    } catch {
+      live.toast('复制失败，请手动复制地址栏', 'error');
+    }
   }
 
   /** 解析播放地址（后端跑一次 yt-dlp，结果缓存半小时，切画质不会再解析）。 */
@@ -282,7 +335,19 @@
   }
 
   function closeDetail(): void {
+    if (wantVideoId !== '') {
+      // 关弹窗＝把 ?v= 去掉；用 replace，免得后退又把它弹回来
+      navigate('/youtube', { replace: true });
+      return;
+    }
+    hideDetail();
+  }
+
+  function hideDetail(): void {
     detailOpen = false;
+    playError = '';
+    stream = null;
+    streamError = '';
   }
 
   async function fillMeta(video: YtVideo): Promise<void> {
@@ -679,6 +744,13 @@
           onclick={() => void toggleSave(v)}
         >
           {v.saved ? '取消收藏' : '收藏'}
+        </button>
+        <button
+          type="button"
+          class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
+          onclick={() => void copyLink()}
+        >
+          复制链接
         </button>
         <a
           href={v.url}

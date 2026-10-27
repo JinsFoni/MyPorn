@@ -819,3 +819,15 @@ GET /api/yt/seg/{sid}/{n}
 **为什么不用 iframe**：一批版权音乐视频在 `youtube-nocookie.com/embed/…` 里直接显示
 「此视频不能观看」（用一张裸 HTML 页面复现过，跟本应用无关），而服务端代理出来能正常播。
 详情见 `docs/M6-YOUTUBE.md` §14。
+
+### C20. `GET /api/yt/videos/lookup?videoId=<视频 id>`
+
+```
+→ 200 单条视频（结构与 C8 的 items[] 完全一致）
+→ 400 bad_request    缺 videoId
+→ 404 not_found      库里没有这条（可能没订阅它的频道）
+```
+
+站内播放页的深链接 `/youtube?v=<videoId>` 用：刷新、从别处贴链接进来时，
+墙上那一页（36 条 + 可能带频道筛选）未必包含这条，所以需要单取。`{videoId}` 是 YouTube 的
+字符串 id，不是 `yt_videos.id`。
