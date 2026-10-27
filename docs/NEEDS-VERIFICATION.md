@@ -195,6 +195,8 @@ make backend           # 先编译
 | 出口 IP | 抓页面被要求人机验证会回 403 → `blocked`（不设冷却，换 IP 后立刻重试即可）。设置 → 网络与代理 → YouTube 专用代理，保存即生效 | 一直都是 `blocked` → 该出口 IP/代理也脏 |
 | 封面尺寸 | `i.ytimg.com/vi/<id>/mqdefault.jpg` 是 320×180 的 16:9，**适合卡片**；下载入库时改用 `maxresdefault` 给 Emby 当 fanart，没有 maxres 的老视频会退回 mq | 卡片封面被裁成方图 → 没用 mqdefault 这一档 |
 | 限流 | 页面/RSS 之间固定 1200ms 间隔（`social.NewThrottle`）；429 按 `Retry-After`（1–3600 秒，缺省 15 分钟）冷却 | 批量同步时偶发 429 → 间隔调大或换出口 |
+| 取消语义 | 下载期间每秒查一次取消/暂停标志，`SIGINT` 给 yt-dlp（`.part` 留着续传），`WaitDelay=3s` 兜底 kill | 点了取消没反应 → 先看是不是又变成"只等管道 EOF"的写法：ffmpeg 这类孙进程攥着管道时，EOF 要等它们退出才来 |
+| 本地播放 | 下载完的影片走 `GET /api/videos/{id}/file`（`http.ServeFile`，206 Range），不再依赖平台解析 | 详情页黑屏/「平台未注册」→ 检查 `library_files.video_path` 是否还在磁盘上、是否在库根之内 |
 
 真机验收（2026-10-28，直连）：添加 `UCq-Fj5jknLsUf-MWSy4_brA`（T-Series）→ 深度回填 200 条 6 秒 →
 RSS 同步补齐最新 15 条时间 → 单条 refresh 补回 `2026-09-30` →

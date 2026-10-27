@@ -3,6 +3,8 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -159,6 +161,10 @@ func hasBandwidth(vs []model.Variant) bool {
 }
 
 // handlePlayback 解析（并缓存 5 分钟）最高画质的播放地址列表。
+//
+// 本地库里已有文件时，本地那一路排在第一位并作为默认档：用户明明下过了，
+// 再让他等平台 CDN 现成解析一遍没有意义（而且 YouTube 这类没有 adapter 的平台
+// 根本解析不出来，本地文件是唯一的播放方式）。
 func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	v, err := s.st.GetVideo(id)
@@ -167,29 +173,58 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	variants, meta, err := s.ensureVariants(r, v, false)
-	if err != nil {
-		if errors.Is(err, errUnsupportedPlatform) {
-			writeErr(w, http.StatusBadRequest, "unsupported_platform", "平台未注册")
-			return
-		}
-		writeErr(w, http.StatusBadGateway, "resolve_failed", "解析播放地址失败: "+err.Error())
-		return
-	}
-	_, fetchedAt, _ := s.st.GetVariants(id)
-	cacheValid := !fetchedAt.IsZero()
-
-	// 所有播放地址都改走 /api/stream：平台 CDN 会校验 Referer，
-	// 浏览器直接请求只会拿到 404，必须由服务端补上 Referer/UA 再转发。
-	out := make([]map[string]any, 0, len(variants))
+	out := make([]map[string]any, 0, 8)
 	defaultID := ""
 	proxyURL := ""
+	if lf := s.localPlayable(v); lf != nil {
+		defaultID = "local"
+		proxyURL = localFileURL(v.ID, lf.LibraryID)
+		out = append(out, map[string]any{
+			"id":        "local",
+			"height":    0,
+			"width":     0,
+			"bandwidth": 0,
+			"codec":     "",
+			"url":       proxyURL,
+			"hls":       false,
+			"isDefault": true,
+			"local":     true,
+			"libraryId": lf.LibraryID,
+			"fileName":  filepath.Base(lf.VideoPath),
+			"sizeBytes": lf.SizeBytes,
+		})
+	}
+
+	var variants []model.Variant
+	var meta *model.Video
+	var rerr error
+	// 平台没注册（YouTube）就别去碰 registry：那不是错误，只是没这条线。
+	if _, ok := s.reg.Get(v.Platform); ok {
+		variants, meta, rerr = s.ensureVariants(r, v, false)
+	}
+	switch {
+	case rerr != nil && errors.Is(rerr, errUnsupportedPlatform):
+		// 落到下面统一处理
+	case rerr != nil && len(out) == 0:
+		writeErr(w, http.StatusBadGateway, "resolve_failed", "解析播放地址失败: "+rerr.Error())
+		return
+	case rerr != nil:
+		s.log.Warn("本地有文件，线上解析失败就先播本地", "video", v.ID, "err", rerr)
+	}
+
+	if len(out) == 0 {
+		// 既没有本地文件，也没有能解析的平台：只有 YouTube 会走到这里。
+		writeErr(w, http.StatusBadRequest, "unsupported_platform", "这个平台没有在线播放通道，先下载到本地")
+		return
+	}
+
+	// 所有线上播放地址都改走 /api/stream：平台 CDN 会校验 Referer，
+	// 浏览器直接请求只会拿到 404，必须由服务端补上 Referer/UA 再转发。
 	for i, vv := range variants {
-		if i == 0 {
-			defaultID = vv.ID()
-		}
 		src := streamURL(v.Platform, vv.URL)
-		if i == 0 {
+		first := i == 0
+		if first && defaultID == "" {
+			defaultID = vv.ID()
 			proxyURL = src
 		}
 		out = append(out, map[string]any{
@@ -200,11 +235,12 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 			"codec":     vv.Codec,
 			"url":       src,
 			"hls":       strings.Contains(vv.URL, ".m3u8"),
-			"isDefault": i == 0,
+			"isDefault": first && defaultID == vv.ID(),
 		})
 	}
+
 	var expiresAt any
-	if cacheValid {
+	if _, fetchedAt, err := s.st.GetVariants(id); err == nil && !fetchedAt.IsZero() && len(variants) > 0 {
 		expiresAt = fetchedAt.Add(variantCacheTTL).Format(time.RFC3339)
 	}
 	// 标签跟着播放解析一起回来：详情页第一次打开就能显示，不用另抓一次页面。
@@ -220,4 +256,75 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 		"expiresAt":        expiresAt,
 		"tags":             tags,
 	})
+}
+
+// localFileURL 是本地文件的播放地址（支持 Range，浏览器能直接拖动进度条）。
+func localFileURL(videoID, libraryID int64) string {
+	return "/api/videos/" + strconv.FormatInt(videoID, 10) + "/file?libraryId=" + strconv.FormatInt(libraryID, 10)
+}
+
+// localPlayable 找这个影片在本机库里能直接播的文件。
+//
+// 只认视频扩展名：库里也可能存着照片（社交存图），那种东西喂给 <video> 只会黑屏。
+func (s *Server) localPlayable(v *model.Video) *model.LibraryFile {
+	files, err := s.st.ListLibraryFilesByVideo(v.ID)
+	if err != nil || len(files) == 0 {
+		return nil
+	}
+	for _, f := range files {
+		switch strings.ToLower(filepath.Ext(f.VideoPath)) {
+		case ".mp4", ".m4v", ".webm", ".mkv", ".mov":
+			if _, err := os.Stat(f.VideoPath); err == nil {
+				return f
+			}
+		}
+	}
+	return nil
+}
+
+// handleVideoFile 把本地库里的文件发给浏览器。
+//
+// 走 ServeFile 而不是自己读：Range / If-Range / 206 / Content-Length 它都处理好了，
+// 播放器拖动进度条全靠这个。
+func (s *Server) handleVideoFile(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "影片 id 不对")
+		return
+	}
+	libID := int64(queryInt(r, "libraryId", 0))
+
+	var lf *model.LibraryFile
+	if libID > 0 {
+		lf, err = s.st.GetLibraryFile(id, libID)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "not_found", "这个库里没有这部电影")
+			return
+		}
+	} else if files, err := s.st.ListLibraryFilesByVideo(id); err == nil && len(files) > 0 {
+		lf = files[0]
+	} else {
+		writeErr(w, http.StatusNotFound, "not_found", "本地没有这部电影")
+		return
+	}
+
+	abs := filepath.Clean(lf.VideoPath)
+	lib, err := s.st.GetLibrary(lf.LibraryID)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "库不存在")
+		return
+	}
+	// 落库路径理论上都来自我们自己，但这条接口是"按库根放行任意文件"，
+	// 万一库根被改小、或者记录被写脏，这里必须拦住，不能变成任意文件读取。
+	root := filepath.Clean(lib.RootPath)
+	if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
+		s.log.Warn("库文件路径越界，拒绝下发", "video", id, "path", abs, "root", root)
+		writeErr(w, http.StatusForbidden, "forbidden", "文件不在库目录内")
+		return
+	}
+	if st, err := os.Stat(abs); err != nil || st.IsDir() {
+		writeErr(w, http.StatusNotFound, "not_found", "文件已不在磁盘上")
+		return
+	}
+	http.ServeFile(w, r, abs)
 }

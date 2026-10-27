@@ -181,6 +181,11 @@ export interface PlaybackVariant {
   /** true = HLS 清单（走 hls.js），false = 直链 mp4（原生 video） */
   hls: boolean;
   isDefault: boolean;
+  /** true = 走本地库里已下载的文件（不经过平台，也不经过 /api/stream） */
+  local?: boolean;
+  libraryId?: number;
+  fileName?: string;
+  sizeBytes?: number;
 }
 
 export interface PlaybackInfo {

@@ -6,8 +6,8 @@ import "testing"
 // 媒体流则会被当场掐断——这两个路径必须始终被排除在外。
 func TestIsLongLived(t *testing.T) {
 	// 传进来的是 req.URL.Path，本来就不含查询串（/api/stream?id=3 这里就是 /api/stream）
-	yes := []string{"/api/stream", "/api/events"}
-	no := []string{"/api/videos", "/api/events/foo", "/api/streams", "/api/settings"}
+	yes := []string{"/api/stream", "/api/events", "/api/videos/12/file"}
+	no := []string{"/api/videos", "/api/events/foo", "/api/streams", "/api/settings", "/api/videos/12", "/api/videos/12/file/x"}
 	for _, p := range yes {
 		if !isLongLived(p) {
 			t.Errorf("%s 应当被当作长连接", p)

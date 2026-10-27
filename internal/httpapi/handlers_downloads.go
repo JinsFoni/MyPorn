@@ -168,6 +168,30 @@ func (s *Server) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// YouTube 这类"没有平台 adapter"的影片只有 yt-dlp 一条路：
+	// 从 videos.platform_video_id 反查 yt_videos，交给 yt_download，
+	// 否则详情页那个「下载到本地库」按钮点了就是一个 unsupported_platform 错误。
+	if _, ok := s.reg.Get(v.Platform); !ok {
+		ytRow, yerr := s.st.GetYtVideoByVideoID(v.PlatformVideoID)
+		if yerr != nil {
+			writeErr(w, http.StatusBadRequest, "unsupported_platform", "这个平台没有在线播放通道，只能从 YouTube 页下载")
+			return
+		}
+		jobID, jerr := s.runner.EnqueueYtDownload(ytRow.ID, libID, in.Overwrite)
+		if jerr != nil {
+			writeErr(w, http.StatusInternalServerError, "internal", jerr.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"skipped":   false,
+			"jobId":     jobID,
+			"libraryId": libID,
+			"videoId":   v.ID,
+			"title":     v.Title,
+		})
+		return
+	}
+
 	jobID, err := s.runner.EnqueueDownload(id, libID, in.Overwrite)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())

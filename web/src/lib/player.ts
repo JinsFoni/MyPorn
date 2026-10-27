@@ -140,11 +140,17 @@ function codecRankOf(codec: string): number {
   }
 }
 
-/** 按 (height, 编码偏好, bandwidth) 降序 */
+/**
+ * 按 (是否本地, height, 编码偏好, bandwidth) 降序。
+ * 本地文件永远排第一：下都下过了，没有理由再去连平台 CDN。
+ */
 export function sortVariantsDesc(variants: readonly PlaybackVariant[]): PlaybackVariant[] {
   return [...variants].sort(
     (a, b) =>
-      b.height - a.height || codecRankOf(a.codec) - codecRankOf(b.codec) || b.bandwidth - a.bandwidth,
+      Number(b.local === true) - Number(a.local === true) ||
+      b.height - a.height ||
+      codecRankOf(a.codec) - codecRankOf(b.codec) ||
+      b.bandwidth - a.bandwidth,
   );
 }
 
@@ -163,6 +169,7 @@ export function pickVariant(info: PlaybackInfo, preferredHeight: number | null =
 }
 
 export function variantLabel(variant: PlaybackVariant): string {
+  if (variant.local === true) return '本地';
   if (variant.height >= 2160) return '4K';
   return `${String(variant.height)}p`;
 }

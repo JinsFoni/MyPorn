@@ -496,6 +496,22 @@ func (s *Store) GetYtVideo(id int64) (*YtVideoRow, error) {
 	return r, nil
 }
 
+// GetYtVideoByVideoID 按 YouTube 视频 id（不是行 id）取一条。
+//
+// 详情页那边只有 videos.platform_video_id（字符串），要让"下载到本地库"按钮
+// 落到 yt_download 上就必须从字符串反查回来。
+func (s *Store) GetYtVideoByVideoID(videoID string) (*YtVideoRow, error) {
+	var rowID int64
+	err := s.db.QueryRow(`SELECT id FROM yt_videos WHERE video_id = ?`, videoID).Scan(&rowID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return s.GetYtVideo(rowID)
+}
+
 // MarkYtVideosSeen 把若干视频标为已看，并重算这些频道的未看数。
 func (s *Store) MarkYtVideosSeen(ids []int64) error {
 	if len(ids) == 0 {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mario/myporn/internal/library"
@@ -298,7 +299,30 @@ func (r *Runner) runYtDownloadJob(ctx context.Context, j *model.Job, c *Ctl) err
 
 	c.Progress(1, "正在解析流…", 0, 0, 0)
 	var lastPct float64
-	srcPath, err := r.ytDlp.Download(ctx, ytsub.DownloadRequest{
+	// yt-dlp 是个几十秒到几十分钟的子进程，中间没人去查取消/暂停标志，
+	// 用户点了取消就得等它下完——所以下载期间单独起一个轮询。
+	dlCtx, dlCancel := context.WithCancel(ctx)
+	defer dlCancel()
+	stopPoll := make(chan struct{})
+	var pollWG sync.WaitGroup
+	pollWG.Add(1)
+	go func() {
+		defer pollWG.Done()
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopPoll:
+				return
+			case <-t.C:
+				if cerr := c.Check(); cerr != nil {
+					dlCancel()
+					return
+				}
+			}
+		}
+	}()
+	srcPath, err := r.ytDlp.Download(dlCtx, ytsub.DownloadRequest{
 		VideoID: row.VideoID,
 		WorkDir: workDir,
 		OnProgress: func(p ytsub.Progress) {
@@ -312,7 +336,13 @@ func (r *Runner) runYtDownloadJob(ctx context.Context, j *model.Job, c *Ctl) err
 			c.Progress(pct, "下载中", int64(p.Speed), p.Done, p.Total)
 		},
 	})
+	close(stopPoll)
+	pollWG.Wait()
 	if err != nil {
+		// 是我们自己掐的（取消/暂停）就把真实原因传上去，别报成 yt-dlp 失败。
+		if cerr := c.Check(); cerr != nil {
+			return cerr
+		}
 		return err
 	}
 

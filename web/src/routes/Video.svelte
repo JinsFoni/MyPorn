@@ -125,7 +125,9 @@
       }
       const preferred = pickVariant(info, rememberedHeight());
       selectedVariantId = preferred?.id ?? info.defaultVariantId;
-      proxyAvailable = info.proxyPlaybackUrl !== null;
+      // 本地文件本来就是同源直发，"用代理播放"对它是空操作。
+      const chosen = preferred ?? info.variants.find((v) => v.id === info.defaultVariantId) ?? null;
+      proxyAvailable = info.proxyPlaybackUrl !== null && chosen?.local !== true;
     } catch (err) {
       playError = messageFor(err);
     } finally {
@@ -185,7 +187,8 @@
       hint: [
         codecTag(variant),
         formatBandwidth(variant.bandwidth),
-        variant.id === playback?.defaultVariantId ? '最高' : null,
+        variant.local === true ? '本地文件' : null,
+        variant.local !== true && variant.id === playback?.defaultVariantId ? '最高' : null,
       ]
         .filter((part) => part !== null && part !== '')
         .join(' · '),

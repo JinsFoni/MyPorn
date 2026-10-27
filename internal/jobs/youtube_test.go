@@ -242,3 +242,79 @@ func TestYtDownloadPayloadMatchesDownloadPage(t *testing.T) {
 		t.Errorf("下载页读不出 payload: %+v", info)
 	}
 }
+
+// 慢吞吞的假 yt-dlp：什么都不产出，只是耗着。
+// 像真的 yt-dlp 一样：收到 SIGINT 就收手（真 yt-dlp 会在这一下把 .part 保下来）。
+const slowYtDlp = `#!/bin/sh
+trap 'exit 130' INT
+sleep 60 &
+wait
+`
+
+// TestYtDownloadHonoursCancel 取消/暂停必须能把 yt-dlp 掐掉。
+//
+// 这里曾经有个真坑：下载阶段一直卡在子进程里，没人去查取消标志，
+// 用户点了「取消」得等它下完才生效——几十秒的短片看不出来，几个 G 的长片就是灾难。
+func TestYtDownloadHonoursCancel(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "yt-dlp")
+	if err := os.WriteFile(bin, []byte(slowYtDlp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	libRoot := filepath.Join(tmp, "media")
+	if err := os.MkdirAll(libRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(tmp, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	libID, err := st.CreateLibrary(&model.Library{Name: "主库", RootPath: libRoot, Enabled: true, IsDefault: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chID, _, err := st.UpsertYtChannel(&store.YtChannel{ChannelID: "UCcccccccccccccccccccccc", Title: "频道", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := st.UpsertYtVideos(chID, []store.YtVideoInput{{VideoID: "vidSLOW01", Title: "慢视频"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{DataDir: tmp, LibraryRoot: libRoot}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	r := NewRunner(cfg, st, platform.NewRegistry(), nil, nil, nil, events.NewHub(), log, imgcache.New(t.TempDir(), nil, "", log))
+	r.SetYouTube(ytsub.NewYtDlp(func() string { return bin }, func() string { return "" },
+		func() string { return "" }, func() string { return "" }, log), social.NewThrottle(0))
+
+	jobID, err := r.EnqueueYtDownload(ids[0], libID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := st.Claim(model.JobTypeYtDownload)
+	if err != nil || job == nil {
+		t.Fatalf("领取任务失败: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctl := &Ctl{ctx: ctx, cancel: func(error) {}, st: st, hub: events.NewHub(), log: log, job: job}
+
+	done := make(chan error, 1)
+	go func() { done <- r.runYtDownloadJob(ctx, job, ctl) }()
+
+	// 等它进到「下载中」，再点取消
+	time.Sleep(1500 * time.Millisecond)
+	if _, err := st.RequestCancel(jobID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("取消后任务不该正常返回")
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("取消没有被及时响应：yt-dlp 还在跑")
+	}
+}

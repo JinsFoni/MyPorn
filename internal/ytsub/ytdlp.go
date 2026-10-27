@@ -353,12 +353,17 @@ func (y *YtDlp) Download(ctx context.Context, req DownloadRequest) (string, erro
 			}
 		}
 	}()
+	// 先 Wait 再等读 goroutine，顺序不能反：yt-dlp 自己会调 ffmpeg 合轨，
+	// 那些孙进程也继承着这两根管道。只等 EOF 的话，取消之后要一直挂到它们自然结束
+	// （实测 60 秒），`WaitDelay` 到期后 Wait 会把管道关掉，读取这边才收得了尾。
+	// 代价是极端情况下丢掉最后几行进度，无所谓。
+	waitErr := cmd.Wait()
 	wg.Wait()
-	if err := cmd.Wait(); err != nil {
+	if waitErr != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return "", y.mapError(err, errBuf.String())
+		return "", y.mapError(waitErr, errBuf.String())
 	}
 
 	// 产物名由 -o 模板决定，直接找目录里以 videoID 开头的成品（忽略 .part / 中间文件）。
@@ -454,7 +459,10 @@ func (y *YtDlp) command(ctx context.Context, bin string, args ...string) *exec.C
 		_ = cmd.Process.Signal(os.Interrupt)
 		return nil
 	}
-	cmd.WaitDelay = 10 * time.Second
+	// SIGINT 之后最多再等 3 秒：yt-dlp 收到中断会立刻收尾（.part 留着续传），
+	// 万一它卡住（死掉的 DNS、僵住的 CDN、攥着管道的孙进程），这里负责把它 kill 掉，
+	// 别让「取消」形同虚设。
+	cmd.WaitDelay = 3 * time.Second
 	return cmd
 }
 

@@ -133,6 +133,8 @@ func (s *Server) Routes() http.Handler {
 			pr.Get("/videos/{id}", s.handleGetVideo)
 			pr.Post("/videos/{id}/seen", s.handleVideoSeen)
 			pr.Get("/videos/{id}/playback", s.handlePlayback)
+			// 本地库文件的直接下发（Range 续传）：下载过的影片不再依赖平台解析。
+			pr.Get("/videos/{id}/file", s.handleVideoFile)
 
 			pr.Get("/jobs", s.handleListJobs)
 			pr.Post("/jobs/{id}/cancel", s.handleCancelJob)
@@ -193,7 +195,14 @@ func (s *Server) Routes() http.Handler {
 // isLongLived 报告这个路径是不是「靠连接本身活着」的接口，不该套超时中间件。
 func isLongLived(path string) bool {
 	// 用全等而不是前缀：/api/streams 这种将来真出现了要照旧走超时。
-	return path == "/api/stream" || path == "/api/events"
+	if path == "/api/stream" || path == "/api/events" {
+		return true
+	}
+	// 本地文件下发是整片传输，一部 4K 片子看两小时也可能一直连着。
+	if strings.HasSuffix(path, "/file") && strings.HasPrefix(path, "/api/videos/") {
+		return true
+	}
+	return false
 }
 
 // ---------- JSON 工具 ----------

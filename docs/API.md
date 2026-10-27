@@ -143,6 +143,20 @@ type Video = {
 - `proxyPlaybackUrl` 为直链失败时的降级入口（M1 可返回 `null`）
 - 解析失败 `502 {"error":{"code":"resolve_failed","message":"..."}}`
 
+**本地库里有文件时，第一路永远是它**（`id="local"`，`local:true`，`isDefault:true`）：
+
+```json
+{ "id":"local", "url":"/api/videos/12/file?libraryId=1", "local":true, "isDefault":true,
+  "libraryId":1, "fileName":"xxx.mp4", "sizeBytes":360233190, "height":0, "codec":"", "hls":false }
+```
+
+- 线上那几路照旧排在后面（有 adapter 时才有）。下都下过了，没必要再连一次平台 CDN；
+  而且 YouTube 这类**没有 adapter** 的平台，本地文件是唯一的播放方式——
+  这时接口不会报 `unsupported_platform`，直接给本地这一路。
+- 既没本地文件、平台又没 adapter 才 `400 unsupported_platform`（文案指到下载）。
+- `GET /api/videos/{id}/file?libraryId=<id>` 直接下发文件，支持 `Range`（返回 `206`），
+  播放器拖动进度条靠它。路径必须落在库根之内，否则 `403`；记录有、磁盘没了 → `404`。
+
 ## 4. 图片代理
 
 `GET /api/img?u=<urlencoded 远端地址>&w=<可选宽度>` → 图片二进制
@@ -278,6 +292,8 @@ type Video = {
 - `202 {jobId, videoId, libraryId, title, skipped:false}` 已入队
 - `200 {skipped:true, reason:"该影片在此库中已存在", localPath, sizeBytes}` 幂等命中
 - `400 no_library`（没有任何库）、`409 already_queued`（同影片在队列里）
+- 平台没有 adapter（YouTube）时**自动落到 `yt_download`**：服务端用
+  `videos.platform_video_id` 反查 `yt_videos`，所以详情页那个按钮对 YouTube 影片同样有效
 
 `GET /api/downloads?limit=&status=` →
 ```json
@@ -733,3 +749,19 @@ POST /api/moments/cooldown
 
 错误码新增：`no_library`（没建库）、`no_ytdlp`（没有 yt-dlp / 版本不可用）。
 抓取侧的语义沿用 M5：`needs_auth` / `rate_limited` / `blocked` / `stale_parser` / `not_found` / `upstream`。
+
+### C18. 本地播放（M6 顺带补上的一条线）
+
+```
+GET /api/videos/{id}/file?libraryId=1
+→ 200 / 206（Range）   Content-Type: video/mp4   Accept-Ranges: bytes
+→ 403 forbidden        路径不在库目录内
+→ 404 not_found        库里没记录 / 文件已不在磁盘上
+```
+
+`{id}` 是 `videos.id`（不是 `yt_videos.id`）。这条接口不经过 `/api/stream`（那是给平台 CDN
+补 Referer 用的），也不需要登录态之外的任何东西；它把 `http.ServeFile` 直接接到库文件上，
+所以 `If-Range` / `Last-Modified` / 206 分段都是标准行为。
+
+它同时被算作「长连接」接口（`isLongLived`）：一部 8K 看两小时也一直连着，
+套上 60 秒超时中间件会在播放中途被掐断。
