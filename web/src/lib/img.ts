@@ -19,7 +19,7 @@ const PROXY_PATH = '/api/img';
  * 加进 URL 只为了一件事：换了生成方式（JPEG → PNG、改了缩放/模糊）以后，
  * 浏览器 HTTP 缓存里那份旧图别因为 `s=` 没变就继续被命中。
  */
-const SMALL_PIPELINE = '2';
+const SMALL_PIPELINE = '3';
 
 /**
  * 隐私模式要的小糊图宽度：**跟着显示宽度走**，固定值会翻车——
@@ -28,7 +28,7 @@ const SMALL_PIPELINE = '2';
  * （16 是「36px 的小头像也糊成色块」的下限，160 是「大封面别糊到只剩纯色」的上限）。
  *
  * 早先取的是十分之一（48px 铺到 480px），糊是够糊，但小图太小，拉大后色块之间
- * 能看出**色带断层**；改成四分之一后后端按同样比例加大模糊半径（宽/12），
+ * 能看出**色带断层**；改成四分之一后后端按同样比例加大模糊半径（宽/18、叠三遍），
  * 糊的程度不变、却是平滑的过渡。见 internal/imgcache/blur.go。
  */
 function privacyWidth(width?: number): number {

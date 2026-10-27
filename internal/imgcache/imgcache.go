@@ -42,7 +42,7 @@ const (
 
 // smallPipeline 是「小糊图」的生成流水线版本，进缓存键。
 // 换过编码（JPEG → PNG）或改过缩放/模糊算法就得 +1，否则旧的丑图还会被端出来。
-const smallPipeline = 2
+const smallPipeline = 3
 
 // Service 是图片缓存的入口。构造一次，全局共用（进程内不会写坏同一份缓存：
 // 写入是 tmp + rename 的原子替换）。

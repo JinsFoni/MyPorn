@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"math"
+	"math/rand"
 	"os/exec"
 	"strings"
 	"time"
@@ -126,7 +128,12 @@ func encodeSmall(src image.Image, width int) ([]byte, error) {
 	}
 
 	small := scaleArea(src, width, height)
-	boxBlur(small, smallBlurRadius(width))
+	// 三遍盒式 ≈ 高斯：单遍盒式在半径这么大时会留下方方正正的「台阶」轮廓，
+	// 叠三遍（方差相加）就化开了，成本在 120×68 这种尺寸上可以忽略。
+	for i := 0; i < smallBlurPasses; i++ {
+		boxBlur(small, smallBlurRadius(width))
+	}
+	dither(small, smallDitherAmp)
 
 	var out bytes.Buffer
 	if err := png.Encode(&out, small); err != nil {
@@ -136,14 +143,47 @@ func encodeSmall(src image.Image, width int) ([]byte, error) {
 }
 
 // smallBlurRadius 让小图上的模糊半径跟着宽度走：显示时放大的倍数越大，半径就得越大。
-// 宽/12 意味着 48px 用 4、120px 用 10——换算到 480px 的卡片尺寸约 40px，
-// 也就是「不管小图多宽，糊的程度一样」，换分辨率不会改变隐私强度：
+// 宽/18 意味着 48px 用 3、120px 用 7（每遍，共三遍）——换算到 480px 的卡片尺寸
+// 等效 σ 约 35px，也就是「不管小图多宽，糊的程度一样」，换分辨率不会改变隐私强度：
 // 轮廓还在、姿势还能猜，但看不清任何细节（这正是「挡一眼」要的效果）。
 func smallBlurRadius(width int) int {
-	if r := (width + 6) / 12; r > 0 {
+	if r := (width + 9) / 18; r > 0 {
 		return r
 	}
 	return 1
+}
+
+// smallBlurPasses / smallDitherAmp 是「糊得平滑」的两个必要条件：
+//   - 单遍盒式模糊的核是个方框，半径一大就能看出轮廓上的方台阶，叠三遍才像高斯；
+//   - 8 位通道装不下「跨几百像素才降一级」的缓慢渐变，四倍放大后就是一圈圈色带，
+//     每像素加一点零均值噪声（三角分布）把台阶换成细颗粒，人眼看过去就是平滑的。
+const (
+	smallBlurPasses = 3
+	smallDitherAmp  = 1.5
+)
+
+// dither 在落 8 位之前给每个像素加一点三角分布的零均值噪声（±amp 上下）。
+// 只在 R/G/B 上加，alpha 不动；噪声会在浏览器放大时被插值糊开，看着是细颗粒而不是噪点。
+func dither(img *image.RGBA, amp float64) {
+	if amp <= 0 {
+		return
+	}
+	rnd := rand.New(rand.NewSource(1)) // 固定种子：同一张图每次生成的结果一致
+	for y := 0; y < img.Rect.Dy(); y++ {
+		for x := 0; x < img.Rect.Dx(); x++ {
+			i := img.PixOffset(x, y)
+			for c := 0; c < 3; c++ {
+				n := (rnd.Float64() + rnd.Float64() - 1) * amp
+				v := float64(img.Pix[i+c]) + n
+				if v < 0 {
+					v = 0
+				} else if v > 255 {
+					v = 255
+				}
+				img.Pix[i+c] = uint8(math.Round(v))
+			}
+		}
+	}
 }
 
 // scaleArea 按面积平均缩放：每个目标像素取它在原图里覆盖的那块矩形的平均值。
@@ -189,8 +229,8 @@ func scaleArea(src image.Image, dstW, dstH int) *image.RGBA {
 	return dst
 }
 
-// boxBlur 就地做可分离的盒式模糊（左右各走一遍，横竖各一次）。
-// 在这个尺寸（几十像素）上它相当于零成本，效果就是把缩放的硬边化开。
+// boxBlur 就地做可分离的盒式模糊（横向一遍、纵向一遍），求和用整数、落位时四舍五入。
+// 在这个尺寸（一百来像素）上它相当于零成本，效果就是把缩放的硬边化开。
 func boxBlur(img *image.RGBA, radius int) {
 	if radius < 1 {
 		return
@@ -207,7 +247,7 @@ func boxBlur(img *image.RGBA, radius int) {
 				sum += int(img.Pix[img.PixOffset(clamp(k, 0, w-1), y)+c])
 			}
 			for x := 0; x < w; x++ {
-				tmp[y*img.Stride+x*4+c] = uint8(sum / span)
+				tmp[y*img.Stride+x*4+c] = uint8((sum + span/2) / span)
 				out := clamp(x-radius, 0, w-1)
 				in := clamp(x+radius+1, 0, w-1)
 				sum += int(img.Pix[img.PixOffset(in, y)+c]) - int(img.Pix[img.PixOffset(out, y)+c])
@@ -222,7 +262,7 @@ func boxBlur(img *image.RGBA, radius int) {
 				sum += int(tmp[clamp(k, 0, h-1)*img.Stride+x*4+c])
 			}
 			for y := 0; y < h; y++ {
-				img.Pix[y*img.Stride+x*4+c] = uint8(sum / span)
+				img.Pix[y*img.Stride+x*4+c] = uint8((sum + span/2) / span)
 				out := clamp(y-radius, 0, h-1)
 				in := clamp(y+radius+1, 0, h-1)
 				sum += int(tmp[in*img.Stride+x*4+c]) - int(tmp[out*img.Stride+x*4+c])

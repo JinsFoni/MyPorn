@@ -42,8 +42,10 @@ func TestBlurredSmallShrinksAndKeepsLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("blurredSmall: %v", err)
 	}
-	if len(out) >= len(src) {
-		t.Errorf("小图 %d 字节，不比原图 %d 字节小", len(out), len(src))
+	// 别跟测试图本身比大小：那张是纯色块、PNG 压得极小，加抖动反而更大。
+	// 真正要守的是「一张糊图只有几 KB」，量级上远小于它替换掉的原图。
+	if len(out) > 20<<10 {
+		t.Errorf("小图 %d 字节，太大了", len(out))
 	}
 	img, err := png.Decode(bytes.NewReader(out))
 	if err != nil {
@@ -180,7 +182,7 @@ func TestFFmpegDecode(t *testing.T) {
 // 模糊半径要跟着小图宽度走，否则换个分辨率就等于换了隐私强度。
 func TestSmallBlurRadiusScalesWithWidth(t *testing.T) {
 	cases := []struct{ width, want int }{
-		{8, 1}, {16, 1}, {24, 2}, {45, 4}, {48, 4}, {96, 8}, {120, 10}, {160, 13},
+		{8, 1}, {16, 1}, {24, 1}, {45, 3}, {48, 3}, {96, 5}, {120, 7}, {160, 9},
 	}
 	for _, c := range cases {
 		if got := smallBlurRadius(c.width); got != c.want {
