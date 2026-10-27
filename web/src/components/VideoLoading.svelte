@@ -35,7 +35,10 @@
   .video-veil {
     position: absolute;
     inset: 0;
-    z-index: 40;
+    /* 必须压在画面之上、**控制条之下**：皮肤的控制条是 z-index 30、它那条暗角是 10，
+       所以这里只取 5。取高了拖动进度条时进度条会被这层糊图整个盖掉——手指还按在
+       一条看不见的进度条上，是最难受的一种「消失了」 */
+    z-index: 5;
     display: grid;
     place-items: center;
     overflow: hidden;

@@ -213,12 +213,27 @@
    * 中间和上面保持原亮度。`--media-*` 是皮肤的公开调色口，改它比覆盖它的内部类名稳。
    */
   function tuneSkin(): void {
+    hideSkinSpinner();
     const container = skinEl?.shadowRoot?.querySelector('.media-container');
     if (!(container instanceof HTMLElement)) return;
     container.style.setProperty(
       '--media-controls-gradient',
       'linear-gradient(to top, rgb(0 0 0 / 0.3), rgb(0 0 0 / 0) 26%)',
     );
+  }
+
+  /**
+   * 皮肤自带一个「缓冲中」指示器：半透明底 + 它自己的转环，压在 `z-index: 30`。
+   * 加载态已经交给 `.video-veil` 统一接管，两个环会叠在一起、粗细和转速还不一样，
+   * 所以把皮肤那个按掉。两者是同一批事件喂出来的（waiting / seeking），按掉不会丢状态。
+   */
+  function hideSkinSpinner(): void {
+    const root = skinEl?.shadowRoot;
+    if (!root || root.querySelector('style[data-myporn-spinner]')) return;
+    const style = document.createElement('style');
+    style.dataset.mypornSpinner = '';
+    style.textContent = '.media-buffering-indicator{display:none !important}';
+    root.append(style);
   }
 
   // ---------- 加载态：糊封面 + 加载环 ----------
