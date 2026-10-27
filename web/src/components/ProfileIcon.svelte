@@ -12,7 +12,9 @@
      认标签里的关键词而不是整串相等——站点是中文站，但字段按艺人有增有减，
      还可能冒出英文标签，所以用 includes 兜住。顺序即优先级（先具体后笼统）。
      例外一：`身材` 用的是用户给的 iconfont 剪影（1024 网格、填充），见 `$lib/bodyGlyph`。
-     例外二：`体重`（哑铃）和 `种族`（脚印）两枚取自 https://github.com/JinsFoni/peach
+     例外二：`胸部`（胸罩）是照用户给的 24px PNG 重画的线稿——原图是位图，放大后逐行量出
+     骨点，再按本项目的 1.6 描边落成矢量；它本来就是 24 网格，就跟其余线稿写在一起。
+     例外三：`体重`（哑铃）和 `种族`（脚印）两枚取自 https://github.com/JinsFoni/peach
      的资料卡（它 `web/index.html` 的 `#i-dumbbell` / `#i-footprints`），其余仍是本项目自己那套。 */
   type IconKind =
     | 'heart'
@@ -23,6 +25,7 @@
     | 'weight'
     | 'ruler'
     | 'body'
+    | 'bra'
     | 'globe'
     | 'footprints'
     | 'eye'
@@ -52,14 +55,15 @@
     if (has('发色', 'hair') || has('颜色', 'color')) return 'drop';
     if (has('纹身', 'tattoo')) return 'pen';
     if (has('穿环', 'pierc')) return 'ring';
-    if (has('胸部', '假奶', '乳房', '手术', '其他特征')) return 'tag';
+    if (has('胸部', '假奶', '乳房', 'bra', 'bust')) return 'bra';
+    if (has('手术', '其他特征')) return 'tag';
     if (has('兴趣', '爱好', 'hobb')) return 'star';
     if (has('年份', '出道', '活跃', '生日', '年龄', 'age', 'year')) return 'calendar';
     return 'dot';
   }
 
-  /* 尺寸：一律 14×14 方框。`身材` 那枚紧框量出来 1 : 1.29（近乎方形），照常放进方框里，
-     按高度撑满→实际画成 11×14，跟旁边几枚线稿一样齐。 */
+  /* 尺寸：一律 14×14 方框。`身材` 那枚紧框量出来 1 : 1.47，照常放进方框里，
+     按高度撑满→实际画成 9.6×14，跟旁边几枚线稿一样齐。 */
   const kind = $derived(kindOf(label));
 </script>
 
@@ -78,6 +82,15 @@
     {#each BODY_GLYPH_PATHS as d}
       <path {d} fill="currentColor" stroke="none" />
     {/each}
+  {:else if kind === 'bra'}
+    <!-- 胸罩：照用户给的 24px PNG 描的（两条肩带 + 两个罩杯 + 横着的下围）。罩杯是开口的
+         ——下沿直接落在下围那条线上，内侧两条边在中间合成 V（中间那道「山丘」），
+         所以这五段共用一套描边参数，画出来才跟原图一样细。 -->
+    <path d="M3.2 2.9 Q4.5 6.2 4.4 9.6" />
+    <path d="M20.8 2.9 Q19.5 6.2 19.6 9.6" />
+    <path d="M3.8 18.8 Q2.6 18.8 2.55 15.8 V11.3 Q2.55 10.5 3.2 10.5 H8.2 Q8.9 10.5 9.2 11 L12 15.3" />
+    <path d="M20.2 18.8 Q21.4 18.8 21.45 15.8 V11.3 Q21.45 10.5 20.8 10.5 H15.8 Q15.1 10.5 14.8 11 L12 15.3" />
+    <path d="M3.8 18.8 H20.2" />
   {:else if kind === 'heart'}
     <path
       d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
