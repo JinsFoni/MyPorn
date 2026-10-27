@@ -107,6 +107,7 @@ internal/events/       进程内事件中心（SSE）
 internal/httpapi/      HTTP 接口、图片/媒体代理、静态资源
 internal/webui/        前端构建产物（go:embed）
 web/                   Svelte 5 前端源码
+design/                app 图标母版与生成脚本（app-icon.png → make-icons.py）
 ```
 
 ## 常用命令
@@ -118,6 +119,15 @@ make web      # 只构建前端并同步到 embed 目录
 make test     # Go 单元测试（解析器 fixture）
 make vet
 make run
+```
+
+换站点图标（侧边栏 logo、favicon、PWA 图标都由同一张母版生成）：
+
+```bash
+# 1. 覆盖 design/app-icon.png（正方形，建议 ≥ 512）
+# 2. 重新生成 web/public/ 下的一整套图标 + web/src/assets/logo.png
+python3 design/make-icons.py
+make web
 ```
 
 补齐历史影片的详情元数据（标签、简介等，标签只有详情页才有）：

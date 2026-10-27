@@ -9,6 +9,7 @@
   import { router } from '../lib/router.svelte';
   import { ui } from '../lib/ui.svelte';
   import type { JobType } from '../lib/types';
+  import logoUrl from '../assets/logo.png';
 
   interface Props {
     title: string;
@@ -190,9 +191,10 @@
       <a
         data-link
         href="/"
-        class="flex h-9 shrink-0 items-center font-brand text-[1.25rem] font-semibold leading-none tracking-[-0.01em] text-fg"
+        class="flex h-9 shrink-0 items-center gap-2 font-brand text-[1.25rem] font-semibold leading-none tracking-[-0.01em] text-fg"
         aria-label="MyPorn 首页"
       >
+        <img src={logoUrl} alt="" width="24" height="24" class="h-6 w-6 shrink-0" />
         MyPorn
       </a>
 
@@ -218,9 +220,10 @@
     <a
       data-link
       href="/"
-      class="flex h-10 shrink-0 items-center rounded-xl px-3 font-brand text-[1.5rem] font-semibold leading-none tracking-[-0.01em] text-fg"
+      class="flex h-10 shrink-0 items-center gap-2.5 rounded-xl px-3 font-brand text-[1.5rem] font-semibold leading-none tracking-[-0.01em] text-fg"
       aria-label="MyPorn 首页"
     >
+      <img src={logoUrl} alt="" width="28" height="28" class="h-7 w-7 shrink-0" />
       MyPorn
     </a>
 
