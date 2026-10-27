@@ -23,6 +23,7 @@ import (
 	"github.com/mario/myporn/internal/proxying"
 	"github.com/mario/myporn/internal/social"
 	"github.com/mario/myporn/internal/store"
+	"github.com/mario/myporn/internal/ytsub"
 )
 
 // proxyFor 返回某平台当前该用的代理（设置优先，其次环境变量）。
@@ -44,18 +45,20 @@ type worker struct {
 }
 
 type Runner struct {
-	cfg      *config.Config
-	st       *store.Store
-	reg      *platform.Registry
-	social   *social.Registry // 社交动态（M5）的适配器表
-	hub      *events.Hub
-	enc      *library.Encoder
-	img      *imgcache.Service
-	log      *slog.Logger
-	interval time.Duration
-	avatars  *AvatarFiller
-	profiles *ProfileFiller
-	px       *proxying.Resolver // 代理解析器：每次发请求才问，改设置即时生效
+	cfg        *config.Config
+	st         *store.Store
+	reg        *platform.Registry
+	social     *social.Registry // 社交动态（M5）的适配器表
+	hub        *events.Hub
+	enc        *library.Encoder
+	img        *imgcache.Service
+	log        *slog.Logger
+	interval   time.Duration
+	avatars    *AvatarFiller
+	profiles   *ProfileFiller
+	px         *proxying.Resolver // 代理解析器：每次发请求才问，改设置即时生效
+	ytDlp      *ytsub.YtDlp       // YouTube 的 yt-dlp 调用器（M6），nil 表示不启用
+	ytThrottle *social.Throttle   // YouTube 的本地限速/冷却器（按 IP 计限流）
 
 	repairing atomic.Bool // 封面修复是否已有一轮在跑
 
@@ -82,6 +85,24 @@ func NewRunner(cfg *config.Config, st *store.Store, reg *platform.Registry, soci
 		profiles: NewProfileFiller(st, profileSources, log),
 		px:       proxying.New(st, cfg),
 	}
+}
+
+// SetYouTube 注入 YouTube（M6）的抓取/下载依赖。与平台的 adapter 一样在 main 里装配，
+// 这样「代理 / yt-dlp 路径 / Cookie」都是运行时现取的，改设置不用重启。
+func (r *Runner) SetYouTube(dlp *ytsub.YtDlp, th *social.Throttle) {
+	r.ytDlp = dlp
+	r.ytThrottle = th
+}
+
+// YtDlp 暴露给 HTTP 层做健康检查（版本、是否过期）。
+func (r *Runner) YtDlp() *ytsub.YtDlp { return r.ytDlp }
+
+// YtThrottle 暴露给 HTTP 层：「清除冷却」按钮要能碰到同一个限速器。
+func (r *Runner) YtThrottle() *social.Throttle {
+	if r == nil {
+		return nil
+	}
+	return r.ytThrottle
 }
 
 // LookupAvatar 按艺人名到站外头像源查一张头像（不落库，订阅预览用）。

@@ -557,3 +557,179 @@ POST /api/moments/cooldown
 
 冷却时间是「上一次撞墙时按 429 猜的」，用户换了 Cookie / 换了出口 IP 之后那个时间已经没有意义。
 这个接口只清本地计时器，不碰上游任何状态；界面上对应「换过 Cookie 了？清除冷却并重试」。
+
+## 附：M6 新增接口（YouTube 订阅）
+
+约定同前：都在鉴权保护组内，错误体 `{"error":{"code","message"}}`，时间一律 RFC3339（无值给 `null`）。
+所有图片字段都是 `/api/img?p=youtube&u=…` 形式的代理地址，前端不用关心防盗链和代理出口。
+
+### C1. `GET /api/yt/channels`
+
+```json
+{
+  "items": [
+    {
+      "id": 1, "channelId": "UCq-Fj5jknLsUf-MWSy4_brA", "handle": "",
+      "title": "T-Series", "avatarUrl": "/api/img?…", "profileUrl": "https://www.youtube.com/channel/UC…",
+      "enabled": true, "videoCount": 203, "unseenCount": 201,
+      "backfilledAt": "2026-10-27T20:30:33Z", "lastSyncedAt": "2026-10-27T20:33:02Z", "lastError": ""
+    }
+  ],
+  "stats": { "channels": 2, "videos": 326, "unseen": 322, "new24h": 322, "errors": 0 }
+}
+```
+
+`stats.errors` = `lastError` 非空的频道数；`new24h` 按 `created_at` 算（不是发布时间——深度回填不给时间）。
+
+### C2. `POST /api/yt/resolve`
+
+```json
+{ "url": "https://www.youtube.com/@lofigirl" }
+→ 200 {
+  "channelId": "UCSJ4gkVC6NrvII8umztf0Ow", "handle": "lofigirl", "title": "Lofi Girl",
+  "avatarUrl": "/api/img?…", "profileUrl": "https://www.youtube.com/channel/UC…",
+  "subscribed": false, "ytdlpOk": true
+}
+```
+
+只解析不落库（给「添加前预览」）。收的形态：`UC…` 频道 id、`@handle`、裸 handle、
+`/channel/UC…`、`/@h`、`/c/…`、`/user/…`、`watch?v=…`、`youtu.be/…`。
+视频链接会先读它的 `channelId`，再抓一次频道页——否则拿到的标题是那条视频的。
+
+`ytdlpOk=false` 表示只能抓 RSS（最近 15 条、没有时长），也下载不了。
+
+### C3. `POST /api/yt/channels`
+
+同一份入参。语义是「订阅」：
+
+```json
+{ "url": "@lofigirl" } → 200 { "channel": { …C1 的单项… }, "created": true }
+```
+
+`created=true` 时服务端会立刻投一次 `yt_sync`（`mode=deep`，默认回填 200 条）；
+已存在时只刷新标题/头像，不动 `enabled` 与 `performer_id`（用户的开关不能被一次重复添加推翻）。
+
+### C4. `PATCH /api/yt/channels/{id}` / C5. `DELETE /api/yt/channels/{id}`
+
+`{"enabled": false}` → 200 单项；删除返回 204。
+删除只清 `yt_channels`（`yt_videos` 随外键级联），**已下载进本地库的文件和影片记录不动**。
+
+### C6. `POST /api/yt/channels/{id}/sync`
+
+```json
+{ "deep": false } → 200 { "jobId": 12 }
+```
+
+同一频道已有排队/在跑的任务时 `jobId=0`（不重复投）。`deep=true` 走 yt-dlp 列历史，慢（200 条约 6 秒）但有时长；
+`deep=false` 走 RSS，1 次请求拿最近 15 条，带准确发布时间。
+
+### C7. `POST /api/yt/channels/{id}/download-unseen`
+
+```json
+{ "libraryId": 1, "limit": 10 } → 200 { "queued": 10, "jobIds": [21,22,…] }
+```
+
+把该频道所有 `seen=0` 的视频逐条排进 `yt_download`。已排过的会自动跳过（同影片有在跑的任务）。
+
+### C8. `GET /api/yt/videos`
+
+查询参数：`channelId`（频道行 id）、`unseen=1`、`saved=1`、`cursor`、`limit`（默认 36，上限 100）。
+
+```json
+{
+  "items": [{
+    "id": 200, "videoId": "BRHJ7xD-bSU", "title": "WAITING 4 YOU (Official Video)",
+    "url": "https://www.youtube.com/watch?v=BRHJ7xD-bSU",
+    "thumbUrl": "/api/img?…mqdefault…", "posterUrl": "/api/img?…maxresdefault…",
+    "embedUrl": "https://www.youtube-nocookie.com/embed/BRHJ7xD-bSU",
+    "durationSec": 191, "views": 37000, "publishedAt": null, "dateKnown": false,
+    "isLive": false, "seen": false, "saved": false, "downloaded": false,
+    "description": "",
+    "channel": { "id": 1, "channelId": "UC…", "handle": "", "title": "T-Series", "avatarUrl": "/api/img?…" }
+  }],
+  "nextCursor": "MTc2…"
+}
+```
+
+排序 `COALESCE(published_at,'') DESC, id DESC`：**没有发布时间的排最后**（深度回填的条目就落在这里），
+所以首屏一定是最新的。`dateKnown=false` 时 `publishedAt` 为 `null`，前端显示「时间未知」。
+
+`downloaded` 表示这个库里已经有它的文件（`library_files` 存在），前端据此把按钮改成「再下一次」。
+
+### C9. `POST /api/yt/videos/seen`
+
+```json
+{ "ids": [12, 13] }        // 或 { "channelId": 1 } 表示整个频道
+→ 200 { "unseen": 320 }
+```
+
+返回全库剩余未看数，前端直接拿来更新侧边栏角标。
+
+### C10. `POST /api/yt/videos/{id}/save` → `{ "saved": true }`
+
+### C11. `POST /api/yt/videos/{id}/refresh`
+
+按需补全单条信息（发布时间 / 时长 / 观看数），返回刷新后的单项（同 C8）。
+没有 yt-dlp 时 409 `no_ytdlp`。前端在「点开一条 `dateKnown=false` 的视频」时调它，**不批量拉**：
+单条 4 秒，为了一张卡片的时间去刷 200 条不值得。
+
+### C12. `POST /api/yt/videos/{id}/download`
+
+```json
+{ "libraryId": 1, "overwrite": false } → 200 { "jobId": 21, "libraryId": 1 }
+```
+
+没有本地库时 409 `no_library`。`libraryId` 省略 = 默认库。
+同一条视频已在队列里时 `jobId=0`。
+
+### C13. `GET /api/yt/health`
+
+```json
+{ "path": "/opt/ytvenv/bin/yt-dlp", "found": true, "version": "2026.10.26",
+  "ageDays": 1, "stale": false, "ffmpegOk": true }
+```
+
+`stale` 的判据是版本日期超过 90 天。这个接口给的是「为什么下载会失败」的答案：
+实测 2026.07.04 版全线 403，2026.10.26 正常——所以版本号必须能在界面上看到。
+
+### C14. `GET /api/manage/youtube`
+
+```json
+{ "stats": { …C1 的 stats… }, "channels": [ …C1 的 items… ] }
+```
+
+### C15. 设置扩展
+
+```json
+{
+  "youtube": { "syncHours": 6, "backfillLimit": 200, "format": "", "ytdlpPath": "", "hasCookies": false },
+  "platformProxy": { "…": "", "youtube": "" }
+}
+```
+
+- `syncHours` 夹在 1–48；调度器每 10 分钟醒一次，够点就投一轮 `yt_sync(auto)`。
+- `backfillLimit` 夹在 10–2000，是 `deep` 模式一次列多少条历史。
+- `format` 是 yt-dlp `-f` 的覆盖值，留空 = 默认 `bv*[vcodec^=av01]+ba/bv*+ba/b`
+  （**AV1 最高画质 + 最高音质**，再用 ffmpeg `-c copy` 合成 mp4，不转码）。
+- `ytdlpPath` 留空 = 从 `PATH` 找；填绝对路径可以固定用一个独立安装的版本。
+- `cookies` 只写：不传 = 不动，传空串 = 清除；`hasCookies` 只读。
+- `platformProxy.youtube`：抓 RSS 和 yt-dlp 下载都走这个出口，保存即生效（不用重启）。
+
+### C16. SSE 新增事件
+
+| 事件 | 载荷 | 用途 |
+|---|---|---|
+| `yt.new` | `{channelId, title, count}` | 视频墙增量刷新 + 侧边栏未读 +N |
+
+### C17. 任务类型
+
+| `type` | 载荷 | 并发 |
+|---|---|---|
+| `yt_sync` | `{channelId, mode}`（`channelId=0` 表示全部启用的频道；`mode`=`auto`/`deep`） | 1 |
+| `yt_download` | `{ytVideoId, videoId, libraryId, overwrite}` | 跟 `download_concurrency` 一致 |
+
+`yt_download` 的 `target_id` 是 **`videos` 表的行 id**（不是 `yt_videos`），这样它和普通 `download`
+共用同一个下载页。`GET /api/downloads` 现在同时返回这两种类型。
+
+错误码新增：`no_library`（没建库）、`no_ytdlp`（没有 yt-dlp / 版本不可用）。
+抓取侧的语义沿用 M5：`needs_auth` / `rate_limited` / `blocked` / `stale_parser` / `not_found` / `upstream`。

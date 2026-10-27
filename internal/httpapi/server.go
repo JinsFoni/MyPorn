@@ -157,6 +157,22 @@ func (s *Server) Routes() http.Handler {
 			pr.Post("/moments/cooldown", s.handleClearMomentCooldown)
 			pr.Get("/manage/moments", s.handleManageMoments)
 
+			// YouTube 订阅（M6）：频道管理 + 视频墙 + 下载进本地库。
+			pr.Get("/yt/channels", s.handleListYtChannels)
+			pr.Post("/yt/channels", s.handleCreateYtChannel)
+			pr.Post("/yt/resolve", s.handleResolveYtChannel)
+			pr.Patch("/yt/channels/{id}", s.handlePatchYtChannel)
+			pr.Delete("/yt/channels/{id}", s.handleDeleteYtChannel)
+			pr.Post("/yt/channels/{id}/sync", s.handleSyncYtChannel)
+			pr.Post("/yt/channels/{id}/download-unseen", s.handleYtDownloadUnseen)
+			pr.Get("/yt/videos", s.handleListYtVideos)
+			pr.Post("/yt/videos/seen", s.handleYtSeen)
+			pr.Post("/yt/videos/{id}/save", s.handleYtSave)
+			pr.Post("/yt/videos/{id}/refresh", s.handleYtRefresh)
+			pr.Post("/yt/videos/{id}/download", s.handleYtDownload)
+			pr.Get("/yt/health", s.handleYtHealth)
+			pr.Get("/manage/youtube", s.handleManageYt)
+
 			pr.Get("/settings", s.handleGetSettings)
 			pr.Put("/settings", s.handlePutSettings)
 

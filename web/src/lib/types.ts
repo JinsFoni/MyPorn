@@ -216,7 +216,14 @@ export interface Settings {
   globalProxy: string;
   /** 按平台覆盖代理；空字符串 = 直连 */
   /** 平台专用代理；instagram / x 决定抓动态时的出口 IP */
-  platformProxy: { pornhub: string; xhamster: string; beeg: string; instagram: string; x: string };
+  platformProxy: {
+    pornhub: string;
+    xhamster: string;
+    beeg: string;
+    instagram: string;
+    x: string;
+    youtube: string;
+  };
   namingTemplate: string;
   downloadConcurrency: number;
   /** 单任务下载限速（KB/s），0 = 不限 */
@@ -230,13 +237,33 @@ export interface Settings {
   ffmpegAvailable: boolean;
   openlist: OpenListSettings;
   social: SocialSettings;
+  youtube: YouTubeSettings;
+}
+
+/** M6 YouTube 订阅的设置。Cookie 只写不读，只告诉前端「有没有配」 */
+export interface YouTubeSettings {
+  syncHours: number;
+  /** 深度回填一次列多少条（yt-dlp） */
+  backfillLimit: number;
+  /** yt-dlp 格式串；空表示用默认（AV1 最高画质 + 最高音质） */
+  format: string;
+  /** 留空 = 从 PATH 里找 yt-dlp */
+  ytdlpPath: string;
+  hasCookies: boolean;
 }
 
 /** PUT /api/settings：字段均可选；token 单独写，响应不回显 */
 export interface SettingsPatch {
   syncIntervalHours?: number;
   globalProxy?: string;
-  platformProxy?: { pornhub?: string; xhamster?: string; beeg?: string; instagram?: string; x?: string };
+  platformProxy?: {
+    pornhub?: string;
+    xhamster?: string;
+    beeg?: string;
+    instagram?: string;
+    x?: string;
+    youtube?: string;
+  };
   namingTemplate?: string;
   autoDownloadNew?: boolean;
   downloadConcurrency?: number;
@@ -244,9 +271,25 @@ export interface SettingsPatch {
   openlist?: { baseUrl?: string; root?: string; token?: string };
   /** instagramCookie 传空串表示清除 */
   social?: { syncHours?: number; instagramCookie?: string };
+  /** cookies 传空串表示清除 */
+  youtube?: {
+    syncHours?: number;
+    backfillLimit?: number;
+    format?: string;
+    ytdlpPath?: string;
+    cookies?: string;
+  };
 }
 
-export type JobType = 'sync' | 'download' | 'upload' | 'strm' | 'social_sync' | 'social_save';
+export type JobType =
+  | 'sync'
+  | 'download'
+  | 'upload'
+  | 'strm'
+  | 'social_sync'
+  | 'social_save'
+  | 'yt_sync'
+  | 'yt_download';
 export type JobStatus = 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'canceled';
 
 export interface Job {
@@ -610,4 +653,108 @@ export interface MomentsManageResponse {
   items: MomentAccount[];
   stats: { accounts: number; posts: number; photos: number; errors: number };
   hasInstagramCookie: boolean;
+}
+
+// ---------- YouTube 订阅（M6） ----------
+
+export interface YtChannelBrief {
+  id: number;
+  /** 频道 id（UC…），不是行 id */
+  channelId: string;
+  handle: string;
+  title: string;
+  /** 已过 /api/img 代理 */
+  avatarUrl: string;
+}
+
+export interface YtChannel extends YtChannelBrief {
+  profileUrl: string;
+  enabled: boolean;
+  videoCount: number;
+  unseenCount: number;
+  /** 首次深度回填完成时间 */
+  backfilledAt: string | null;
+  lastSyncedAt: string | null;
+  lastError: string;
+}
+
+export interface YtVideo {
+  id: number;
+  videoId: string;
+  title: string;
+  /** 原站链接 */
+  url: string;
+  thumbUrl: string;
+  /** maxresdefault，卡片大图/详情用；可能 404（老视频） */
+  posterUrl: string;
+  embedUrl: string;
+  durationSec: number;
+  views: number;
+  /** 深度回填来的条目没有发布时间（yt-dlp flat 不给），此时为 null */
+  publishedAt: string | null;
+  dateKnown: boolean;
+  isLive: boolean;
+  seen: boolean;
+  saved: boolean;
+  downloaded: boolean;
+  description: string;
+  channel: YtChannelBrief;
+}
+
+export interface YtVideosPage {
+  items: YtVideo[];
+  nextCursor?: string;
+}
+
+export interface YtStats {
+  channels: number;
+  videos: number;
+  /** 全部未看视频数（侧边栏角标） */
+  unseen: number;
+  new24h: number;
+  /** 上次抓取失败的频道数 */
+  errors: number;
+}
+
+export interface YtChannelsResponse {
+  items: YtChannel[];
+  stats: YtStats;
+}
+
+export interface YtManageResponse {
+  stats: YtStats;
+  channels: YtChannel[];
+}
+
+/** POST /api/yt/resolve：只解析不入库 */
+export interface YtResolve {
+  channelId: string;
+  handle: string;
+  title: string;
+  avatarUrl: string;
+  profileUrl: string;
+  /** 这个频道已经订阅过 */
+  subscribed: boolean;
+  id?: number;
+  /** yt-dlp 是否可用（不可用时只能抓 RSS，不能下载/回填） */
+  ytdlpOk: boolean;
+}
+
+/** SSE: yt.new —— 一次同步里某个频道抓到了新视频 */
+export interface YtNewEvent {
+  /** yt_channels 的行 id */
+  channelId: number;
+  title: string;
+  count: number;
+}
+
+/** GET /api/yt/health：yt-dlp 的版本健康度 */
+export interface YtHealth {
+  path: string;
+  found: boolean;
+  version: string;
+  ageDays: number;
+  /** 超过 90 天：下载大概率 403 */
+  stale: boolean;
+  ffmpegOk: boolean;
 }

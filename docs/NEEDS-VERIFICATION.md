@@ -174,3 +174,30 @@ make backend           # 先编译
 | IG 翻页 | `feed/user/<id>/?max_id=`，`more_available` 决定是否继续 | 只抓到第一页 |
 | IG 图片地址 | 带签名、**几小时内过期**。缓存过的照常显示，没缓存的过期就 404（走占位图） | 老照片成片变灰 → 正常现象，想要就点存库 |
 | 与艺人关联 | 只比对 `performers.social_json` 里已有链接的规范化 URL，命中才关联；绝不按名字猜 | 艺人页没有「社交动态」区块 → 要么没关联，要么艺人资料里没这条链接 |
+
+## 六、YouTube 订阅（M6，`internal/ytsub/`）
+
+> 代码不在 `internal/social/` 里：那里的 `Adapter` 抽象是为「博主 → 帖子 → 照片」设计的，
+> YouTube 是「频道 → 视频 → 下载文件」，形状不同（见 `internal/ytsub/ytsub.go` 包头注释）。
+
+| 点 | 现状（2026-10-28 实测） | 改版后怎么发现 |
+|---|---|---|
+| 增量通道 | RSS `feeds/videos.xml?channel_id=UC…`：**固定 15 条**，含标题/发布时间/观看数/封面/简介，**没有时长、没有 Shorts 标记** | 首屏突然只有个位数或没有新条目 → 先看 RSS 是否还 200 |
+| 回填通道 | `yt-dlp -J --flat-playlist --playlist-end N`：200 条 5.8 秒，**时长 200/200 有、`timestamp` 0/200 没有** | 墙上全是「时间未知」→ 正常（这是 flat 的固有缺陷），点开单条会补 |
+| 单条补全 | `yt-dlp -J --no-playlist <watch?v=>`：4.1 秒，给 `timestamp` / `upload_date` / `description` / 时长 / 观看数 | 「查一下发布时间」一直失败 → yt-dlp 版本或出口 IP 出问题 |
+| 频道 id 解析 | 频道页 `"externalId":"UC…"` 或 `<link rel="canonical" href="…/channel/UC…">`。页里还有几十个别的 `"channelId":"UC…"`（推荐位），**只有这两处可信** | 订阅进来的频道名像是别人的 → 用了推荐位的 id |
+| 视频链接反查频道 | `watch?v=` 页里取 `"channelId"`，**必须再抓一次频道页**才能拿到频道名/头像（视频页的 `og:title` 是那条视频的） | 频道名是一串视频标题 → 少抓了第二步 |
+| RSS 的 `yt:channelId` | 22 位、**不带 `UC` 前缀**（`q-Fj5jknLsUf-MWSy4_brA`），入库前补 `UC` | 频道 id 以 UC 之外的字符开头 → 归一化退回旧逻辑 |
+| 播放能力 | 观看页 `streamingData` 里**没有 `formats`**，只有 26 个 `adaptiveFormats`（全是 av01 纯视频轨 144p–2160p）；唯一的混流文件是 itag 18（360p） | 想直接「下一个现成文件」是做不到的，这是 YouTube 的现状，不是解析缺失 |
+| 合轨 | `ffmpeg -c copy` 只换容器、不转码，实测 **0.052 秒**；默认取 AV1 视频轨 + 最高音质音轨 → mp4 | 个别播放器无声 → mp4 里的 Opus 轨；设置里把格式改成 `bv*+ba[ext=m4a]/bv*+ba` |
+| yt-dlp 版本 | **这是最常见的失败原因**：2026.07.04 全线 `HTTP Error 403: Forbidden`，2026.10.26 正常。`/api/yt/health` 的 `stale` 判据是版本日期超 90 天 | 下载全失败但网页能播 → 先看 health 的版本号 |
+| `player_client` 取巧 | `mweb` 只给 itag 18；`android` 没有 AV1；`tv` 报「The page needs to be reloaded」。**不要试图绕开合轨** | 又想走「现成文件」的捷径时会踩这三个坑 |
+| 出口 IP | 抓页面被要求人机验证会回 403 → `blocked`（不设冷却，换 IP 后立刻重试即可）。设置 → 网络与代理 → YouTube 专用代理，保存即生效 | 一直都是 `blocked` → 该出口 IP/代理也脏 |
+| 封面尺寸 | `i.ytimg.com/vi/<id>/mqdefault.jpg` 是 320×180 的 16:9，**适合卡片**；下载入库时改用 `maxresdefault` 给 Emby 当 fanart，没有 maxres 的老视频会退回 mq | 卡片封面被裁成方图 → 没用 mqdefault 这一档 |
+| 限流 | 页面/RSS 之间固定 1200ms 间隔（`social.NewThrottle`）；429 按 `Retry-After`（1–3600 秒，缺省 15 分钟）冷却 | 批量同步时偶发 429 → 间隔调大或换出口 |
+
+真机验收（2026-10-28，直连）：添加 `UCq-Fj5jknLsUf-MWSy4_brA`（T-Series）→ 深度回填 200 条 6 秒 →
+RSS 同步补齐最新 15 条时间 → 单条 refresh 补回 `2026-09-30` →
+下载 8K（4320p）AV1 + Opus → `-c copy` 合轨 → 358 MB 落盘 `YouTube/<频道>/<标题>/`，
+poster 1000×1500 / thumb 1280×720 / fanart 1920×1080 / nfo（含 `uniqueid type="youtube"`）齐全，
+`GET /api/downloads` 能看到该任务与本地路径。

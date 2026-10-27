@@ -36,6 +36,10 @@ class LiveStore {
   momentsUnseen = $state(0);
   /** 有新照片进来就 +1，照片墙据此刷新 */
   momentsVersion = $state(0);
+  /** YouTube：上次看过之后新入库的视频数（侧边栏角标） */
+  ytUnseen = $state(0);
+  /** 有新视频进来就 +1，YouTube 墙据此刷新 */
+  ytVersion = $state(0);
   /** performerId -> 头像（影片卡左侧那颗圆头像；只拉一次订阅艺人） */
   performerAvatars = $state<Record<number, string>>({});
   private avatarsRequested = false;
@@ -69,6 +73,24 @@ class LiveStore {
     try {
       const res = await api.momentAccounts();
       this.momentsUnseen = res.unseen;
+    } catch {
+      /* 忽略 */
+    }
+  }
+
+  bumpYt(): void {
+    this.ytVersion += 1;
+  }
+
+  setYtUnseen(n: number): void {
+    this.ytUnseen = n;
+  }
+
+  /** 拉一次 YouTube 的未看计数（启动时与进入页面后用）。失败静默：红点不值得弹错。 */
+  async refreshYtUnseen(): Promise<void> {
+    try {
+      const res = await api.ytChannels();
+      this.ytUnseen = res.stats.unseen;
     } catch {
       /* 忽略 */
     }

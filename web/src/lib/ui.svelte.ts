@@ -8,7 +8,15 @@
  */
 import { navigate, router } from './router.svelte';
 
-export type SettingsPane = 'sync' | 'network' | 'upload' | 'download' | 'social' | 'libraries' | 'account';
+export type SettingsPane =
+  | 'sync'
+  | 'network'
+  | 'upload'
+  | 'download'
+  | 'social'
+  | 'youtube'
+  | 'libraries'
+  | 'account';
 
 const PANE_IDS: readonly SettingsPane[] = [
   'sync',
@@ -16,6 +24,7 @@ const PANE_IDS: readonly SettingsPane[] = [
   'upload',
   'download',
   'social',
+  'youtube',
   'libraries',
   'account',
 ];

@@ -501,6 +501,13 @@ func (s *Server) handleClearMomentCooldown(w http.ResponseWriter, r *http.Reques
 		a.Throttle().Clear()
 		cleared = append(cleared, a.Key())
 	}
+	// YouTube 的限速器不在 social.Registry 里（它不是 social.Adapter），单独清一次。
+	if in.Platform == "" || in.Platform == "youtube" {
+		if th := s.ytThrottle(); th != nil {
+			th.Clear()
+			cleared = append(cleared, "youtube")
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": cleared})
 }
 

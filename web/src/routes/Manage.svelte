@@ -11,12 +11,16 @@
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
   import { navigate } from '../lib/router.svelte';
+  import { ui } from '../lib/ui.svelte';
   import type {
     ManageCount,
     ManageResponse,
     ManageSubscription,
     MomentAccount,
     MomentsManageResponse,
+    YtChannel,
+    YtHealth,
+    YtManageResponse,
   } from '../lib/types';
 
   /**
@@ -27,7 +31,7 @@
    * 页签不走地址栏：两个页签看的是同一份数据，只是展开方式不同，刷新回到「统计」即可。
    */
 
-  type Tab = 'stats' | 'subs' | 'moments';
+  type Tab = 'stats' | 'subs' | 'moments' | 'youtube';
 
   let tab = $state<Tab>('stats');
   let data = $state<ManageResponse | null>(null);
@@ -38,6 +42,15 @@
   let busyId = $state<number | null>(null);
   let bulkBusy = $state(false);
   let reloadSeq = 0;
+
+  // ---- YouTube 管理（M6）：同样是独立接口，切到页签才拉 ----
+  let yt = $state<YtManageResponse | null>(null);
+  let ytLoading = $state(false);
+  let ytError = $state('');
+  let ytHealth = $state<YtHealth | null>(null);
+  let ytBusyId = $state<number | null>(null);
+  let ytAddUrl = $state('');
+  let ytAddBusy = $state(false);
 
   // ---- 动态管理（M5）：单独一个接口，切到这个页签才去拉 ----
   let moments = $state<MomentsManageResponse | null>(null);
@@ -62,6 +75,97 @@
       error = messageFor(err);
     } finally {
       if (seq === reloadSeq) loading = false;
+    }
+  }
+
+  async function loadYt(): Promise<void> {
+    ytLoading = yt === null;
+    ytError = '';
+    try {
+      yt = await api.manageYt();
+    } catch (err) {
+      ytError = messageFor(err);
+    } finally {
+      ytLoading = false;
+    }
+    if (ytHealth === null) {
+      try {
+        ytHealth = await api.ytHealth();
+      } catch {
+        ytHealth = null;
+      }
+    }
+  }
+
+  async function syncYt(channel: YtChannel, deep: boolean): Promise<void> {
+    ytBusyId = channel.id;
+    try {
+      const res = await api.ytSync(channel.id, deep);
+      live.toast(
+        res.jobId > 0
+          ? `已投递「${channel.title}」${deep ? '深度回填' : '增量同步'}`
+          : `「${channel.title}」已经在队列里了`,
+        'info',
+      );
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      ytBusyId = null;
+    }
+  }
+
+  async function toggleYt(channel: YtChannel): Promise<void> {
+    ytBusyId = channel.id;
+    try {
+      await api.ytPatch(channel.id, { enabled: !channel.enabled });
+      await loadYt();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      ytBusyId = null;
+    }
+  }
+
+  async function removeYt(channel: YtChannel): Promise<void> {
+    if (!window.confirm(`取消订阅「${channel.title}」？只删记录，已下载到本地库的视频不会动。`)) return;
+    ytBusyId = channel.id;
+    try {
+      await api.ytDelete(channel.id);
+      live.toast('已取消订阅', 'success');
+      await loadYt();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      ytBusyId = null;
+    }
+  }
+
+  async function downloadYtUnseen(channel: YtChannel): Promise<void> {
+    ytBusyId = channel.id;
+    try {
+      const res = await api.ytDownloadUnseen(channel.id);
+      live.toast(res.queued > 0 ? `已排队 ${String(res.queued)} 条视频` : '没有未看的视频可下载', 'info');
+      live.refreshDownloads(true);
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      ytBusyId = null;
+    }
+  }
+
+  async function addYtChannel(): Promise<void> {
+    const raw = ytAddUrl.trim();
+    if (raw === '' || ytAddBusy) return;
+    ytAddBusy = true;
+    try {
+      const res = await api.ytAdd(raw);
+      live.toast(res.created ? `已订阅 ${res.channel.title}` : `${res.channel.title} 已经订阅过了`, 'success');
+      ytAddUrl = '';
+      await loadYt();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      ytAddBusy = false;
     }
   }
 
@@ -426,6 +530,21 @@
             <span class="ml-1 tabular-nums text-dim">{formatCount(moments.stats.accounts)}</span>
           {/if}
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'youtube'}
+          class={tabClass(tab === 'youtube')}
+          onclick={() => {
+            tab = 'youtube';
+            if (yt === null && !ytLoading) void loadYt();
+          }}
+        >
+          YouTube
+          {#if yt}
+            <span class="ml-1 tabular-nums text-dim">{formatCount(yt.stats.channels)}</span>
+          {/if}
+        </button>
       </div>
       <div class="flex items-center gap-2">
         <span class="hidden text-meta text-dim sm:inline">
@@ -649,7 +768,7 @@
           </ul>
         {/if}
       </div>
-    {:else}
+    {:else if tab === 'moments'}
       <!-- 动态管理（M5）：博主列表 + 每人的抓取状态 -->
       <div class="mt-3 flex flex-col gap-2">
         <div class="flex flex-wrap items-center gap-2">
@@ -796,6 +915,205 @@
           </ul>
           <p class="text-meta text-dim">
             删除博主只清记录，已经存进本地库的照片不会被删。
+          </p>
+        {/if}
+      </div>
+    {:else}
+      <!-- YouTube 管理（M6）：频道列表 + yt-dlp 健康度 -->
+      <div class="mt-3 flex flex-col gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-meta text-dim">
+            {#if yt}
+              共 {formatCount(yt.stats.channels)} 个频道 · {formatCount(yt.stats.videos)} 条视频 ·
+              {formatCount(yt.stats.unseen)} 条未看
+              {#if yt.stats.errors > 0}
+                · <span class="text-brick">异常 {formatCount(yt.stats.errors)} 个</span>
+              {/if}
+            {:else}
+              正在载入…
+            {/if}
+          </span>
+          <div class="ml-auto flex items-center gap-2">
+            <button type="button" class="btn btn-ghost h-8" onclick={() => void loadYt()}>刷新</button>
+            <button type="button" class="btn h-8" onclick={() => navigate('/youtube')}>打开视频墙</button>
+          </div>
+        </div>
+
+        <!-- yt-dlp 健康度：这一格是「为什么下载总是失败」的答案，放在最上面 -->
+        {#if ytHealth}
+          <div class="panel px-4 py-3">
+            {#if !ytHealth.found}
+              <p class="text-ui text-brick">没找到 yt-dlp：只能抓 RSS（没有时长），也不能下载。</p>
+              <p class="mt-1 text-meta text-dim">
+                装一个或在设置里填绝对路径（pipx / brew / 官方二进制都行），然后回来点「重新检查」。
+              </p>
+            {:else}
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta">
+                <span class="text-fg">yt-dlp {ytHealth.version}</span>
+                <span class={ytHealth.stale ? 'text-brick' : 'text-sage'}>
+                  {ytHealth.stale ? `已 ${String(ytHealth.ageDays)} 天未更新，下载很可能 403` : '版本新鲜'}
+                </span>
+                <span class={ytHealth.ffmpegOk ? 'text-dim' : 'text-brick'}>
+                  {ytHealth.ffmpegOk ? 'ffmpeg 可用' : 'ffmpeg 缺失，合轨会失败'}
+                </span>
+                <span class="truncate font-mono text-[0.6875rem] text-dim" title={ytHealth.path}>{ytHealth.path}</span>
+              </div>
+            {/if}
+            <div class="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                class="rounded-full bg-raise px-2.5 py-1 text-meta text-fg transition-colors hover:bg-panel"
+                onclick={() => {
+                  ytHealth = null;
+                  void loadYt();
+                }}
+              >
+                重新检查
+              </button>
+              <button type="button" class="text-meta text-dim hover:text-fg" onclick={() => ui.openSettings('youtube')}>
+                打开 YouTube 设置
+              </button>
+            </div>
+          </div>
+        {/if}
+
+        <!-- 直接在这里加频道：管理页是「一次性配好」的地方，不必跳回视频墙 -->
+        <form
+          class="flex flex-wrap items-center gap-2"
+          onsubmit={(event) => {
+            event.preventDefault();
+            void addYtChannel();
+          }}
+        >
+          <input
+            bind:value={ytAddUrl}
+            class="field h-9 min-w-0 flex-1"
+            type="text"
+            placeholder="频道链接、@名 或 UC 开头的频道 id"
+            spellcheck="false"
+            autocomplete="off"
+            disabled={ytAddBusy}
+          />
+          <button type="submit" class="btn h-9" disabled={ytAddBusy || ytAddUrl.trim() === ''}>
+            {ytAddBusy ? '添加中…' : '添加频道'}
+          </button>
+        </form>
+
+        {#if ytError}
+          <p class="panel px-4 py-3 text-ui text-brick" role="alert">{ytError}</p>
+        {:else if ytLoading || yt === null}
+          <div class="panel px-4 py-10 text-center text-ui text-dim">正在载入…</div>
+        {:else if yt.channels.length === 0}
+          <EmptyState
+            title="还没有订阅任何 YouTube 频道"
+            hint="在上面贴一个频道链接就能订阅；首次添加会用 yt-dlp 回填最近的历史视频。"
+            icon="film"
+          >
+            {#snippet actions()}
+              <button type="button" class="btn btn-primary" onclick={() => navigate('/youtube')}>去视频墙添加</button>
+            {/snippet}
+          </EmptyState>
+        {:else}
+          <ul class="panel divide-y divide-line">
+            {#each yt.channels as channel (channel.id)}
+              <li class="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                {#if channel.avatarUrl}
+                  <img
+                    src={imageUrl(channel.avatarUrl, 80) ?? ''}
+                    alt=""
+                    class="h-9 w-9 shrink-0 rounded-full object-cover"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                {:else}
+                  <span class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-raise text-meta text-dim">
+                    {channel.title.slice(0, 1).toUpperCase()}
+                  </span>
+                {/if}
+
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="truncate text-ui text-fg">{channel.title}</span>
+                    {#if !channel.enabled}
+                      <span class="shrink-0 rounded-full bg-raise px-1.5 text-meta text-dim">已停用</span>
+                    {/if}
+                  </div>
+                  <div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-meta text-dim">
+                    {#if channel.handle}
+                      <span class="truncate">@{channel.handle}</span>
+                      <span aria-hidden="true">·</span>
+                    {/if}
+                    <span class="tabular-nums">
+                      {formatCount(channel.videoCount)} 条
+                      {#if channel.unseenCount > 0}
+                        · <span class="text-fg">{formatCount(channel.unseenCount)} 未看</span>
+                      {/if}
+                    </span>
+                    {#if channel.lastSyncedAt}
+                      <span aria-hidden="true">·</span>
+                      <span>{relativeTime(channel.lastSyncedAt)}同步</span>
+                    {/if}
+                    {#if channel.backfilledAt}
+                      <span aria-hidden="true">·</span>
+                      <span>历史已回填</span>
+                    {/if}
+                  </div>
+                  {#if channel.lastError}
+                    <p class="mt-1 line-clamp-2 text-meta text-brick">{channel.lastError}</p>
+                  {/if}
+                </div>
+
+                <div class="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={ytBusyId === channel.id}
+                    onclick={() => void syncYt(channel, false)}
+                  >
+                    同步
+                  </button>
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={ytBusyId === channel.id}
+                    title="用 yt-dlp 再列一遍历史（补时长、补漏掉的条目）"
+                    onclick={() => void syncYt(channel, true)}
+                  >
+                    深度回填
+                  </button>
+                  {#if channel.unseenCount > 0}
+                    <button
+                      type="button"
+                      class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                      disabled={ytBusyId === channel.id}
+                      title="把这个频道所有未看视频排进下载队列"
+                      onclick={() => void downloadYtUnseen(channel)}
+                    >
+                      下载未看
+                    </button>
+                  {/if}
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={ytBusyId === channel.id}
+                    onclick={() => void toggleYt(channel)}
+                  >
+                    {channel.enabled ? '停用' : '启用'}
+                  </button>
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-brick/80 transition-colors hover:bg-raise hover:text-brick"
+                    disabled={ytBusyId === channel.id}
+                    onclick={() => void removeYt(channel)}
+                  >
+                    删除
+                  </button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+          <p class="text-meta text-dim">
+            下载是手动的：视频墙点「下载」，或这里点「下载未看」。下完就是本地库里一部普通影片（带 nfo，Emby 能刮到）。
           </p>
         {/if}
       </div>

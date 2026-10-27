@@ -33,6 +33,7 @@ import (
 	socialx "github.com/mario/myporn/internal/social/xcom"
 	"github.com/mario/myporn/internal/store"
 	"github.com/mario/myporn/internal/webui"
+	"github.com/mario/myporn/internal/ytsub"
 )
 
 func main() {
@@ -118,6 +119,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	// YouTube 订阅（M6）：yt-dlp 调用器 + 按 IP 计的限速器。
+	// 代理 / Cookie / 格式串都是每次调用现取的，所以设置里改完立刻生效。
+	ytDlp := ytsub.NewYtDlp(
+		func() string {
+			if v, err := st.GetSetting("ytdlp_path"); err == nil && strings.TrimSpace(v) != "" {
+				return v
+			}
+			return cfg.YtDlpPath
+		},
+		proxyFunc(px, "youtube"),
+		func() string {
+			v, err := st.GetSecret(box, "yt_cookies")
+			if err != nil {
+				return ""
+			}
+			return v
+		},
+		func() string {
+			v, _ := st.GetSetting("yt_format")
+			return v
+		},
+		logger)
+	ytThrottle := social.NewThrottle(1200 * time.Millisecond)
+
 	hub := events.NewHub()
 	// 图片缓存服务端一份：HTTP 代理与同步任务共用同一份磁盘缓存（同步时预热封面）。
 	images := imgcache.New(cfg.DataDir, px.Func(), cfg.FFmpegPath, logger)
@@ -130,7 +155,21 @@ func main() {
 		}
 	}()
 	runner := jobs.NewRunner(cfg, st, reg, socialReg, avatars, profiles, hub, logger, images)
+	// 必须在 RegisterDefaults 之前注入：注册表按「有没有 yt-dlp」决定要不要挂 YouTube 任务。
+	runner.SetYouTube(ytDlp, ytThrottle)
 	runner.RegisterDefaults()
+
+	// yt-dlp 是这个功能最脆的一环（实测旧版全线 403，见 M6 §11.5），启动时先把版本打进日志。
+	verCtx, cancelVer := context.WithTimeout(context.Background(), 15*time.Second)
+	ytVersion := ytDlp.Version(verCtx)
+	cancelVer()
+	if v := ytVersion; !v.Found {
+		logger.Warn("没有找到 yt-dlp：YouTube 只能抓 RSS（没有时长、没有深度回填），也不能下载")
+	} else if v.Stale {
+		logger.Warn("yt-dlp 版本偏旧，下载很可能失败", "version", v.Version, "ageDays", v.AgeDays)
+	} else {
+		logger.Info("yt-dlp 可用", "version", v.Version, "path", v.Path)
+	}
 
 	// ffmpeg 只在下载任务的封装步骤用到；缺失不影响浏览与同步。
 	checkCtx, cancelCheck := context.WithTimeout(context.Background(), 15*time.Second)
@@ -147,6 +186,7 @@ func main() {
 	go runner.Start(ctx)
 	go runScheduler(ctx, st, runner, logger)
 	go runSocialScheduler(ctx, st, runner, logger)
+	go runYtScheduler(ctx, st, runner, logger)
 	// 启动后补一轮封面（历史数据里可能存着带签名、早就过期的封面地址）。
 	go func() {
 		if n := runner.RepairCovers(ctx); n > 0 {
@@ -240,6 +280,40 @@ func runSocialScheduler(ctx context.Context, st *store.Store, runner *jobs.Runne
 		}
 		if _, err := runner.EnqueueSocialSync(0, "auto"); err != nil {
 			log.Warn("投递社交动态同步失败", "err", err)
+			continue
+		}
+		lastRun = time.Now()
+	}
+}
+
+// runYtScheduler 每 yt_sync_hours（默认 6）把一轮「全部频道增量同步」丢进队列。
+// 与社交动态同理：YouTube 也按 IP 计限流，集中成一轮串行抓比错开更可控。
+func runYtScheduler(ctx context.Context, st *store.Store, runner *jobs.Runner, log *slog.Logger) {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	var lastRun time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		hours := 6
+		if v, err := st.GetSetting("yt_sync_hours"); err == nil {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+				hours = n
+			}
+		}
+		if time.Since(lastRun) < time.Duration(hours)*time.Hour {
+			continue
+		}
+		channels, err := st.ListYtChannels(true)
+		if err != nil || len(channels) == 0 {
+			lastRun = time.Now()
+			continue
+		}
+		if _, err := runner.EnqueueYtSync(0, "auto"); err != nil {
+			log.Warn("投递 YouTube 同步失败", "err", err)
 			continue
 		}
 		lastRun = time.Now()

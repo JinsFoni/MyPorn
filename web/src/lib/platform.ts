@@ -8,6 +8,7 @@ export const PLATFORM_LABEL: Record<string, string> = {
   pornhub: 'Pornhub',
   xhamster: 'xHamster',
   beeg: 'beeg',
+  youtube: 'YouTube',
 };
 
 export function platformLabel(platform: string): string {

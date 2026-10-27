@@ -54,8 +54,8 @@ type Stats struct {
 	PerformersEnabled int
 	PerformersFailed  int
 	// 影片
-	Videos       int
-	VideosNew    int
+	Videos         int
+	VideosNew      int
 	VideosWithFile int
 	// 落盘
 	Files int
@@ -188,7 +188,8 @@ func (s *Store) Stats() (*Stats, error) {
 	// ---- 下载 ----
 	var st string
 	var n int
-	rows, err := s.db.Query(`SELECT status, COUNT(*) FROM jobs WHERE type = 'download' GROUP BY status`)
+	// yt_download 也是「下载」：分成两种任务类型只是执行路径不同，读数上不该分开。
+	rows, err := s.db.Query(`SELECT status, COUNT(*) FROM jobs WHERE type IN ('download','yt_download') GROUP BY status`)
 	if err != nil {
 		return nil, err
 	}

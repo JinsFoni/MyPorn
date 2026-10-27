@@ -2,7 +2,14 @@
  * SSE 封装（EventSource）：单连接、自动重连、页隐藏时断开。
  * 事件与 docs/API.md §5 对齐。
  */
-import type { JobUpdatedEvent, PhotoNewEvent, SocialProgressEvent, SyncProgress, VideoNewEvent } from './types';
+import type {
+  JobUpdatedEvent,
+  PhotoNewEvent,
+  SocialProgressEvent,
+  SyncProgress,
+  VideoNewEvent,
+  YtNewEvent,
+} from './types';
 
 export interface LiveEventMap {
   'job.updated': JobUpdatedEvent;
@@ -10,6 +17,7 @@ export interface LiveEventMap {
   'video.new': VideoNewEvent;
   'photo.new': PhotoNewEvent;
   'social.progress': SocialProgressEvent;
+  'yt.new': YtNewEvent;
   ping: Record<string, never>;
 }
 

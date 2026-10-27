@@ -108,8 +108,11 @@ func (s *Store) SetJobProgress(id int64, progress float64, message string) error
 }
 
 func (s *Store) FinishJob(id int64, status, errMsg string) error {
-	_, err := s.db.Exec(`UPDATE jobs SET status = ?, error = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
-		status, errMsg, now(), now(), id)
+	// 完成的任务直接把进度补到 100：最后一次 Progress 常被 800ms 节流吞掉，
+	// 否则下载页会出现「完成 · 92.0%」这种自相矛盾的读数。
+	_, err := s.db.Exec(`UPDATE jobs SET status = ?, error = ?, finished_at = ?, updated_at = ?,
+		progress = CASE WHEN ? = 'done' THEN 100 ELSE progress END WHERE id = ?`,
+		status, errMsg, now(), now(), status, id)
 	return err
 }
 
@@ -123,14 +126,25 @@ func (s *Store) GetJob(id int64) (*model.Job, error) {
 }
 
 func (s *Store) ListJobs(jobType, status string, limit int) ([]*model.Job, error) {
+	if jobType == "" {
+		return s.ListJobsByTypes(nil, status, limit)
+	}
+	return s.ListJobsByTypes([]string{jobType}, status, limit)
+}
+
+// ListJobsByTypes 是 ListJobs 的多类型版本：下载队列要把 download 与 yt_download
+// 混在一起按时间倒序显示，否则下载页会看不到 YouTube 那条。
+func (s *Store) ListJobsByTypes(types []string, status string, limit int) ([]*model.Job, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	q := `SELECT ` + jobCols + ` FROM jobs WHERE 1=1`
 	args := []any{}
-	if jobType != "" {
-		q += ` AND type = ?`
-		args = append(args, jobType)
+	if len(types) > 0 {
+		q += ` AND type IN (` + placeholders(len(types)) + `)`
+		for _, t := range types {
+			args = append(args, t)
+		}
 	}
 	if status != "" {
 		q += ` AND status = ?`

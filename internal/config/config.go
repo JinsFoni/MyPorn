@@ -35,6 +35,8 @@ type Config struct {
 	ImgCacheMaxMB int
 	FFmpegPath    string
 	FFprobePath   string
+	// YtDlpPath 是 yt-dlp 可执行文件（YouTube 深度回填与下载用）；空表示按 PATH 找。
+	YtDlpPath string
 	// DownloadRateKB 是单任务下载限速（KB/s），0 表示不限。
 	DownloadRateKB int
 }
@@ -60,6 +62,7 @@ func Load(root string) (*Config, error) {
 			"beeg":      env("PLATFORM_PROXY_BEEG", ""),
 			"x":         env("PLATFORM_PROXY_X", ""),
 			"instagram": env("PLATFORM_PROXY_INSTAGRAM", ""),
+			"youtube":   env("PLATFORM_PROXY_YOUTUBE", ""),
 		},
 		OpenList: OpenList{
 			BaseURL: env("OPENLIST_BASE_URL", ""),
@@ -73,6 +76,7 @@ func Load(root string) (*Config, error) {
 		ImgCacheMaxMB:  envInt("IMG_CACHE_MAX_MB", 2048),
 		FFmpegPath:     env("FFMPEG_PATH", "ffmpeg"),
 		FFprobePath:    env("FFPROBE_PATH", "ffprobe"),
+		YtDlpPath:      env("YTDLP_PATH", "yt-dlp"),
 		DownloadRateKB: envInt("DOWNLOAD_RATE_KB", 0),
 	}
 	if c.SecretKey == "" {

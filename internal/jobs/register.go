@@ -20,12 +20,32 @@ func (r *Runner) RegisterDefaults() {
 
 	// 社交动态：一个平台同时只跑一个（限流是按 IP 的，并发只会更快撞墙），
 	// 所以并发上限固定 1，不分平台开关。
+	// YouTube 订阅（M6）：抓取同样固定并发 1；下载与普通下载共用并发上限。
+	if r.ytDlp != nil {
+		r.Register(model.JobTypeYtSync, func() int { return 1 }, r.runYtSyncJob)
+		r.Register(model.JobTypeYtDownload, func() int {
+			return r.settingInt("download_concurrency", r.cfg.MaxDownload)
+		}, r.runYtDownloadJob)
+	}
+
 	if r.social != nil {
 		r.Register(model.JobTypeSocialSync, func() int { return 1 }, r.runSocialSyncJob)
 		r.Register(model.JobTypeSocialSave, func() int {
 			return r.settingInt("download_concurrency", r.cfg.MaxDownload)
 		}, r.runSocialSaveJob)
 	}
+}
+
+// settingString 读一个字符串设置，空值回落默认。
+func (r *Runner) settingString(key, def string) string {
+	v, err := r.st.GetSetting(key)
+	if err != nil {
+		return def
+	}
+	if v = strings.TrimSpace(v); v == "" {
+		return def
+	}
+	return v
 }
 
 func (r *Runner) settingInt(key string, def int) int {

@@ -54,18 +54,41 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 // ---------- 设置 ----------
 
 type settingsDTO struct {
-	SyncIntervalHours   int       `json:"syncIntervalHours"`
-	GlobalProxy         string    `json:"globalProxy"`
-	PlatformProxy       proxyDTO  `json:"platformProxy"`
-	NamingTemplate      string    `json:"namingTemplate"`
-	DownloadConcurrency int       `json:"downloadConcurrency"`
-	DownloadRateKB      int       `json:"downloadRateKb"`
-	AutoDownloadNew     bool      `json:"autoDownloadNew"`
-	DefaultLibraryID    int64     `json:"defaultLibraryId"`
-	LibraryRoot         string    `json:"libraryRoot"`
-	FFmpegAvailable     bool      `json:"ffmpegAvailable"`
-	OpenList            olDTO     `json:"openlist"`
-	Social              socialDTO `json:"social"`
+	SyncIntervalHours   int        `json:"syncIntervalHours"`
+	GlobalProxy         string     `json:"globalProxy"`
+	PlatformProxy       proxyDTO   `json:"platformProxy"`
+	NamingTemplate      string     `json:"namingTemplate"`
+	DownloadConcurrency int        `json:"downloadConcurrency"`
+	DownloadRateKB      int        `json:"downloadRateKb"`
+	AutoDownloadNew     bool       `json:"autoDownloadNew"`
+	DefaultLibraryID    int64      `json:"defaultLibraryId"`
+	LibraryRoot         string     `json:"libraryRoot"`
+	FFmpegAvailable     bool       `json:"ffmpegAvailable"`
+	OpenList            olDTO      `json:"openlist"`
+	Social              socialDTO  `json:"social"`
+	YouTube             youtubeDTO `json:"youtube"`
+}
+
+// youtubeDTO 是 M6 YouTube 订阅的设置。
+//
+// 这里不放 yt-dlp 的版本号：取版本要 fork 一个进程，而设置弹窗打开就会拉一次设置。
+// 版本信息走 /api/yt/health，前端进到 YouTube 那一节时才问（它决定要不要显示「请升级」）。
+// Cookie 与 Instagram 一样只写不读，只告诉前端「有没有配」。
+type youtubeDTO struct {
+	SyncHours     int    `json:"syncHours"`
+	BackfillLimit int    `json:"backfillLimit"`
+	Format        string `json:"format"`
+	YtDlpPath     string `json:"ytdlpPath"`
+	HasCookies    bool   `json:"hasCookies"`
+}
+
+// youtubePatch 是设置里可以改的 YouTube 项；Cookies 传 "" 表示清空。
+type youtubePatch struct {
+	SyncHours     *int    `json:"syncHours"`
+	BackfillLimit *int    `json:"backfillLimit"`
+	Format        *string `json:"format"`
+	YtDlpPath     *string `json:"ytdlpPath"`
+	Cookies       *string `json:"cookies"`
 }
 
 // socialDTO 是 M5 社交动态的设置。
@@ -94,6 +117,28 @@ type proxyDTO struct {
 	Beeg      string `json:"beeg"`
 	Instagram string `json:"instagram"`
 	X         string `json:"x"`
+	YouTube   string `json:"youtube"`
+}
+
+// youtubeInt 读一个整数设置并夹到区间内（坏值一律回落默认）。
+func youtubeInt(raw string, def, min, max int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n <= 0 {
+		return def
+	}
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
+// hasYtCookies 只回答「配没配」，不回传明文。
+func (s *Server) hasYtCookies() bool {
+	v, err := s.st.GetSecret(s.box, "yt_cookies")
+	return err == nil && strings.TrimSpace(v) != ""
 }
 
 type olDTO struct {
@@ -132,6 +177,7 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 			Beeg:      get("proxy_beeg", s.cfg.PlatformProxyFor("beeg")),
 			Instagram: get("proxy_instagram", s.cfg.PlatformProxyFor("instagram")),
 			X:         get("proxy_x", s.cfg.PlatformProxyFor("x")),
+			YouTube:   get("proxy_youtube", s.cfg.PlatformProxyFor("youtube")),
 		},
 		NamingTemplate:      get("naming_template", library.DefaultTemplate),
 		DownloadConcurrency: conc,
@@ -149,6 +195,13 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 			SyncHours:          socialSyncHours(get("social_sync_hours", "6")),
 			HasInstagramCookie: s.hasInstagramCookie(),
 		},
+		YouTube: youtubeDTO{
+			SyncHours:     youtubeInt(get("yt_sync_hours", "6"), 6, 1, 48),
+			BackfillLimit: youtubeInt(get("yt_backfill_limit", "200"), 200, 10, 2000),
+			Format:        get("yt_format", ""),
+			YtDlpPath:     get("ytdlp_path", ""),
+			HasCookies:    s.hasYtCookies(),
+		},
 	}
 }
 
@@ -157,16 +210,17 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 }
 
 type settingsPatch struct {
-	SyncIntervalHours   *int         `json:"syncIntervalHours"`
-	GlobalProxy         *string      `json:"globalProxy"`
-	PlatformProxy       *proxyDTO    `json:"platformProxy"`
-	NamingTemplate      *string      `json:"namingTemplate"`
-	DownloadConcurrency *int         `json:"downloadConcurrency"`
-	DownloadRateKB      *int         `json:"downloadRateKb"`
-	AutoDownloadNew     *bool        `json:"autoDownloadNew"`
-	LibraryRoot         *string      `json:"libraryRoot"`
-	OpenList            *olDTO       `json:"openlist"`
-	Social              *socialPatch `json:"social"`
+	SyncIntervalHours   *int          `json:"syncIntervalHours"`
+	GlobalProxy         *string       `json:"globalProxy"`
+	PlatformProxy       *proxyDTO     `json:"platformProxy"`
+	NamingTemplate      *string       `json:"namingTemplate"`
+	DownloadConcurrency *int          `json:"downloadConcurrency"`
+	DownloadRateKB      *int          `json:"downloadRateKb"`
+	AutoDownloadNew     *bool         `json:"autoDownloadNew"`
+	LibraryRoot         *string       `json:"libraryRoot"`
+	OpenList            *olDTO        `json:"openlist"`
+	Social              *socialPatch  `json:"social"`
+	YouTube             *youtubePatch `json:"youtube"`
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +247,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		set("proxy_beeg", strings.TrimSpace(p.PlatformProxy.Beeg))
 		set("proxy_instagram", strings.TrimSpace(p.PlatformProxy.Instagram))
 		set("proxy_x", strings.TrimSpace(p.PlatformProxy.X))
+		set("proxy_youtube", strings.TrimSpace(p.PlatformProxy.YouTube))
 	}
 	if p.NamingTemplate != nil {
 		set("naming_template", strings.TrimSpace(*p.NamingTemplate))
@@ -246,6 +301,42 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 					writeErr(w, http.StatusInternalServerError, "internal", "保存 Cookie 失败")
 					return
 				}
+			}
+		}
+	}
+	if p.YouTube != nil {
+		if p.YouTube.SyncHours != nil {
+			v := *p.YouTube.SyncHours
+			if v < 1 {
+				v = 1
+			}
+			if v > 48 {
+				v = 48
+			}
+			set("yt_sync_hours", fmt.Sprint(v))
+		}
+		if p.YouTube.BackfillLimit != nil {
+			v := *p.YouTube.BackfillLimit
+			if v < 10 {
+				v = 10
+			}
+			if v > 2000 {
+				v = 2000
+			}
+			set("yt_backfill_limit", fmt.Sprint(v))
+		}
+		if p.YouTube.Format != nil {
+			// 空串 = 用默认串（AV1 最高画质 + 最高音质），不写库，省得以后改默认值改不动。
+			set("yt_format", strings.TrimSpace(*p.YouTube.Format))
+		}
+		if p.YouTube.YtDlpPath != nil {
+			set("ytdlp_path", strings.TrimSpace(*p.YouTube.YtDlpPath))
+		}
+		if p.YouTube.Cookies != nil {
+			raw := strings.TrimSpace(*p.YouTube.Cookies)
+			if err := s.st.SetSecret(s.box, "yt_cookies", raw); err != nil {
+				writeErr(w, http.StatusInternalServerError, "internal", "保存 Cookie 失败")
+				return
 			}
 		}
 	}

@@ -186,7 +186,8 @@ func (s *Server) handleCreateDownload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 50)
 	filter := r.URL.Query().Get("status")
-	items, err := s.st.ListJobs(model.JobTypeDownload, filter, limit)
+	// YouTube 下载也进这个队列：任务类型不同，用户在「下载」页看到的却应该是同一件事。
+	items, err := s.st.ListJobsByTypes([]string{model.JobTypeDownload, model.JobTypeYtDownload}, filter, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
@@ -235,6 +236,9 @@ func (s *Server) handleListDownloads(w http.ResponseWriter, r *http.Request) {
 	}
 
 	active, _ := s.st.ActiveJobCount(model.JobTypeDownload)
+	if n, err := s.st.ActiveJobCount(model.JobTypeYtDownload); err == nil {
+		active += n
+	}
 	usage, _ := s.st.LibraryUsages()
 	var totalSize int64
 	for _, u := range usage {

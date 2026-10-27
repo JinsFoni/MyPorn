@@ -31,6 +31,13 @@ import type {
   MomentsManageResponse,
   MomentsPage,
   SyncMode,
+  YtChannel,
+  YtChannelsResponse,
+  YtHealth,
+  YtManageResponse,
+  YtResolve,
+  YtVideo,
+  YtVideosPage,
   VideoDetail,
   VideoPage,
 } from './types';
@@ -393,6 +400,89 @@ export const api = {
   },
   manageMoments(): Promise<MomentsManageResponse> {
     return request<MomentsManageResponse>('/api/manage/moments');
+  },
+
+  // ---- YouTube 订阅（M6）----
+  /** 视频墙（keyset 分页）；时间未知的条目排在最后 */
+  ytVideos(
+    params: {
+      cursor?: string | null;
+      channelId?: number | null;
+      unseen?: boolean;
+      saved?: boolean;
+      limit?: number;
+    } = {},
+  ): Promise<YtVideosPage> {
+    return request<YtVideosPage>(
+      `/api/yt/videos${qs({
+        cursor: params.cursor,
+        channelId: params.channelId,
+        unseen: params.unseen ? 1 : null,
+        saved: params.saved ? 1 : null,
+        limit: params.limit,
+      })}`,
+    );
+  },
+  ytChannels(): Promise<YtChannelsResponse> {
+    return request<YtChannelsResponse>('/api/yt/channels');
+  },
+  /** 只探测（不写库），用于添加前预览 */
+  ytResolve(url: string): Promise<YtResolve> {
+    return request<YtResolve>('/api/yt/resolve', { method: 'POST', body: { url } });
+  },
+  ytAdd(url: string): Promise<{ channel: YtChannel; created: boolean }> {
+    return request<{ channel: YtChannel; created: boolean }>('/api/yt/channels', {
+      method: 'POST',
+      body: { url },
+    });
+  },
+  ytPatch(channelId: number | string, patch: { enabled?: boolean }): Promise<YtChannel> {
+    return request<YtChannel>(`/api/yt/channels/${id(channelId)}`, { method: 'PATCH', body: patch });
+  },
+  ytDelete(channelId: number | string): Promise<void> {
+    return request<void>(`/api/yt/channels/${id(channelId)}`, { method: 'DELETE' });
+  },
+  /** deep=true 走 yt-dlp 深度回填（默认列 200 条），否则走 RSS 增量（最近 15 条） */
+  ytSync(channelId: number | string, deep = false): Promise<{ jobId: number }> {
+    return request<{ jobId: number }>(`/api/yt/channels/${id(channelId)}/sync`, {
+      method: 'POST',
+      body: { deep },
+    });
+  },
+  ytDownload(videoId: number | string, opts: { libraryId?: number; overwrite?: boolean } = {}): Promise<{
+    jobId: number;
+    libraryId: number;
+  }> {
+    return request<{ jobId: number; libraryId: number }>(`/api/yt/videos/${id(videoId)}/download`, {
+      method: 'POST',
+      body: { libraryId: opts.libraryId ?? 0, overwrite: opts.overwrite ?? false },
+    });
+  },
+  ytDownloadUnseen(channelId: number | string, limit?: number): Promise<{ queued: number; jobIds: number[] }> {
+    return request<{ queued: number; jobIds: number[] }>(`/api/yt/channels/${id(channelId)}/download-unseen`, {
+      method: 'POST',
+      body: { limit: limit ?? 0 },
+    });
+  },
+  ytSeen(payload: { ids?: number[]; channelId?: number }): Promise<{ unseen: number }> {
+    return request<{ unseen: number }>('/api/yt/videos/seen', { method: 'POST', body: payload });
+  },
+  /** 单条视频按需补全信息（深度回填来的条目没有发布时间） */
+  ytRefresh(videoId: number | string): Promise<YtVideo> {
+    return request<YtVideo>(`/api/yt/videos/${id(videoId)}/refresh`, { method: 'POST' });
+  },
+  ytSave(videoId: number | string, saved: boolean): Promise<{ ok: boolean; saved: boolean }> {
+    return request<{ ok: boolean; saved: boolean }>(`/api/yt/videos/${id(videoId)}/save`, {
+      method: 'POST',
+      body: { saved },
+    });
+  },
+  /** yt-dlp 能不能用、版本多新（「过期」是最常见的失败原因） */
+  ytHealth(): Promise<YtHealth> {
+    return request<YtHealth>('/api/yt/health');
+  },
+  manageYt(): Promise<YtManageResponse> {
+    return request<YtManageResponse>('/api/manage/youtube');
   },
 
   // ---- 设置 ----

@@ -22,13 +22,14 @@
   interface NavItem {
     href: string;
     label: string;
-    icon: 'feed' | 'moments' | 'performers' | 'discover' | 'downloads' | 'manage' | 'settings';
+    icon: 'feed' | 'moments' | 'youtube' | 'performers' | 'discover' | 'downloads' | 'manage' | 'settings';
     isActive: (path: string) => boolean;
   }
 
   const NAV: readonly NavItem[] = [
     { href: '/', label: '关注', icon: 'feed', isActive: (p) => p === '/' || p.startsWith('/video') },
     { href: '/moments', label: '动态', icon: 'moments', isActive: (p) => p.startsWith('/moments') },
+    { href: '/youtube', label: 'YouTube', icon: 'youtube', isActive: (p) => p.startsWith('/youtube') },
     { href: '/performers', label: '艺人', icon: 'performers', isActive: (p) => p.startsWith('/performer') },
     { href: '/discover', label: '发现', icon: 'discover', isActive: (p) => p.startsWith('/discover') },
     { href: '/downloads', label: '下载', icon: 'downloads', isActive: (p) => p.startsWith('/downloads') },
@@ -43,6 +44,8 @@
     strm: '生成 strm',
     social_sync: '抓取动态',
     social_save: '保存照片',
+    yt_sync: '抓取 YouTube',
+    yt_download: '下载 YouTube',
   };
 
   const activeHref = $derived(NAV.find((item) => item.isActive(router.path))?.href ?? '');
@@ -51,7 +54,8 @@
   const SIDE_NAV = NAV.filter((item) => item.icon !== 'settings');
   // 移动端底部只有 6 格：加「动态」之后把「发现」收进艺人页（那里本来就有搜索和推荐位），
   // 否则 7 格在 320px 屏上每格只剩 45px，字都要挤掉。
-  const MOBILE_NAV = NAV.filter((item) => item.icon !== 'discover');
+  // YouTube 也不进底部：它和「动态」是同一件事的两种形态，用页面顶部的分段控件切换。
+  const MOBILE_NAV = NAV.filter((item) => item.icon !== 'discover' && item.icon !== 'youtube');
   const settingsActive = $derived(ui.settingsOpen);
 
   /** 移动端底部 tab 的共用样式 */
@@ -76,8 +80,10 @@
           if (job.status === 'done' && job.type === 'sync') {
             live.bumpFeed();
             live.toast('同步完成', 'success');
-          } else if (job.status === 'done' && job.type === 'download') {
-            live.toast('下载完成', 'success');
+          } else if (job.status === 'done' && (job.type === 'download' || job.type === 'yt_download')) {
+            live.toast(job.type === 'yt_download' ? 'YouTube 已存进本地库' : '下载完成', 'success');
+            live.bumpFeed();
+            live.refreshDownloads(true);
           } else if (job.status === 'failed') {
             const reason = job.error ? `：${job.error}` : '';
             live.toast(`${JOB_LABEL[job.type]}失败${reason}`, 'error');
@@ -93,6 +99,12 @@
           live.bumpMoments();
           live.setMomentsUnseen(live.momentsUnseen + 1);
         },
+        'yt.new': (data) => {
+          // 只有「有新视频」时才刷：一轮同步会连着报好几个频道，别每个都重拉一次
+          const count = typeof data?.count === 'number' ? data.count : 1;
+          live.bumpYt();
+          live.setYtUnseen(live.ytUnseen + count);
+        },
         'social.progress': (data) => {
           // 抓取过程中也刷新照片墙：一次同步可能连着好几页，不必等 round 结束
           if (data.newPhotos > 0) live.bumpMoments();
@@ -105,6 +117,7 @@
     live.refreshDownloads(true);
     void live.ensurePerformerAvatars();
     void live.refreshMomentsUnseen();
+    void live.refreshYtUnseen();
 
     const onOffline = (): void => live.toast('网络已断开，实时更新暂停', 'error');
     const onOnline = (): void => live.toast('网络已恢复', 'info');
@@ -142,6 +155,10 @@
       <rect x="13.5" y="3.5" width="7.5" height="6" rx="2" />
       <rect x="13.5" y="12.5" width="7.5" height="8" rx="2" />
       <rect x="3" y="15.5" width="7.5" height="5" rx="2" />
+    {:else if name === 'youtube'}
+      <!-- YouTube：一块屏幕 + 播放三角（与「关注」的方框区分：这里圆角更大、三角更突出） -->
+      <rect x="2.5" y="5.5" width="19" height="13" rx="4" />
+      <path d="M10.4 9.4v5.2l4.4-2.6z" fill="currentColor" stroke="none" />
     {:else if name === 'performers'}
       <circle cx="9" cy="9" r="3" />
       <path d="M3.5 19a5.5 5.5 0 0 1 11 0" />
@@ -203,6 +220,13 @@
         aria-hidden="true"
       >
         {live.activeDownloads}
+      </span>
+    {:else if item.href === '/youtube' && live.ytUnseen > 0}
+      <span
+        class="absolute -right-2 -top-1 min-w-[0.9375rem] rounded-full bg-hi px-1 text-[0.625rem] font-medium leading-[0.9375rem] text-ink tabular-nums"
+        aria-hidden="true"
+      >
+        {live.ytUnseen > 9 ? '9+' : live.ytUnseen}
       </span>
     {:else if item.href === '/moments' && live.momentsUnseen > 0}
       <span
@@ -312,7 +336,14 @@
             >
               {live.activeDownloads}
             </span>
-          {:else if item.href === '/moments' && live.momentsUnseen > 0}
+          {:else if item.href === '/youtube' && live.ytUnseen > 0}
+      <span
+        class="absolute -right-2 -top-1 min-w-[0.9375rem] rounded-full bg-hi px-1 text-[0.625rem] font-medium leading-[0.9375rem] text-ink tabular-nums"
+        aria-hidden="true"
+      >
+        {live.ytUnseen > 9 ? '9+' : live.ytUnseen}
+      </span>
+    {:else if item.href === '/moments' && live.momentsUnseen > 0}
             <span
               class="rounded-full bg-hi px-[0.3rem] text-[0.6875rem] font-medium leading-4 tabular-nums text-ink"
               aria-label={`${String(live.momentsUnseen)} 张新照片`}

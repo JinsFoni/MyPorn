@@ -4,13 +4,20 @@
   import { live } from '../lib/live.svelte';
   import { navigate } from '../lib/router.svelte';
   import { ui, type SettingsPane } from '../lib/ui.svelte';
-  import type { Settings, SettingsPatch } from '../lib/types';
+  import type { Settings, SettingsPatch, YtHealth } from '../lib/types';
 
   /** 仅 DEV：后端未就绪时的示例数据 */
   const MOCK: Settings = {
     syncIntervalHours: 6,
     globalProxy: '',
-    platformProxy: { pornhub: 'socks5://127.0.0.1:1080', xhamster: '', beeg: '', instagram: '', x: '' },
+    platformProxy: {
+      pornhub: 'socks5://127.0.0.1:1080',
+      xhamster: '',
+      beeg: '',
+      instagram: '',
+      x: '',
+      youtube: '',
+    },
     namingTemplate: '{标题}',
     downloadConcurrency: 2,
     downloadRateKb: 0,
@@ -20,6 +27,7 @@
     ffmpegAvailable: true,
     openlist: { baseUrl: 'http://192.168.0.108:5244', root: '/123云盘/资源目录/MyPorn', hasToken: true },
     social: { syncHours: 6, hasInstagramCookie: false },
+    youtube: { syncHours: 6, backfillLimit: 200, format: '', ytdlpPath: '', hasCookies: false },
   };
 
   /** 侧边栏分类：左侧栏在弹窗里切换，右侧只渲染当前这一块 */
@@ -29,12 +37,13 @@
     { id: 'upload', label: '上传', hint: 'OpenList 上传目标' },
     { id: 'download', label: '下载', hint: '并发、限速与自动下载' },
     { id: 'social', label: '动态', hint: '博主抓取频率与 Instagram 登录态' },
+    { id: 'youtube', label: 'YouTube', hint: 'yt-dlp、画质与登录态' },
     { id: 'libraries', label: '本地库', hint: '落盘目录与空间' },
     { id: 'account', label: '账号', hint: '会话与退出' },
   ];
 
   /** 这四个分类共用一个表单，保存按钮在页脚（用 form 属性挂回来） */
-  const FORM_PANES: readonly SettingsPane[] = ['sync', 'network', 'upload', 'download', 'social'];
+  const FORM_PANES: readonly SettingsPane[] = ['sync', 'network', 'upload', 'download', 'social', 'youtube'];
 
   let settings = $state<Settings | null>(null);
   let loading = $state(true);
@@ -60,6 +69,15 @@
   let openlistToken = $state('');
   let socialSyncHours = $state(6);
   let instagramCookie = $state('');
+  let youtubeProxy = $state('');
+  let ytSyncHours = $state(6);
+  let ytBackfillLimit = $state(200);
+  let ytFormat = $state('');
+  let ytdlpPath = $state('');
+  let ytCookies = $state('');
+  /** yt-dlp 健康度：进 YouTube 那一节时才拉（要 fork 一个进程，不值得每次开设置都跑） */
+  let ytHealth = $state<YtHealth | null>(null);
+  let ytHealthLoading = $state(false);
 
   const current = $derived(PANES.find((p) => p.id === ui.settingsPane) ?? PANES[0]);
   const isFormPane = $derived(FORM_PANES.includes(ui.settingsPane));
@@ -82,6 +100,24 @@
     openlistToken = '';
     socialSyncHours = value.social.syncHours;
     instagramCookie = '';
+    youtubeProxy = value.platformProxy.youtube ?? '';
+    ytSyncHours = value.youtube.syncHours;
+    ytBackfillLimit = value.youtube.backfillLimit;
+    ytFormat = value.youtube.format;
+    ytdlpPath = value.youtube.ytdlpPath;
+    ytCookies = '';
+  }
+
+  async function loadYtHealth(): Promise<void> {
+    if (ytHealthLoading) return;
+    ytHealthLoading = true;
+    try {
+      ytHealth = await api.ytHealth();
+    } catch {
+      ytHealth = null;
+    } finally {
+      ytHealthLoading = false;
+    }
   }
 
   async function load(): Promise<void> {
@@ -115,6 +151,7 @@
         beeg: beegProxy,
         instagram: instagramProxy,
         x: xProxy,
+        youtube: youtubeProxy,
       },
       namingTemplate,
       downloadConcurrency,
@@ -129,6 +166,16 @@
     // 所以这里必须"没填就不带这个字段"）。
     const cookie = instagramCookie.trim();
     if (cookie.length > 0) patch.social = { ...patch.social, instagramCookie: cookie };
+
+    patch.youtube = {
+      syncHours: ytSyncHours,
+      backfillLimit: ytBackfillLimit,
+      format: ytFormat.trim(),
+      ytdlpPath: ytdlpPath.trim(),
+    };
+    // 同上：Cookie 留空 = 不动
+    const ytCookie = ytCookies.trim();
+    if (ytCookie.length > 0) patch.youtube = { ...patch.youtube, cookies: ytCookie };
     try {
       await api.updateSettings(patch);
       // 重新拉一次：token 永不回显，hasToken 等状态以服务端为准
@@ -168,6 +215,14 @@
       close();
     }
   }
+
+  // 进到 YouTube 那一节才去问 yt-dlp 的版本：读版本要 fork 一个进程，
+  // 没必要每次开设置都跑一次（而这个信息只在那一节有用）。
+  $effect(() => {
+    if (!ui.settingsOpen || ui.settingsPane !== 'youtube') return;
+    if (ytHealth !== null || ytHealthLoading) return;
+    void loadYtHealth();
+  });
 
   // 每次打开都重新拉一遍：别的标签页可能改过，也可能刚在下载对话框里建了库
   $effect(() => {
@@ -213,6 +268,9 @@
       <rect x="13.5" y="3.5" width="7.5" height="6" rx="2" />
       <rect x="13.5" y="12.5" width="7.5" height="8" rx="2" />
       <rect x="3" y="15.5" width="7.5" height="5" rx="2" />
+    {:else if id === 'youtube'}
+      <rect x="2.5" y="5.5" width="19" height="13" rx="4" />
+      <path d="M10.4 9.4v5.2l4.4-2.6z" fill="currentColor" stroke="none" />
     {:else if id === 'libraries'}
       <path d="M3.5 7.6a2 2 0 0 1 2-2h3.1l2 2.4h7.9a2 2 0 0 1 2 2v8.4a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2z" />
     {:else}
@@ -468,6 +526,22 @@
                           disabled={saving}
                         />
                       </div>
+                      <div>
+                        <label for="youtube-proxy" class="label-meta mb-1.5">YouTube 专用代理</label>
+                        <input
+                          id="youtube-proxy"
+                          class="field"
+                          type="text"
+                          placeholder="留空则跟随全局代理"
+                          spellcheck="false"
+                          autocomplete="off"
+                          bind:value={youtubeProxy}
+                          disabled={saving}
+                        />
+                        <p class="mt-1 text-meta text-dim">
+                          抓 RSS 与下载都会走这个出口。碰上「要求人机验证」就换一个，改完即刻生效。
+                        </p>
+                      </div>
                     </div>
                   </section>
                 {:else if ui.settingsPane === 'upload'}
@@ -513,6 +587,155 @@
                           disabled={saving}
                         />
                       </div>
+                    </div>
+                  </section>
+                {:else if ui.settingsPane === 'youtube'}
+                  <section>
+                    <p class="text-meta text-dim">
+                      YouTube 的视频由 yt-dlp 下载：它跟着 YouTube 的接口天天变，
+                      <span class="text-muted">版本过期是最常见的失败原因</span>（旧版会直接 403）。
+                    </p>
+
+                    <!-- yt-dlp 健康度：这一块存在的意义就是「别让人对着 403 猜」 -->
+                    <div class="mt-3 rounded-xl bg-panel px-3 py-2.5">
+                      {#if ytHealthLoading}
+                        <p class="text-meta text-dim">正在检查 yt-dlp…</p>
+                      {:else if !ytHealth || !ytHealth.found}
+                        <p class="text-meta text-brick">
+                          没找到 yt-dlp。没有它只能抓 RSS（最近 15 条、没有时长），也不能下载。
+                        </p>
+                        <p class="mt-1 text-meta text-dim">
+                          装一个（<code class="font-mono">pipx install yt-dlp</code> 或
+                          <code class="font-mono">brew install yt-dlp</code>），或在下面填绝对路径。
+                        </p>
+                      {:else}
+                        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta">
+                          <span class="text-fg">yt-dlp {ytHealth.version}</span>
+                          <span class={ytHealth.stale ? 'text-brick' : 'text-sage'}>
+                            {ytHealth.stale
+                              ? `已 ${String(ytHealth.ageDays)} 天未更新，下载很可能失败`
+                              : '版本新鲜'}
+                          </span>
+                          <span class={ytHealth.ffmpegOk ? 'text-dim' : 'text-brick'}>
+                            {ytHealth.ffmpegOk ? 'ffmpeg 可用' : 'ffmpeg 缺失，音视频合轨会失败'}
+                          </span>
+                        </div>
+                        <p class="mt-1 truncate font-mono text-[0.6875rem] text-dim" title={ytHealth.path}>
+                          {ytHealth.path}
+                        </p>
+                        {#if ytHealth.stale}
+                          <p class="mt-1.5 text-meta text-dim">
+                            升级：<code class="font-mono">yt-dlp -U</code>（或
+                            <code class="font-mono">brew upgrade yt-dlp</code> / 重装 pipx 包），改完回来点一下「重新检查」。
+                          </p>
+                        {/if}
+                        <button
+                          type="button"
+                          class="mt-2 rounded-full bg-raise px-2.5 py-1 text-meta text-fg transition-colors hover:bg-panel"
+                          onclick={() => {
+                            ytHealth = null;
+                            void loadYtHealth();
+                          }}
+                        >
+                          重新检查
+                        </button>
+                      {/if}
+                    </div>
+
+                    <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label for="yt-hours" class="label-meta mb-1.5">同步间隔（小时）</label>
+                        <input
+                          id="yt-hours"
+                          class="field tabular-nums"
+                          type="number"
+                          min="1"
+                          max="48"
+                          step="1"
+                          bind:value={ytSyncHours}
+                          disabled={saving}
+                        />
+                        <p class="mt-1.5 text-meta text-dim">每轮抓一次 RSS（1 次请求，最多 15 条新视频）。</p>
+                      </div>
+                      <div>
+                        <label for="yt-backfill" class="label-meta mb-1.5">深度回填条数</label>
+                        <input
+                          id="yt-backfill"
+                          class="field tabular-nums"
+                          type="number"
+                          min="10"
+                          max="2000"
+                          step="10"
+                          bind:value={ytBackfillLimit}
+                          disabled={saving}
+                        />
+                        <p class="mt-1.5 text-meta text-dim">
+                          添加频道时用 yt-dlp 一次列这么多条历史（200 条约 6 秒）。
+                        </p>
+                      </div>
+                    </div>
+
+                    <div class="mt-4">
+                      <label for="yt-format" class="label-meta mb-1.5">下载格式串（yt-dlp -f）</label>
+                      <input
+                        id="yt-format"
+                        class="field font-mono text-meta"
+                        type="text"
+                        placeholder="留空 = AV1 最高画质 + 最高音质（bv*[vcodec^=av01]+ba/bv*+ba/b）"
+                        spellcheck="false"
+                        autocomplete="off"
+                        bind:value={ytFormat}
+                        disabled={saving}
+                      />
+                      <p class="mt-1.5 text-meta text-dim">
+                        默认取 AV1 视频轨 + 最高音质音轨，再用 ffmpeg <code class="font-mono">-c copy</code>
+                        合成 mp4（只换容器，不转码）。YouTube 不提供 AV1+音轨的现成文件，这一步躲不掉。
+                        个别播放器不认 mp4 里的 Opus 音轨时，改成
+                        <code class="font-mono">bv*+ba[ext=m4a]/bv*+ba</code>。
+                      </p>
+                    </div>
+
+                    <div class="mt-4">
+                      <label for="yt-path" class="label-meta mb-1.5">yt-dlp 路径</label>
+                      <input
+                        id="yt-path"
+                        class="field font-mono text-meta"
+                        type="text"
+                        placeholder="留空 = 从 PATH 里找 yt-dlp"
+                        spellcheck="false"
+                        autocomplete="off"
+                        bind:value={ytdlpPath}
+                        disabled={saving}
+                      />
+                      <p class="mt-1.5 text-meta text-dim">
+                        想固定用最新版（不动系统里的那个）时可以填绝对路径，例如
+                        <code class="font-mono">/opt/ytvenv/bin/yt-dlp</code>。
+                      </p>
+                    </div>
+
+                    <div class="mt-5">
+                      <div class="flex items-center justify-between">
+                        <label for="yt-cookie" class="label-meta">Cookie（可选）</label>
+                        <span class="text-meta {settings.youtube.hasCookies ? 'text-sage' : 'text-dim'}">
+                          {settings.youtube.hasCookies ? '已配置' : '未配置'}
+                        </span>
+                      </div>
+                      <p class="mt-1 text-meta text-dim">
+                        只有「需要登录才能看」的内容才用得上（会员、年龄限制）。贴
+                        <span class="text-muted">cookies.txt</span>（Netscape 格式，整份粘进来即可）或请求头里那整段 Cookie。
+                        Cookie 加密存库，保存后不再回显。
+                      </p>
+                      <textarea
+                        id="yt-cookie"
+                        class="field mt-2 h-28 resize-y font-mono text-meta"
+                        placeholder={settings.youtube.hasCookies
+                          ? '已保存 · 留空表示不修改'
+                          : '# Netscape HTTP Cookie File —— 一整份 cookies.txt，或 SID=…; HSID=…'}
+                        spellcheck="false"
+                        autocomplete="off"
+                        bind:value={ytCookies}
+                        disabled={saving}
+                      ></textarea>
                     </div>
                   </section>
                 {:else if ui.settingsPane === 'download'}

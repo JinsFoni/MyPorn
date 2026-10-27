@@ -13,6 +13,7 @@ export type RouteName =
   | 'discover'
   | 'downloads'
   | 'moments'
+  | 'youtube'
   | 'manage'
   | 'video'
   | 'settings'
@@ -27,6 +28,7 @@ const ROUTES: readonly RouteDef[] = [
   { name: 'discover', pattern: '/discover', title: '发现艺人' },
   { name: 'downloads', pattern: '/downloads', title: '下载' },
   { name: 'moments', pattern: '/moments', title: '动态' },
+  { name: 'youtube', pattern: '/youtube', title: 'YouTube' },
   { name: 'manage', pattern: '/manage', title: '管理' },
   { name: 'video', pattern: '/video/:id', title: '播放' },
   { name: 'settings', pattern: '/settings', title: '设置' },

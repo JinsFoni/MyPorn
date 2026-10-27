@@ -248,6 +248,11 @@ const (
 	JobTypeSocialSync = "social_sync"
 	// JobTypeSocialSave 是 M5 社交动态：把照片存进本地库。
 	JobTypeSocialSave = "social_save"
+	// JobTypeYtSync 是 M6 YouTube 订阅：抓一个频道的新视频（target_id = 频道 id，0 表示全部）。
+	// mode=deep 时改用 yt-dlp 深度回填。
+	JobTypeYtSync = "yt_sync"
+	// JobTypeYtDownload 是 M6 YouTube 订阅：用 yt-dlp 下一条视频并落进本地库。
+	JobTypeYtDownload = "yt_download"
 )
 
 // Library 是一个本地媒体库（一个根目录）。
