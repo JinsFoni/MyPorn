@@ -121,11 +121,12 @@ make vet
 make run
 ```
 
-换站点图标（侧边栏 logo、favicon、PWA 图标都由同一张母版生成）：
+换站点图标（favicon、PWA 图标由同一张母版生成；侧边栏那枚是单色 SVG 字形，
+在 `web/src/components/BrandMark.svelte` 里，跟着 `currentColor` 上色）：
 
 ```bash
 # 1. 覆盖 design/app-icon.png（正方形，建议 ≥ 512）
-# 2. 重新生成 web/public/ 下的一整套图标 + web/src/assets/logo.png
+# 2. 重新生成 web/public/ 下的一整套图标
 python3 design/make-icons.py
 make web
 ```

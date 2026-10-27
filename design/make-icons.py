@@ -13,7 +13,8 @@
   web/public/favicon-32.png          浏览器标签页
   web/public/favicon-16.png          同上，小尺寸
   web/public/favicon.ico             老浏览器兜底（16/32/48 三档）
-  web/src/assets/logo.png            侧边栏标题左边的小 logo（显示 28px，按 @2x 出 128）
+
+侧边栏标题左边那枚是单色 SVG 字形，不走这套位图（见 web/src/components/BrandMark.svelte）。
 """
 
 from pathlib import Path
@@ -23,7 +24,6 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "design" / "app-icon.png"
 PUBLIC = ROOT / "web" / "public"
-ASSETS = ROOT / "web" / "src" / "assets"
 
 # 母版本身就画了一圈霓虹圆角边框，圆角半径约占边长 17.5%；
 # 生成时按同样比例切出透明角，贴到任何底色上都不会出现黑角。
@@ -77,9 +77,6 @@ def main() -> None:
         sizes=[(16, 16), (32, 32), (48, 48)],
     )
 
-    # 侧边栏标题左边那一枚：28px 显示，按 2x ~ 3x 给到 128。
-    with_rounded_alpha(src, 128, ICON_COLORS).save(ASSETS / "logo.png", optimize=True)
-
     for name in (
         "icon-192.png",
         "icon-512.png",
@@ -90,7 +87,6 @@ def main() -> None:
         "favicon.ico",
     ):
         print(f"{name:24} {(PUBLIC / name).stat().st_size:>7} B")
-    print(f"{'src/assets/logo.png':24} {(ASSETS / 'logo.png').stat().st_size:>7} B")
 
 
 if __name__ == "__main__":
