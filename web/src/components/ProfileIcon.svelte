@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { BODY_GLYPH_PATH, BODY_GLYPH_VIEWBOX } from '../lib/bodyGlyph';
+
   interface Props {
     /** 资料行的标签文字（「出身地」「体重」……），用来挑字形 */
     label: string;
@@ -9,7 +11,8 @@
   /* 只做单色字形，跟侧边栏 / 社交链接同一套：24 网格、1.6 描边、14px。
      认标签里的关键词而不是整串相等——站点是中文站，但字段按艺人有增有减，
      还可能冒出英文标签，所以用 includes 兜住。顺序即优先级（先具体后笼统）。
-     例外：`体重`（哑铃）和 `种族`（脚印）两枚取自 https://github.com/JinsFoni/peach
+     例外一：`身材` 用的是用户给的 iconfont 剪影（1024 网格、填充），见 `$lib/bodyGlyph`。
+     例外二：`体重`（哑铃）和 `种族`（脚印）两枚取自 https://github.com/JinsFoni/peach
      的资料卡（它 `web/index.html` 的 `#i-dumbbell` / `#i-footprints`），其余仍是本项目自己那套。 */
   type IconKind =
     | 'heart'
@@ -19,6 +22,7 @@
     | 'height'
     | 'weight'
     | 'ruler'
+    | 'body'
     | 'globe'
     | 'footprints'
     | 'eye'
@@ -40,7 +44,8 @@
     if (has('出身', '出生地', '来自', '籍贯', '地点', '城市', '国家')) return 'pin';
     if (has('身高', 'height')) return 'height';
     if (has('体重', 'weight')) return 'weight';
-    if (has('三围', '罩杯', '身材', 'measure')) return 'ruler';
+    if (has('身材', 'body')) return 'body';
+    if (has('三围', '罩杯', 'measure')) return 'ruler';
     if (has('种族', 'ethnic')) return 'footprints';
     if (has('民族', '语言', '国籍')) return 'globe';
     if (has('眼睛', 'eye')) return 'eye';
@@ -53,20 +58,27 @@
     return 'dot';
   }
 
+  /* 尺寸：常见字形是 14×14 的方框；`身材` 那枚是 1 : 3.4 的站姿剪影，框跟着收成 4×14，
+     这样右边标签只被推开 8px（方框要推 20px），左栏那几行看起来还是齐的。 */
   const kind = $derived(kindOf(label));
 </script>
 
 <svg
-  viewBox="0 0 24 24"
-  class="mr-1.5 inline-block h-3.5 w-3.5 shrink-0 align-[-0.15em]"
+  viewBox={kind === 'body' ? BODY_GLYPH_VIEWBOX : '0 0 24 24'}
+  class={kind === 'body'
+    ? 'mr-1 inline-block h-3.5 w-1 shrink-0 align-[-0.15em]'
+    : 'mr-1.5 inline-block h-3.5 w-3.5 shrink-0 align-[-0.15em]'}
   aria-hidden="true"
   fill="none"
   stroke="currentColor"
-  stroke-width="1.6"
+  stroke-width={kind === 'body' ? 0 : 1.6}
   stroke-linecap="round"
   stroke-linejoin="round"
 >
-  {#if kind === 'heart'}
+  {#if kind === 'body'}
+    <!-- 唯一的填充字形：1024 网格、没有描边，靠 fill 上色 -->
+    <path d={BODY_GLYPH_PATH} fill="currentColor" stroke="none" />
+  {:else if kind === 'heart'}
     <path
       d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
     />

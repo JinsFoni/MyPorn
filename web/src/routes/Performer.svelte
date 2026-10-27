@@ -2,6 +2,7 @@
   import InfiniteList from '../components/InfiniteList.svelte';
   import PlatformIcon from '../components/PlatformIcon.svelte';
   import PerformerProfile from '../components/PerformerProfile.svelte';
+  import ProfileIcon from '../components/ProfileIcon.svelte';
   import SocialLinks from '../components/SocialLinks.svelte';
   import VideoCard from '../components/VideoCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
@@ -236,9 +237,11 @@
 
           {#if bodyText}
             <!-- 身材：站点资料行里的「身高」「三围」抓取时已归一成公制，紧跟在影片数下面，
-                 所以它们在下面的资料行里不再重复出现。 -->
+                 所以它们在下面的资料行里不再重复出现。
+                 标签前挂一枚 14px 剪影（跟资料行同一枚字形、同一套间距），左边这一栏的
+                 「标签 + 读数」就都从同一条竖线起排。 -->
             <p class="flex flex-wrap items-baseline gap-x-2 text-ui">
-              <span class="text-dim">身材</span>
+              <span class="text-dim"><ProfileIcon label="身材" />身材</span>
               <span class="tabular-nums text-muted">{bodyText}</span>
             </p>
           {/if}
