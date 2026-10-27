@@ -5,7 +5,6 @@ import (
 	"context"
 	"image"
 	"image/color"
-	"image/jpeg"
 	"image/png"
 	"io"
 	"log/slog"
@@ -137,9 +136,9 @@ func TestSmallReusesCachedOriginal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Small: %v", err)
 	}
-	img, err := jpeg.Decode(bytes.NewReader(small))
+	img, err := png.Decode(bytes.NewReader(small))
 	if err != nil {
-		t.Fatalf("小图应当是合法 JPEG：%v", err)
+		t.Fatalf("小图应当是合法 PNG：%v", err)
 	}
 	if got := img.Bounds().Dx(); got != 48 {
 		t.Errorf("小图宽 = %d，期望 48", got)

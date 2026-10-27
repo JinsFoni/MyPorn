@@ -3,7 +3,7 @@
  * 契约 §4：后端带 Referer/UA 抓取 + 磁盘缓存，失败给占位图（不会 4xx）。
  *
  * 隐私模式在这里单独走一条：不要 `w=`（显示宽度），改成 `s=`（小糊图的边长），
- * 让后端把封面缩到几十像素、糊一遍再发回来——浏览器只要贴一张 1KB 的小纹理、
+ * 让后端把封面缩到一百来像素、糊一遍再发回来——浏览器只要贴一张几 KB 的小纹理、
  * 自己拉伸成卡片大小就够糊了。
  *
  * 为什么不给大图套 `filter: blur()`：那等于给每张图各开一个合成层再做一遍高斯模糊，
@@ -15,14 +15,25 @@ import { privacy } from './privacy.svelte';
 const PROXY_PATH = '/api/img';
 
 /**
+ * 小糊图的流水线版本，跟着 `internal/imgcache` 的 `smallPipeline` 一起 +1。
+ * 加进 URL 只为了一件事：换了生成方式（JPEG → PNG、改了缩放/模糊）以后，
+ * 浏览器 HTTP 缓存里那份旧图别因为 `s=` 没变就继续被命中。
+ */
+const SMALL_PIPELINE = '2';
+
+/**
  * 隐私模式要的小糊图宽度：**跟着显示宽度走**，固定值会翻车——
- * 48px 的封面拉到 480px 是 10 倍放大（够糊），可同一个 48px 给 72px 的小头像就只有
- * 1.5 倍（还认得出脸）。所以按显示宽度取十分之一，再夹在 16–96 之间
- * （16 是「36px 的小头像也糊成色块」的下限，96 是「大封面别糊到只剩纯色」的上限）。
+ * 一个尺寸给大封面是 4 倍放大（够糊），给 72px 的小头像就只有 1.5 倍（还认得出脸）。
+ * 所以取显示宽度的四分之一，再夹在 16–160 之间
+ * （16 是「36px 的小头像也糊成色块」的下限，160 是「大封面别糊到只剩纯色」的上限）。
+ *
+ * 早先取的是十分之一（48px 铺到 480px），糊是够糊，但小图太小，拉大后色块之间
+ * 能看出**色带断层**；改成四分之一后后端按同样比例加大模糊半径（宽/12），
+ * 糊的程度不变、却是平滑的过渡。见 internal/imgcache/blur.go。
  */
 function privacyWidth(width?: number): number {
-  const w = width && width > 0 ? Math.round(width / 10) : 16;
-  return Math.min(96, Math.max(16, w));
+  const w = width && width > 0 ? Math.round(width / 4) : 16;
+  return Math.min(160, Math.max(16, w));
 }
 
 export function imageUrl(raw: string | null | undefined, width?: number): string | null {
@@ -34,6 +45,7 @@ export function imageUrl(raw: string | null | undefined, width?: number): string
     const params = new URLSearchParams(raw.slice(PROXY_PATH.length + 1));
     if (small) {
       params.set('s', String(privacyWidth(width)));
+      params.set('sv', SMALL_PIPELINE);
       params.delete('w');
     } else if (width) {
       params.set('w', String(width));
@@ -48,7 +60,7 @@ export function imageUrl(raw: string | null | undefined, width?: number): string
   }
 
   const proxied = `${PROXY_PATH}?u=${encodeURIComponent(raw)}`;
-  if (small) return `${proxied}&s=${String(privacyWidth(width))}`;
+  if (small) return `${proxied}&s=${String(privacyWidth(width))}&sv=${SMALL_PIPELINE}`;
   return width ? `${proxied}&w=${String(width)}` : proxied;
 }
 

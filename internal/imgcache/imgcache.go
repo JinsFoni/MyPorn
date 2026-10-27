@@ -40,6 +40,10 @@ const (
 	decodableAccept   = "image/webp,image/png,image/jpeg,image/*;q=0.8"
 )
 
+// smallPipeline 是「小糊图」的生成流水线版本，进缓存键。
+// 换过编码（JPEG → PNG）或改过缩放/模糊算法就得 +1，否则旧的丑图还会被端出来。
+const smallPipeline = 2
+
 // Service 是图片缓存的入口。构造一次，全局共用（进程内不会写坏同一份缓存：
 // 写入是 tmp + rename 的原子替换）。
 type Service struct {
@@ -84,7 +88,7 @@ func (s *Service) Small(ctx context.Context, platformKey, raw string, smallWidth
 	if err != nil {
 		return nil, err
 	}
-	smallPath := s.path(platformKey, fmt.Sprintf("%s|s=%d", upstream, smallWidth))
+	smallPath := s.path(platformKey, fmt.Sprintf("%s|s=%d|v=%d", upstream, smallWidth, smallPipeline))
 	if data, ok := readCache(smallPath); ok {
 		return data, nil
 	}

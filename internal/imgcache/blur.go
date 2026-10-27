@@ -1,12 +1,18 @@
 package imgcache
 
-// 隐私模式要的「小糊图」：把上游那张封面/头像缩到几十像素宽、糊一下、压成 JPEG 再发。
+// 隐私模式要的「小糊图」：把上游那张封面/头像缩到一百来像素宽、糊一下、编码再发。
 //
 // 为什么不在浏览器里用 `filter: blur()`：一张图一个合成层 + 一遍高斯模糊，
 // 实测（Chrome trace，DPR 2）比不模糊多出近一半的 raster 时间，滚起来就是掉帧；
-// 而浏览器把一张 48×27 的 JPEG 拉到卡片大小，本来就是一坨糊的色块——
-// 视觉几乎一样，代价却是「贴一张 1KB 的纹理」，滚动时什么都不用算。
+// 而浏览器把一张 120 宽的小图拉到卡片大小，本来就是一坨糊的色块——
+// 代价只是「贴一张小纹理」，滚动时什么都不用算。
 // 顺带还省了带宽：隐私模式下高清封面根本不会下到浏览器。
+//
+// 编码用 **PNG 而不是 JPEG**：Go 的 jpeg 编码器只会输出 4:2:0（色度横向纵向各减半），
+// 而这里的小图只有一百来像素宽，色度再减半就等于每个色度像素铺 4 个显示像素，
+// 拉到卡片大小后大片平滑区域会析出**色带断层**（此前 48px + q82 就是这个毛病）。
+// PNG 是无损 4:4:4，慢着看是平滑的。体积代价可以接受：120 宽的糊图约 7KB，
+// 比它替换掉的那张 480 宽封面（40KB+）小得多，一屏二十来张也就多几百 KB。
 
 import (
 	"bytes"
@@ -14,7 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/jpeg"
+	"image/png"
 	"os/exec"
 	"strings"
 	"time"
@@ -29,9 +35,9 @@ import (
 // errUndecodable 表示这坨字节我们解不出来（比如 CDN 返回了 HTML 错误页）。
 var errUndecodable = errors.New("图片解不出来")
 
-// blurredSmall 把任意图床图片缩到 width 宽，糊一遍，编码成 JPEG 返回。
+// blurredSmall 把任意图床图片缩到 width 宽，糊一遍，编码成 PNG 返回。
 //
-// 两步是分开做的，因为顺序有意义：先按面积平均缩到几十像素（细节在这一步就没了），
+// 两步是分开做的，因为顺序有意义：先按面积平均缩到一百来像素（细节在这一步就没了），
 // 再在这个尺寸上做一次盒式模糊（把缩放留下的硬边抹平）。倒过来做——先模糊原图再缩——
 // 要在大图上算十几万个采样点，纯属浪费。
 func blurredSmall(data []byte, width int) ([]byte, error) {
@@ -51,11 +57,11 @@ func blurredSmall(data []byte, width int) ([]byte, error) {
 func (s *Service) blurAny(ctx context.Context, data []byte, width int) ([]byte, error) {
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		jpegBytes, ferr := s.ffmpegShrink(ctx, data, width)
+		pngBytes, ferr := s.ffmpegDecode(ctx, data, width)
 		if ferr != nil {
 			return nil, errUndecodable
 		}
-		src, err = jpeg.Decode(bytes.NewReader(jpegBytes))
+		src, err = png.Decode(bytes.NewReader(pngBytes))
 		if err != nil {
 			return nil, errUndecodable
 		}
@@ -66,10 +72,11 @@ func (s *Service) blurAny(ctx context.Context, data []byte, width int) ([]byte, 
 // imgFfmpegSlots 限制同时解码的 ffmpeg 进程数。
 var imgFfmpegSlots = make(chan struct{}, 3)
 
-// ffmpegShrink 用 ffmpeg 把任意格式（AVIF/HEIC/…）解出来并缩到 width 宽，输出 JPEG。
-// 在这里 ffmpeg 只当解码器用，缩放交给它顺带做掉（flags=area 就是面积平均，
-// 跟 scaleArea 一个意思），出来再走一遍 encodeSmall 的盒式模糊。
-func (s *Service) ffmpegShrink(ctx context.Context, data []byte, width int) ([]byte, error) {
+// ffmpegDecode 用 ffmpeg 把任意格式（AVIF/HEIC/…）解出来，输出**无损 PNG**。
+// 在这里 ffmpeg 只当解码器用：顺带按 area 缩到 4×width（够 encodeSmall 再取平均，
+// 又不会让管道里塞进一张原始尺寸的大图），**绝不输出 JPEG**——那样等于在缩图前
+// 先损一次，色度还会减半，色带断层就是这么叠出来的。
+func (s *Service) ffmpegDecode(ctx context.Context, data []byte, width int) ([]byte, error) {
 	bin := s.ffmpeg
 	if bin == "" {
 		bin = "ffmpeg"
@@ -88,8 +95,8 @@ func (s *Service) ffmpegShrink(ctx context.Context, data []byte, width int) ([]b
 	cmd := exec.CommandContext(ctx, bin, "-hide_banner", "-v", "error",
 		"-i", "pipe:0",
 		"-frames:v", "1",
-		"-vf", fmt.Sprintf("scale=%d:-2:flags=area", width),
-		"-f", "image2", "-vcodec", "mjpeg", "-q:v", "3",
+		"-vf", fmt.Sprintf("scale=%d:-2:flags=area", 4*width),
+		"-f", "image2", "-vcodec", "png",
 		"pipe:1")
 	cmd.Stdin = bytes.NewReader(data)
 	var stderr bytes.Buffer
@@ -101,7 +108,7 @@ func (s *Service) ffmpegShrink(ctx context.Context, data []byte, width int) ([]b
 	return out, nil
 }
 
-// encodeSmall 把已经解出来的图缩到 width 宽、糊一遍、编码成 JPEG。
+// encodeSmall 把已经解出来的图缩到 width 宽、糊一遍、编码成 PNG。
 func encodeSmall(src image.Image, width int) ([]byte, error) {
 	b := src.Bounds()
 	if b.Dx() <= 0 || b.Dy() <= 0 {
@@ -119,13 +126,24 @@ func encodeSmall(src image.Image, width int) ([]byte, error) {
 	}
 
 	small := scaleArea(src, width, height)
-	boxBlur(small, 2)
+	boxBlur(small, smallBlurRadius(width))
 
 	var out bytes.Buffer
-	if err := jpeg.Encode(&out, small, &jpeg.Options{Quality: 82}); err != nil {
+	if err := png.Encode(&out, small); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// smallBlurRadius 让小图上的模糊半径跟着宽度走：显示时放大的倍数越大，半径就得越大。
+// 宽/12 意味着 48px 用 4、120px 用 10——换算到 480px 的卡片尺寸约 40px，
+// 也就是「不管小图多宽，糊的程度一样」，换分辨率不会改变隐私强度：
+// 轮廓还在、姿势还能猜，但看不清任何细节（这正是「挡一眼」要的效果）。
+func smallBlurRadius(width int) int {
+	if r := (width + 6) / 12; r > 0 {
+		return r
+	}
+	return 1
 }
 
 // scaleArea 按面积平均缩放：每个目标像素取它在原图里覆盖的那块矩形的平均值。
