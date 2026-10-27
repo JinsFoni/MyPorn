@@ -141,16 +141,13 @@
       {/if}
 
       <!-- 时长直接压在封面上（不要黑色药丸底），只给一层文字阴影保证亮封面上也能读；
-           "新"仍是白色药丸；已存不再做标识 -->
-      <div class="pointer-events-none absolute left-0 top-0 flex items-center gap-1.5 p-2">
+           封面左上角只有时长这一项——新片白药丸已按需求去掉，已存也从来不做标识 -->
+      <div class="pointer-events-none absolute left-0 top-0 flex items-center p-2">
         <span
           class="text-meta font-medium text-fg [text-shadow:0_1px_5px_rgba(0,0,0,1),0_0_12px_rgba(0,0,0,0.95),0_0_3px_rgba(0,0,0,1)]"
         >
           {formatDuration(video.durationSec)}
         </span>
-        {#if video.isNew}
-          <span class="rounded-full bg-hi px-2 py-[0.1875rem] text-meta font-medium text-ink">新</span>
-        {/if}
       </div>
     </div>
 
