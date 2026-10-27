@@ -446,3 +446,42 @@ X 的账号名猜不出来的（艺名拼起来超过 15 字符、账号名里�
 - **失败不拖累界面**：搜索接口失败返回 502 + 平台名，界面只显示提示，不影响已有数据。
 - **平台状态提示**：只有「从国内直连一般不通」的 Pornhub 在没配代理时才报 `no_proxy`，
   xHamster / beeg 实测可直连，不再无意义地报警。
+
+### 12.4 艺人资料：beeg / xHamster 整份借 Pornhub 的
+
+**问题**：beeg 与 xHamster 的艺人页资料很薄——一个名字、一张头像、两个站内统计
+（影片数、关注数），简介最多一句当 tag 简介用，**没有**资料标签行、三围、社交链接、排名。
+同一个艺人在 Pornhub 上通常有完整档案。
+
+**决策**：新增可选接口 `platform.ProfileProvider`，与头像借图同一套路（名字对得上才采用）：
+
+```go
+type ProfileProvider interface {
+	Key() string
+	ResolveProfile(ctx context.Context, performerName string) (*model.Performer, error)
+}
+```
+
+- 目前只有 `internal/platform/pornhub` 实现它，注册进 `platform.ProfileRegistry`。
+- 找人的顺序：① 按名字推 Pornhub 主页标识（小写、空格换连字符，再试一把压扁连写的）
+  直接取 `/model/<slug>`，页面名字归一后（只留字母数字，`Mini Diva` == `MiniDiva`）对得上就采用；
+  ② 标识猜不中再走 `/pornstars/search?search=<名字>`，只挑名字/标识完全对得上的那一位。
+  名字对不上就报错返回，**绝不取第一个**——给别人安错简介比留空糟得多。
+- 换什么、留什么由 `model.Performer.AdoptProfileFrom` 统一口径：
+  - 换：简介、资料标签行、三围、社交链接、模特排名；
+  - 留：平台、平台标识、主页链接、名字、影片数、订阅数（后两个是**本站这个平台**的统计，
+    把 Pornhub 的 1.4M 订阅挂到 beeg 的艺人页上没有意义）；
+  - 头像只在本地为空时才借：本站自己的头像是站点正在用的那张，比跨站抠的准；
+  - 资料来源的简介如果只是一串网址（Pornhub 上不少老艺人就写个 OnlyFans 地址，
+    Riley Reid 是 `Onlyfans.com/rileyreidx3`），不覆盖本网站已有的真简介。
+- 触发点：订阅创建、订阅预览、每次同步开头（`jobs.ProfileFiller`）。
+  一次性返工老数据：`./myporn -backfill-profile`。
+- 顺带修掉的坑：Pornhub 的 `/model/search?search=` 现在会 301 到随机 `/users/<hash>` 主页，
+  按链接文字抓名字会抓出一堆无关的人；`/pornstars?search=` 的参数被忽略（永远回热门榜）。
+  搜索统一走 `/pornstars/search?search=`，解析 `ul#pornstarsSearchResult` 里的结果卡片
+  （结果在前，侧栏热门艳星在后，按 slug 去重），名字不再是 `Gia Derza thumbnail` 这种。
+
+**取舍**：接受「beeg / xHamster 的艺人页展示的是 Pornhub 的档案内容」，
+换取资料完整度；代价是两家平台的站内统计与 Pornhub 的编排方式不同步
+（例如 Pornhub 的「排名 #269」出现在 beeg 的艺人页上）。
+

@@ -190,6 +190,34 @@ func (s *Store) ListPerformersWithoutAvatar() ([]*model.Performer, error) {
 	return out, rows.Err()
 }
 
+// ListPerformersByPlatform 返回某个平台的艺人（含已取消订阅的），供一次性返工用。
+func (s *Store) ListPerformersByPlatform(platformKey string) ([]*model.Performer, error) {
+	rows, err := s.db.Query(`SELECT `+performerCols+` FROM performers WHERE platform = ? ORDER BY id`,
+		platformKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*model.Performer{}
+	for rows.Next() {
+		p, err := scanPerformer(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// UpdatePerformerProfile 只写资料区块（简介 / 资料标签 / 身材 / 社交链接 / 排名）与头像，
+// 不动名字、主页链接和平台统计——跨站借资料时只该换这些。传入的是合并后的整份资料。
+func (s *Store) UpdatePerformerProfile(p *model.Performer) error {
+	_, err := s.db.Exec(`UPDATE performers SET bio = ?, profile_json = ?, social_json = ?,
+		body_json = ?, model_rank = ?, avatar_url = ? WHERE id = ?`,
+		p.Bio, jsonBlock(p.Profile), jsonBlock(p.Social), bodyBlock(p.Body), p.Rank, p.AvatarURL, p.ID)
+	return err
+}
+
 func perfixedCols(alias string) string {
 	return alias + ".id, " + alias + ".platform, " + alias + ".performer_id, " + alias + ".name, " +
 		alias + ".url, " + alias + ".avatar_url, " + alias + ".bio, " + alias + ".profile_json, " +

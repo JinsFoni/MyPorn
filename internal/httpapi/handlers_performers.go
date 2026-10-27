@@ -127,6 +127,10 @@ func (s *Server) handleResolvePerformer(w http.ResponseWriter, r *http.Request) 
 	if p.Platform == "" {
 		p.Platform = ad.Key()
 	}
+	// 资料内容改从站外资料源（Pornhub）借一份：预览里看到的就是订阅后会存下来的那份。
+	if src := s.runner.LookupProfile(r.Context(), p.Name, ad.Key()); src != nil {
+		p.AdoptProfileFrom(src)
+	}
 	// 平台页面抠不到头像时，按名字到站外头像源借一张（预览里就能看到）。
 	if strings.TrimSpace(p.AvatarURL) == "" {
 		p.AvatarURL = s.runner.LookupAvatar(r.Context(), p.Name)
@@ -217,8 +221,16 @@ func (s *Server) handleCreateSubscription(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 头像：新订阅的卡片要立刻有图，这里同步补一次（一次 HTTP，失败就留空）。
+	// 资料内容：beeg / xHamster 的艺人页资料很薄，这里同步借一份 Pornhub 的
+	// （名字对不上就保持原样），订阅后打开艺人页立刻是完整档案。
 	saved, _ := s.st.GetPerformer(perfID)
+	if saved != nil && s.runner.FillProfile(r.Context(), saved) {
+		if again, err := s.st.GetPerformer(perfID); err == nil {
+			saved = again
+		}
+	}
+
+	// 头像：新订阅的卡片要立刻有图，这里同步补一次（一次 HTTP，失败就留空）。
 	if saved != nil && strings.TrimSpace(saved.AvatarURL) == "" {
 		s.runner.FillAvatar(r.Context(), saved)
 		if again, err := s.st.GetPerformer(perfID); err == nil {

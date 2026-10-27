@@ -144,3 +144,15 @@ make backend           # 先编译
 - 真机验收（2026-10）：xHamster 订阅 → 回填 46 部/页 × 34 页 → 默认档 720p **AV1** 播放正常 →
   下载 69.6 MB（AV1 720p）落盘 + nfo/poster/thumb/fanart；
   beeg 订阅 → 回填 48 部/页 → 默认档 1080p 播放正常 → 下载 385 MB（H.264 1080p）落盘 + 元数据。
+
+## 四、Pornhub 作为资料源（beeg / xHamster 借资料时打到的接口）
+
+| 点 | 现状（2026-10 实测） | 改版后怎么发现 |
+|---|---|---|
+| 主页标识 | 名字小写好推（`Riley Reid` → `/model/riley-reid`），连写的要两种都试（`MiniDiva` → `minidiva` / `mini-diva`） | 日志「Pornhub 上没找到同名艺人」但站点上明明有 |
+| `/model/<slug>` 跳转 | 认证艳星 301 → `/pornstar/<slug>`；普通用户 301 → `/users/<slug>`（那类页面解析不出资料，会当作没找到）；不存在的标识 301 → 热门榜，解析出的名字对不上，同样算没找到 | 艺人资料一直借不到，`-backfill-profile` 打印「没找到同名艺人」 |
+| 搜索 | `/pornstars/search?search=<名字>`（结果在 `ul#pornstarsSearchResult` 里，卡片名字带隐藏的「thumbnail」后缀要清掉）。**`/model/search?search=` 已废（301 到随机 `/users/<hash>`），`/pornstars?search=` 的参数被忽略（永远回热门榜）** | 搜索结果全是无关的「热门艳星」，说明搜索入口又变了 |
+| 搜索无结果 | 搜索页直接回 **404**（客户端把它当「没搜到」，不是错误） | 报「上游 404」说明这个约定变了 |
+| 艺人头像 | 资料页的 DOM 头像**解析不出来**（ld+json 里没有 image），所以借资料时头像字段通常是空的，头像继续走 §11 的跨站借图 | 不改也不影响 |
+| 简介质量 | 不少老艺人的简介只是一串 OnlyFans 地址（Riley Reid = `Onlyfans.com/rileyreidx3`），比本网站的简介还少，所以「纯网址简介」不覆盖本地 | 艺人页简介变成一行网址 → 清理规则失效 |
+

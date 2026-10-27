@@ -56,6 +56,13 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 		r.log.Warn("抓取艺人资料失败", "performer", perf.PerformerID, "err", err)
 	}
 
+	// 1.5) 资料内容改从站外资料源（Pornhub）借：beeg / xHamster 的艺人页
+	// 只有名字、头像和站内统计，简介、标签行、三围、社交链接、排名都缺。
+	// 名字对不上就不动，失败同样不阻塞同步。
+	if latest, err := r.st.GetPerformer(perf.ID); err == nil {
+		r.FillProfile(ctx, latest)
+	}
+
 	// 2) 头像：平台页面上抠不到时，用站外头像源按名字补一张（失败不影响同步）。
 	if latest, err := r.st.GetPerformer(perf.ID); err == nil {
 		r.FillAvatar(ctx, latest)

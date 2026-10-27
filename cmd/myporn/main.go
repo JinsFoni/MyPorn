@@ -38,6 +38,7 @@ func main() {
 		debugVideo = flag.String("debug-video", "", "调试用：抓取并打印指定 viewkey 的播放解析结果")
 		backfill   = flag.Bool("backfill-meta", false, "补齐历史影片的详情元数据（标签、简介等），补完即退出")
 		backfillAv = flag.Bool("backfill-avatar", false, "给没有头像的艺人从站外头像源（beeg、X）补一张，补完即退出")
+		backfillPf = flag.Bool("backfill-profile", false, "把 beeg / xHamster 的艺人资料整份换成 Pornhub 上的，换完即退出")
 	)
 	flag.Parse()
 
@@ -81,6 +82,7 @@ func main() {
 	}
 
 	avatars := buildAvatarRegistry(cfg, logger)
+	profiles := buildProfileRegistry(reg, logger)
 
 	if *debugParse != "" {
 		runDebugParse(reg, *debugParse)
@@ -98,9 +100,13 @@ func main() {
 		runBackfillAvatar(st, avatars, logger)
 		return
 	}
+	if *backfillPf {
+		runBackfillProfile(st, reg, profiles, logger)
+		return
+	}
 
 	hub := events.NewHub()
-	runner := jobs.NewRunner(cfg, st, reg, avatars, hub, logger)
+	runner := jobs.NewRunner(cfg, st, reg, avatars, profiles, hub, logger)
 	runner.RegisterDefaults()
 
 	// ffmpeg 只在下载任务的封装步骤用到；缺失不影响浏览与同步。
@@ -207,6 +213,54 @@ func buildAvatarRegistry(cfg *config.Config, log *slog.Logger) *platform.AvatarR
 		avatars.Register(xcom.NewAvatarProvider(client))
 	}
 	return avatars
+}
+
+// buildProfileRegistry 构造站外资料来源。目前只有 Pornhub 一家：
+// 它的艺人档案最全（简介、资料标签、三围、社交链接、排名都有），
+// beeg / xHamster 的艺人都从它这儿借资料。
+func buildProfileRegistry(reg *platform.Registry, log *slog.Logger) *platform.ProfileRegistry {
+	profiles := platform.NewProfileRegistry()
+	a, ok := reg.Get("pornhub")
+	if !ok {
+		return profiles
+	}
+	provider, ok := a.(platform.ProfileProvider)
+	if !ok {
+		log.Warn("Pornhub 适配器不支持资料源接口，跳过")
+		return profiles
+	}
+	profiles.Register(provider)
+	return profiles
+}
+
+// runBackfillProfile 把各平台的艺人资料整份换成 Pornhub 上的（名字对不上就不动）。
+// 一次性返工用：老数据的资料是各站自己那点内容，换过之后不用再跑。
+func runBackfillProfile(st *store.Store, reg *platform.Registry, profiles *platform.ProfileRegistry, log *slog.Logger) {
+	filler := jobs.NewProfileFiller(st, profiles, log)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	checked, filled := 0, 0
+	for _, a := range reg.All() {
+		if a.Key() == "pornhub" {
+			continue // 本来就是 Pornhub 的艺人，没什么可借
+		}
+		items, err := st.ListPerformersByPlatform(a.Key())
+		if err != nil {
+			log.Error("读取艺人失败", "platform", a.Key(), "err", err)
+			continue
+		}
+		for _, p := range items {
+			if ctx.Err() != nil {
+				fmt.Printf("补资料中断：%v\n", ctx.Err())
+				return
+			}
+			checked++
+			if filler.Fill(ctx, p) {
+				filled++
+			}
+		}
+	}
+	fmt.Printf("补资料完成：检查 %d 位，换资料 %d 位\n", checked, filled)
 }
 
 // runBackfillAvatar 一次性给没有头像的艺人补头像。

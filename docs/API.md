@@ -218,6 +218,12 @@ type Video = {
    只给英制才按 2.54 换算），三围拆成 `bust/waist/hips`（英制的 `35-25-36` 会换成 `89/64/91`）。
    **认出来的这两行会从 `profile` 里摘掉**（同一条数据不在页面上出现两次），认不出来的（如 `1.67 m`）原样留在 `profile` 里；
    四项全 0 时艺人页不出「身材」那一行。字段固定四项、缺的就是 `0`，不会是 `null`。
+4a-2. **xHamster / beeg 的 `profile` / `social` / `body` / `rank` / `bio` 来自 Pornhub**：
+   这两家的艺人页资料很薄，同步时会按艺人名到 Pornhub 上找同一个人（名字归一后必须完全一致），
+   找到就把上述资料内容整份换过来；`platform` / `performerId` / `url` / `name` / `videoCount` /
+   `subscriberCount` 与头像仍是本平台的（头像只在本地为空时才借用）。名字对不上就保持原样。
+   资料来源的 `bio` 若只是一串网址（如 `Onlyfans.com/xyz`）不会覆盖本网站已有的简介。
+   一次性返工老数据：`./myporn -backfill-profile`。
 4c. **`Performer.rank`** 取艺人主页「排名信息」块里的**模特排名**（`.rankingInfo` 里第一个 `.infoBox`）——站点页头那块
    `模特排名 / 本周排名 / 本月排名 / 上月排名 / 年度排名` 里只取第一个，其余四个不解析。取不到就是 `0`，艺人页不渲染这一行。
    **单独一列**（`performers.model_rank`，整数）而不是塞进 JSON：它是一个会随同步更新的标量；同步时 `0` 不覆盖库里的旧值。

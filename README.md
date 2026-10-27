@@ -132,6 +132,13 @@ make run
 ./bin/myporn -root . -backfill-avatar
 ```
 
+把 beeg / xHamster 的艺人资料整份换成 Pornhub 上的（简介、标签行、三围、社交链接、排名；
+名字对不上的不动）：
+
+```bash
+./bin/myporn -root . -backfill-profile
+```
+
 ## 真实网络冒烟测试（可选）
 
 需要能访问 `cn.pornhub.com`，默认跳过，`LIVE=1` 才跑：

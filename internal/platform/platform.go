@@ -53,6 +53,41 @@ type AvatarProvider interface {
 	ResolveAvatar(ctx context.Context, performerName string) (string, error)
 }
 
+// ProfileProvider 是可选接口：站外的艺人**资料**来源。
+// beeg / xHamster 的艺人页只给名字、头像和几个站内统计，
+// 简介、资料标签、三围、社交链接、排名这些正经资料都缺；
+// 同一个人在 Pornhub 上通常有完整档案，所以允许整份借过来——
+// 但**名字对得上**才采用，对不上宁可留空，绝不给艺人安别人的简介。
+type ProfileProvider interface {
+	Key() string
+	// ResolveProfile 按艺人名找到站外的同一个人，返回它的资料；名字对不上就报错。
+	ResolveProfile(ctx context.Context, performerName string) (*model.Performer, error)
+}
+
+// ProfileRegistry 保存资料源，按注册顺序依次尝试。零值/nil 都可用（视为没有来源）。
+type ProfileRegistry struct {
+	list []ProfileProvider
+}
+
+// NewProfileRegistry 创建空的资料来源表。
+func NewProfileRegistry() *ProfileRegistry { return &ProfileRegistry{} }
+
+// Register 追加一个资料来源。
+func (r *ProfileRegistry) Register(p ProfileProvider) {
+	if r == nil || p == nil {
+		return
+	}
+	r.list = append(r.list, p)
+}
+
+// All 返回按注册顺序排列的资料来源。
+func (r *ProfileRegistry) All() []ProfileProvider {
+	if r == nil {
+		return nil
+	}
+	return r.list
+}
+
 // ImageHostPlatform 判断图片地址实际属于哪个站点：跨站头像要用图床所在平台的
 // HTTP 客户端（也就是它自己的代理配置），不能跟着影片所属平台走。
 // 目前跨站使用的图床有两个：beeg 的照片（externulls）和 X 的头像（twimg）。

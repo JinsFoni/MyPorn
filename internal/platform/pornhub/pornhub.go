@@ -6,6 +6,7 @@
 package pornhub
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"golang.org/x/time/rate"
 
 	"github.com/mario/myporn/internal/model"
@@ -103,6 +105,9 @@ func (a *Adapter) get(ctx context.Context, path string, q url.Values) ([]byte, e
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return nil, ErrRateLimited
 	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("%w (%s)", ErrNotFound, u)
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("上游返回 %d (%s)", resp.StatusCode, u)
 	}
@@ -128,6 +133,10 @@ func (a *Adapter) get(ctx context.Context, path string, q url.Values) ([]byte, e
 }
 
 var ErrRateLimited = errors.New("上游限流")
+
+// ErrNotFound 表示上游明确回 404（艺人/搜索页不存在）。
+// 搜索页在没有结果时就是 404，调用方要能把它和「网络出错」区分开。
+var ErrNotFound = errors.New("上游 404")
 
 var rePerformerPath = regexp.MustCompile(`/(?:model|pornstar)/([A-Za-z0-9_\-]+)`)
 
@@ -556,25 +565,39 @@ func (a *Adapter) SearchPerformers(ctx context.Context, query string, page int) 
 	if page > 1 {
 		q.Set("page", fmt.Sprint(page))
 	}
-	// 依次尝试已知的搜索入口，任一返回结果即采用。
-	paths := []string{"/model/search", "/pornstars"}
-	var lastErr error
-	for _, p := range paths {
-		body, err := a.get(ctx, p, q)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		items, hasMore := parseSearchResults(body, a.base)
-		if len(items) > 0 {
-			for _, it := range items {
-				it.Platform = a.Key()
-			}
-			return items, hasMore, nil
-		}
+	// 走 /pornstars/search?search=：站上真正的艳星搜索页，结果按名字模糊匹配
+	// （搜 "mini diva" 会带出 Mini Mitzi、Daisy Diva…），所以调用方必须自己按名字核对。
+	// 别用 /model/search——它现在会 301 到某个随机 /users/<hash> 主页；
+	// 也别用 /pornstars?search=——那个参数被忽略，永远回热门榜。
+	body, err := a.get(ctx, "/pornstars/search", q)
+	if errors.Is(err, ErrNotFound) {
+		// 没有同名结果时搜索页直接 404，这不是错误，就是没搜到。
+		return nil, false, nil
 	}
-	if lastErr != nil {
-		return nil, false, lastErr
+	if err != nil {
+		return nil, false, err
 	}
-	return nil, false, nil
+	items := parsePornstarCards(body, a.base)
+	if len(items) == 0 {
+		// 结构再变的话，退回「按链接文字抓名字」的老路，至少不至于完全搜不到。
+		var hasMore bool
+		items, hasMore = parseSearchResults(body, a.base)
+		for _, it := range items {
+			it.Platform = a.Key()
+		}
+		return items, hasMore, nil
+	}
+	for _, it := range items {
+		it.Platform = a.Key()
+	}
+	return items, goqueryMorePages(body), nil
+}
+
+// goqueryMorePages 判断结果里还有没有下一页（分页条的 rel=next）。
+func goqueryMorePages(body []byte) bool {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	return doc.Find(`.pagination a[rel=next], .pagination3 a[rel=next], a[rel=next]`).Length() > 0
 }

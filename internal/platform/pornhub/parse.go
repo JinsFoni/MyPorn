@@ -906,6 +906,83 @@ func ParseMasterPlaylist(content, baseURL string) []model.Variant {
 
 // ---------- 搜索页 ----------
 
+// parsePornstarCards 解析艳星搜索结果页里的卡片，返回「搜索结果」+「侧栏热门艳星」。
+//
+// 页面里有两套结构、两个区域：
+//   - 搜索结果：ul#pornstarsSearchResult 里的 li > .wrap > a[href="/pornstar/<slug>"]
+//     > img[data-thumb_url]，名字在 .thumbnail-info-wrapper a.title 里；
+//   - 侧栏「热门艳星」：li.performerCard > a > img + .performerCardName。
+//
+// 搜索结果排在前面（侧栏那批和关键词无关，只是站上最热门的一批），按 slug 去重。
+// 只认「卡片的主链接」是艺人主页的那些：结果页里还混着几条相关影片
+// （li.pcVideoListItem），它们的主链接是 view_video.php，但内部挂着上传者的
+// /model/<slug> 链接——按 li 内任意链接去抓会把影片标题当成艺人名。
+func parsePornstarCards(body []byte, base string) []*model.Performer {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	out := []*model.Performer{}
+	seen := map[string]bool{}
+	collect := func(sel *goquery.Selection) {
+		sel.Each(func(_ int, card *goquery.Selection) {
+			link := card.Find(`.thumbnail-info-wrapper a.title, .performerCardName a, a[href*="/pornstar/"]`).First()
+			href := attrAny(link, "href")
+			if href == "" {
+				return
+			}
+			m := rePerformerPath.FindStringSubmatch(href)
+			if m == nil {
+				return
+			}
+			slug := m[1]
+			if slug == "" || slug == "search" || seen[slug] {
+				return
+			}
+			img := card.Find("img").First()
+			name := cleanPornstarName(card.Find(".thumbnail-info-wrapper a.title, .performerCardName").First().Text())
+			if name == "" && img.Length() > 0 {
+				name = cleanPornstarName(img.AttrOr("alt", ""))
+			}
+			if name == "" || len(name) > 80 {
+				name = slug
+			}
+			avatar := ""
+			if img.Length() > 0 {
+				avatar = attrAny(img, "data-thumb_url", "data-image", "src", "data-src")
+			}
+			seen[slug] = true
+			url := href
+			if strings.HasPrefix(url, "/") {
+				url = base + url
+			}
+			out = append(out, &model.Performer{
+				PerformerID: slug,
+				Name:        name,
+				URL:         url,
+				AvatarURL:   avatar,
+			})
+		})
+	}
+	collect(doc.Find("#pornstarsSearchResult li"))
+	collect(doc.Find("li.performerCard"))
+	return out
+}
+
+// cleanPornstarName 清掉卡片名字里跟出来的装饰文字：
+// 搜索结果的 a.title 里塞了个隐藏的「thumbnail」提示，文本取出来是 "Gia Derza thumbnail"。
+func cleanPornstarName(s string) string {
+	name := strings.Join(strings.Fields(s), " ")
+	lower := strings.ToLower(name)
+	for _, suffix := range []string{"thumbnail", "视频", "videos"} {
+		if strings.HasSuffix(lower, suffix) {
+			name = strings.TrimSpace(name[:len(name)-len(suffix)])
+			lower = strings.ToLower(name)
+		}
+	}
+	return name
+}
+
 func parseSearchResults(body []byte, base string) ([]*model.Performer, bool) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {

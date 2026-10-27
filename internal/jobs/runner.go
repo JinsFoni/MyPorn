@@ -41,6 +41,7 @@ type Runner struct {
 	log      *slog.Logger
 	interval time.Duration
 	avatars  *AvatarFiller
+	profiles *ProfileFiller
 
 	mu      sync.Mutex
 	workers []*worker
@@ -50,9 +51,11 @@ type Runner struct {
 	clients   map[string]*http.Client
 }
 
-// NewRunner 构造执行器。avatarSources 是站外头像来源（nil 等于不补头像）。
+// NewRunner 构造执行器。avatarSources 是站外头像来源（nil 等于不补头像），
+// profileSources 是站外资料来源（nil 等于不借资料）。
 func NewRunner(cfg *config.Config, st *store.Store, reg *platform.Registry,
-	avatarSources *platform.AvatarRegistry, hub *events.Hub, log *slog.Logger) *Runner {
+	avatarSources *platform.AvatarRegistry, profileSources *platform.ProfileRegistry,
+	hub *events.Hub, log *slog.Logger) *Runner {
 	return &Runner{
 		cfg: cfg, st: st, reg: reg, hub: hub, log: log,
 		enc:      library.NewEncoder(cfg.FFmpegPath, cfg.FFprobePath),
@@ -60,6 +63,7 @@ func NewRunner(cfg *config.Config, st *store.Store, reg *platform.Registry,
 		byType:   map[string]*worker{},
 		clients:  map[string]*http.Client{},
 		avatars:  NewAvatarFiller(st, avatarSources, log),
+		profiles: NewProfileFiller(st, profileSources, log),
 	}
 }
 
@@ -77,6 +81,22 @@ func (r *Runner) FillAvatar(ctx context.Context, p *model.Performer) string {
 		return ""
 	}
 	return r.avatars.Fill(ctx, p)
+}
+
+// LookupProfile 按艺人名到站外资料源取一份完整资料（不落库，订阅预览用）。
+func (r *Runner) LookupProfile(ctx context.Context, name, platformKey string) *model.Performer {
+	if r == nil || r.profiles == nil {
+		return nil
+	}
+	return r.profiles.Resolve(ctx, name, platformKey)
+}
+
+// FillProfile 给已入库的艺人借一份站外资料（真的写入了才返回 true）。
+func (r *Runner) FillProfile(ctx context.Context, p *model.Performer) bool {
+	if r == nil || r.profiles == nil || p == nil {
+		return false
+	}
+	return r.profiles.Fill(ctx, p)
 }
 
 // Register 注册一类任务；limit 决定并发上限（可动态读取设置）。
