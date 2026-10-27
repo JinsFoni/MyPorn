@@ -37,7 +37,7 @@
 
   let icon = $derived(ICONS[platform.toLowerCase()]);
 
-  // 底座比图标每边大 4px，留出玻璃圈；圆角按「外圆角 − 边距」取，
+  // 底座比图标每边大 4px，留出那圈玻璃；圆角按「外圆角 − 边距」取，
   // 内外两圈同心，看着才是一块玻璃托着一块牌。
   const PLATE: Record<'md' | 'sm' | 'xs', string> = {
     md: 'h-8 w-8 rounded-[0.625rem]',
@@ -52,10 +52,11 @@
 </script>
 
 {#snippet plate(extra: string)}
-  <!-- 毛玻璃底座：深色底上 backdrop-blur 没有内容可糊，质感靠半透明白底 + 内描边
-       + 顶部一道内高光叠出来，blur 留着是为了图标将来压在封面/图片上时也成立。 -->
+  <!-- 毛玻璃底座：深色底上 backdrop-blur 没有内容可糊，质感靠半透明白底 + 顶部一道内高光叠出来，
+       blur 留着是为了图标将来压在封面/图片上时也成立。四周不描边——那圈白线画上去像个按钮，
+       而且底座自己比图标亮一档，边已经由明暗差给出来了。 -->
   <span
-    class="inline-flex shrink-0 items-center justify-center bg-gradient-to-b from-white/[0.13] to-white/[0.05] ring-1 ring-inset ring-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl transition-[background-color,box-shadow] duration-150 group-hover:from-white/[0.22] group-hover:to-white/[0.12] {PLATE[
+    class="inline-flex shrink-0 items-center justify-center bg-gradient-to-b from-white/[0.13] to-white/[0.05] shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] backdrop-blur-xl transition-[background-color,box-shadow] duration-150 group-hover:from-white/[0.22] group-hover:to-white/[0.12] {PLATE[
       size
     ]} {extra}"
   >
