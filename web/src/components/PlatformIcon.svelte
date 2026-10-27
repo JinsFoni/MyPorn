@@ -40,9 +40,9 @@
   // 底座比图标每边大 4px，留出那圈玻璃；圆角按「外圆角 − 边距」取，
   // 内外两圈同心，看着才是一块玻璃托着一块牌。
   const PLATE: Record<'md' | 'sm' | 'xs', string> = {
-    md: 'h-8 w-8 rounded-[0.625rem]',
-    sm: 'h-6 w-6 rounded-[0.5rem]',
-    xs: 'h-5 w-5 rounded-[0.3125rem]',
+    md: 'h-8 w-8 rounded-xl',
+    sm: 'h-6 w-6 rounded-[0.625rem]',
+    xs: 'h-5 w-5 rounded-[0.375rem]',
   };
   const IMG: Record<'md' | 'sm' | 'xs', string> = {
     md: 'h-6 w-6',
