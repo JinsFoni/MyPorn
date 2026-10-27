@@ -17,6 +17,15 @@ func (r *Runner) RegisterDefaults() {
 	r.Register(model.JobTypeDownload, func() int {
 		return r.settingInt("download_concurrency", r.cfg.MaxDownload)
 	}, r.runDownloadJob)
+
+	// 社交动态：一个平台同时只跑一个（限流是按 IP 的，并发只会更快撞墙），
+	// 所以并发上限固定 1，不分平台开关。
+	if r.social != nil {
+		r.Register(model.JobTypeSocialSync, func() int { return 1 }, r.runSocialSyncJob)
+		r.Register(model.JobTypeSocialSave, func() int {
+			return r.settingInt("download_concurrency", r.cfg.MaxDownload)
+		}, r.runSocialSaveJob)
+	}
 }
 
 func (r *Runner) settingInt(key string, def int) int {

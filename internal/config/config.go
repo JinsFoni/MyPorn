@@ -31,6 +31,8 @@ type Config struct {
 	MaxDownload   int
 	MaxUpload     int
 	SyncHours     int
+	// ImgCacheMaxMB 是图片磁盘缓存上限（MB），0 表示不限。
+	ImgCacheMaxMB int
 	FFmpegPath    string
 	FFprobePath   string
 	// DownloadRateKB 是单任务下载限速（KB/s），0 表示不限。
@@ -53,10 +55,11 @@ func Load(root string) (*Config, error) {
 		LibraryRoot: env("LIBRARY_ROOT", "./media"),
 		GlobalProxy: env("GLOBAL_PROXY", ""),
 		PlatformProxy: map[string]string{
-			"pornhub":  env("PLATFORM_PROXY_PORNHUB", ""),
-			"xhamster": env("PLATFORM_PROXY_XHAMSTER", ""),
-			"beeg":     env("PLATFORM_PROXY_BEEG", ""),
-			"x":        env("PLATFORM_PROXY_X", ""),
+			"pornhub":   env("PLATFORM_PROXY_PORNHUB", ""),
+			"xhamster":  env("PLATFORM_PROXY_XHAMSTER", ""),
+			"beeg":      env("PLATFORM_PROXY_BEEG", ""),
+			"x":         env("PLATFORM_PROXY_X", ""),
+			"instagram": env("PLATFORM_PROXY_INSTAGRAM", ""),
 		},
 		OpenList: OpenList{
 			BaseURL: env("OPENLIST_BASE_URL", ""),
@@ -67,6 +70,7 @@ func Load(root string) (*Config, error) {
 		MaxDownload:    envInt("MAX_DOWNLOAD_JOBS", 2),
 		MaxUpload:      envInt("MAX_UPLOAD_JOBS", 2),
 		SyncHours:      envInt("SYNC_INTERVAL_HOURS", 6),
+		ImgCacheMaxMB:  envInt("IMG_CACHE_MAX_MB", 2048),
 		FFmpegPath:     env("FFMPEG_PATH", "ffmpeg"),
 		FFprobePath:    env("FFPROBE_PATH", "ffprobe"),
 		DownloadRateKB: envInt("DOWNLOAD_RATE_KB", 0),
@@ -84,11 +88,19 @@ func Load(root string) (*Config, error) {
 }
 
 // PlatformProxyFor 返回平台级代理，未配置时回落到全局代理。
+//
+// 只反映**启动时的环境变量**。界面里能改的代理走 proxying.Resolver（会先读设置表），
+// 这里留着是为了兼容老调用点和环境变量兜底。
 func (c *Config) PlatformProxyFor(key string) string {
 	if p := strings.TrimSpace(c.PlatformProxy[key]); p != "" {
 		return p
 	}
 	return c.GlobalProxy
+}
+
+// PlatformProxyAt 只返回平台专用代理（不看全局），供 proxying.Resolver 分层判断用。
+func (c *Config) PlatformProxyAt(key string) string {
+	return strings.TrimSpace(c.PlatformProxy[key])
 }
 
 func env(k, def string) string {

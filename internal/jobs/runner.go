@@ -20,8 +20,18 @@ import (
 	"github.com/mario/myporn/internal/library"
 	"github.com/mario/myporn/internal/model"
 	"github.com/mario/myporn/internal/platform"
+	"github.com/mario/myporn/internal/proxying"
+	"github.com/mario/myporn/internal/social"
 	"github.com/mario/myporn/internal/store"
 )
+
+// proxyFor 返回某平台当前该用的代理（设置优先，其次环境变量）。
+func (r *Runner) proxyFor(platformKey string) string {
+	if r == nil || r.px == nil {
+		return ""
+	}
+	return r.px.For(platformKey)
+}
 
 // Handler 是某类任务的执行函数。
 type Handler func(ctx context.Context, j *model.Job, c *Ctl) error
@@ -37,6 +47,7 @@ type Runner struct {
 	cfg      *config.Config
 	st       *store.Store
 	reg      *platform.Registry
+	social   *social.Registry // 社交动态（M5）的适配器表
 	hub      *events.Hub
 	enc      *library.Encoder
 	img      *imgcache.Service
@@ -44,6 +55,7 @@ type Runner struct {
 	interval time.Duration
 	avatars  *AvatarFiller
 	profiles *ProfileFiller
+	px       *proxying.Resolver // 代理解析器：每次发请求才问，改设置即时生效
 
 	repairing atomic.Bool // 封面修复是否已有一轮在跑
 
@@ -57,17 +69,18 @@ type Runner struct {
 
 // NewRunner 构造执行器。avatarSources 是站外头像来源（nil 等于不补头像），
 // profileSources 是站外资料来源（nil 等于不借资料）。
-func NewRunner(cfg *config.Config, st *store.Store, reg *platform.Registry,
+func NewRunner(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg *social.Registry,
 	avatarSources *platform.AvatarRegistry, profileSources *platform.ProfileRegistry,
 	hub *events.Hub, log *slog.Logger, images *imgcache.Service) *Runner {
 	return &Runner{
-		cfg: cfg, st: st, reg: reg, hub: hub, log: log, img: images,
+		cfg: cfg, st: st, reg: reg, social: socialReg, hub: hub, log: log, img: images,
 		enc:      library.NewEncoder(cfg.FFmpegPath, cfg.FFprobePath),
 		interval: time.Duration(cfg.SyncHours) * time.Hour,
 		byType:   map[string]*worker{},
 		clients:  map[string]*http.Client{},
 		avatars:  NewAvatarFiller(st, avatarSources, log),
 		profiles: NewProfileFiller(st, profileSources, log),
+		px:       proxying.New(st, cfg),
 	}
 }
 

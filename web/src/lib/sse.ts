@@ -2,12 +2,14 @@
  * SSE 封装（EventSource）：单连接、自动重连、页隐藏时断开。
  * 事件与 docs/API.md §5 对齐。
  */
-import type { JobUpdatedEvent, SyncProgress, VideoNewEvent } from './types';
+import type { JobUpdatedEvent, PhotoNewEvent, SocialProgressEvent, SyncProgress, VideoNewEvent } from './types';
 
 export interface LiveEventMap {
   'job.updated': JobUpdatedEvent;
   'sync.progress': SyncProgress;
   'video.new': VideoNewEvent;
+  'photo.new': PhotoNewEvent;
+  'social.progress': SocialProgressEvent;
   ping: Record<string, never>;
 }
 
@@ -87,7 +89,22 @@ export function connectEvents(handlers: LiveHandlers, options: LiveOptions = {})
     src.addEventListener('error', () => {
       // 浏览器会自己重试，但不可控；这里主动接管，避免僵死连接
       close();
-      scheduleReconnect();
+      // 会话来路不明的失败（最常见是登录过期 → 401）不该每 20 秒重试一次，
+      // 那只会把控制台刷满；先问一句「还登录着吗」，没登录就彻底停手，
+      // 交给普通的 401 流程把人送回登录页。
+      void fetch('/api/auth/me', { credentials: 'same-origin' })
+        .then((res) => {
+          if (stopped) return;
+          if (res.status === 401) {
+            stopped = true;
+            options.onStatus?.(false);
+            return;
+          }
+          scheduleReconnect();
+        })
+        .catch(() => {
+          scheduleReconnect(); // 探测本身失败（断网）仍按原逻辑重连
+        });
     });
     bind(src, 'job.updated');
     bind(src, 'sync.progress');

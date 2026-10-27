@@ -89,7 +89,7 @@ func makeJPEG(t *testing.T, dir string) []byte {
 func buildRunner(t *testing.T, st *store.Store, reg *platform.Registry, cfg *config.Config) *Runner {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewRunner(cfg, st, reg, nil, nil, events.NewHub(), log, imgcache.New(t.TempDir(), nil, "", log))
+	return NewRunner(cfg, st, reg, nil, nil, nil, events.NewHub(), log, imgcache.New(t.TempDir(), nil, "", log))
 }
 
 func TestDownloadJobEndToEnd(t *testing.T) {

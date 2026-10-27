@@ -25,6 +25,11 @@ import type {
   SettingsPatch,
   SubscriptionCreated,
   ManageResponse,
+  MomentAccount,
+  MomentResolve,
+  MomentsAccountsResponse,
+  MomentsManageResponse,
+  MomentsPage,
   SyncMode,
   VideoDetail,
   VideoPage,
@@ -63,7 +68,19 @@ const FALLBACK_MESSAGES: Record<string, string> = {
 /** 把任意错误转成一句能展示给用户的中文 */
 export function messageFor(error: unknown): string {
   if (error instanceof ApiError) {
-    return error.message || FALLBACK_MESSAGES[error.code] || '出错了，稍后再试';
+    const base = error.message || FALLBACK_MESSAGES[error.code] || '出错了，稍后再试';
+    // 限流时后端会给冷却截止时间，补一句「HH:MM 后自动恢复」，
+    // 否则用户只会看到「平台限流」然后反复点重试。
+    const resetAt = error.code === 'rate_limited' ? error.details?.resetAt : null;
+    if (typeof resetAt === 'string') {
+      const when = new Date(resetAt);
+      if (!Number.isNaN(when.getTime())) {
+        const hh = String(when.getHours()).padStart(2, '0');
+        const mm = String(when.getMinutes()).padStart(2, '0');
+        return `${base}（${hh}:${mm} 之后自动恢复）`;
+      }
+    }
+    return base;
   }
   if (error instanceof Error) return error.message;
   return '出错了，稍后再试';
@@ -307,6 +324,75 @@ export const api = {
   },
   deleteJob(jobId: number | string): Promise<void> {
     return request<void>(`/api/jobs/${id(jobId)}`, { method: 'DELETE' });
+  },
+
+  // ---- 社交动态（M5）----
+  /** 照片墙（keyset 分页） */
+  moments(
+    params: {
+      cursor?: string | null;
+      accountId?: number | null;
+      performerId?: number | null;
+      platform?: string | null;
+      limit?: number;
+    } = {},
+  ): Promise<MomentsPage> {
+    return request<MomentsPage>(
+      `/api/moments${qs({
+        cursor: params.cursor,
+        accountId: params.accountId,
+        performerId: params.performerId,
+        platform: params.platform,
+        limit: params.limit,
+      })}`,
+    );
+  },
+  momentAccounts(): Promise<MomentsAccountsResponse> {
+    return request<MomentsAccountsResponse>('/api/moments/accounts');
+  },
+  /** 只探测（不写库），用于添加前预览 */
+  resolveMoment(url: string): Promise<MomentResolve> {
+    return request<MomentResolve>('/api/moments/resolve', { method: 'POST', body: { url } });
+  },
+  addMoment(url: string): Promise<{ account: MomentAccount; jobId: number | null }> {
+    return request<{ account: MomentAccount; jobId: number | null }>('/api/moments/accounts', {
+      method: 'POST',
+      body: { url },
+    });
+  },
+  patchMomentAccount(
+    accountId: number | string,
+    patch: { enabled?: boolean; performerId?: number; mode?: 'full' },
+  ): Promise<MomentAccount> {
+    return request<MomentAccount>(`/api/moments/accounts/${id(accountId)}`, { method: 'PATCH', body: patch });
+  },
+  deleteMomentAccount(accountId: number | string): Promise<void> {
+    return request<void>(`/api/moments/accounts/${id(accountId)}`, { method: 'DELETE' });
+  },
+  syncMomentAccount(accountId: number | string, mode?: 'auto' | 'full'): Promise<{ jobId: number | null; queued: boolean }> {
+    return request<{ jobId: number | null; queued: boolean }>(`/api/moments/accounts/${id(accountId)}/sync`, {
+      method: 'POST',
+      body: { mode: mode ?? 'auto' },
+    });
+  },
+  /** 手动解除本地冷却（换了 Cookie / 换了出口 IP 之后不该再等上一轮的 15 分钟） */
+  clearMomentCooldown(platform?: string): Promise<{ cleared: string[] }> {
+    return request<{ cleared: string[] }>('/api/moments/cooldown', {
+      method: 'POST',
+      body: { platform: platform ?? '' },
+    });
+  },
+  markMomentsSeen(): Promise<{ unseen: number }> {
+    return request<{ unseen: number }>('/api/moments/seen', { method: 'POST' });
+  },
+  saveMomentPhotos(photoIds: number[], libraryId?: number): Promise<{ jobId: number; count: number; libraryId: number }> {
+    return request<{ jobId: number; count: number; libraryId: number }>('/api/moments/photos/save', {
+      method: 'POST',
+      body: { photoIds, libraryId: libraryId ?? 0 },
+    });
+  },
+  manageMoments(): Promise<MomentsManageResponse> {
+    return request<MomentsManageResponse>('/api/manage/moments');
   },
 
   // ---- 设置 ----

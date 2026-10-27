@@ -1,0 +1,693 @@
+<script lang="ts">
+  /**
+   * 动态：订阅的 X / Instagram 博主的照片墙。
+   *
+   * 三件事：看照片（瀑布流 + 灯箱）、管博主（添加 / 启停 / 立即同步）、
+   * 存档（勾几张 → 存进本地库，走后台任务）。
+   *
+   * 契约见 docs/M5-SOCIAL.md §10/§11。
+   */
+  import { onMount, untrack } from 'svelte';
+  import InfiniteList from '../components/InfiniteList.svelte';
+  import EmptyState from '../components/EmptyState.svelte';
+  import { ApiError, api, messageFor } from '../lib/api';
+  import { imageUrl } from '../lib/img';
+  import { live } from '../lib/live.svelte';
+  import { router } from '../lib/router.svelte';
+  import { ui } from '../lib/ui.svelte';
+  import { formatDateTime } from '../lib/format';
+  import type {
+    Library,
+    MomentAccount,
+    MomentPhoto,
+    MomentResolve,
+    SocialPlatformInfo,
+  } from '../lib/types';
+
+  // ---- 博主列表 ----
+  let accounts = $state<MomentAccount[]>([]);
+  let platforms = $state<SocialPlatformInfo[]>([]);
+  let accountsLoaded = $state(false);
+  let accountsError = $state('');
+
+  // ---- 筛选 ----
+  let filterAccount = $state<number | null>(null);
+  let filterPlatform = $state<string | null>(null);
+  /** 换筛选条件时 +1，让 InfiniteList 重头拉 */
+  let wallKey = $state(0);
+
+  // ---- 墙上的照片（InfiniteList 报上来的，灯箱要在里面前后翻） ----
+  let photos = $state<MomentPhoto[]>([]);
+
+  // ---- 选择与存档 ----
+  let selection = $state<Set<number>>(new Set());
+  let libraries = $state<Library[]>([]);
+  let libraryId = $state<number>(0);
+  let saving = $state(false);
+
+  // ---- 灯箱 ----
+  let lightboxAt = $state<number | null>(null);
+  const current = $derived(lightboxAt === null ? null : (photos[lightboxAt] ?? null));
+
+  // ---- 添加博主 ----
+  let addOpen = $state(false);
+  let addUrl = $state('');
+  let addBusy = $state(false);
+  let addError = $state('');
+  /** 添加失败是因为「缺登录态」（IG 没配 Cookie）时，要顺手给出配置入口 */
+  let addNeedsAuth = $state(false);
+  /** 上一次失败是「冷却中」时为 true：给一个「现在就试」的按钮，不用干等到点 */
+  let addCooling = $state(false);
+  /** 上一次失败是「被风控拦截」时为 true：换 Cookie 的入口 */
+  let addBlocked = $state(false);
+  let preview = $state<MomentResolve | null>(null);
+
+  const selectionCount = $derived(selection.size);
+
+  const activeAccounts = $derived(accounts.filter((a) => a.enabled));
+
+  async function loadAccounts(): Promise<void> {
+    accountsError = '';
+    try {
+      const res = await api.momentAccounts();
+      accounts = res.items;
+      platforms = res.platforms;
+      live.setMomentsUnseen(res.unseen);
+    } catch (err) {
+      accountsError = messageFor(err);
+    } finally {
+      accountsLoaded = true;
+    }
+  }
+
+  /** InfiniteList 的取数：这里只关心照片；平台/博主筛选都在服务端做 */
+  async function loadPage(cursor: string | null): Promise<{ items: MomentPhoto[]; nextCursor: string | null }> {
+    const res = await api.moments({
+      cursor,
+      accountId: filterAccount,
+      platform: filterPlatform,
+      limit: 36,
+    });
+    return { items: res.items, nextCursor: res.nextCursor ?? null };
+  }
+
+  function setFilter(accountId: number | null, platform: string | null): void {
+    filterAccount = accountId;
+    filterPlatform = platform;
+    selection = new Set();
+    wallKey += 1;
+  }
+
+  // 后台抓到新照片时自动刷新（只刷第一页：照片墙按时间倒序，新的都在最前面）
+  let seenVersion = 0;
+  $effect(() => {
+    const v = live.momentsVersion;
+    if (v === seenVersion) return;
+    seenVersion = v;
+    wallKey += 1;
+  });
+
+  /** 深链：/moments?account=3（艺人页「社交动态」点进来就只看这位博主） */
+  function syncQuery(): void {
+    const id = Number.parseInt(router.query.get('account') ?? '', 10);
+    if (Number.isFinite(id) && id > 0 && id !== filterAccount) {
+      filterAccount = id;
+      filterPlatform = null;
+      selection = new Set();
+      wallKey += 1;
+    }
+  }
+
+  // 地址栏里的 account 变了（比如在艺人页点了另一个人的图）就跟着换筛选
+  $effect(() => {
+    void router.search;
+    // untrack：syncQuery 会读 filterAccount，让它进依赖会自己触发自己
+    untrack(() => syncQuery());
+  });
+
+  onMount(() => {
+    syncQuery();
+    void loadAccounts();
+    // 进来就算「看过了」：红点只在没进来的时候有意义
+    void api
+      .markMomentsSeen()
+      .then(() => live.setMomentsUnseen(0))
+      .catch(() => {});
+  });
+
+  // ---- 选择 ----
+  function toggleSelect(id: number): void {
+    const next = new Set(selection);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selection = next;
+  }
+
+  async function openSave(): Promise<void> {
+    if (selectionCount === 0 || saving) return;
+    if (libraries.length === 0) {
+      try {
+        const res = await api.libraries();
+        libraries = res.items;
+        libraryId = res.items.find((l) => l.isDefault)?.id ?? res.items[0]?.id ?? 0;
+      } catch {
+        /* 下面提交时会再报错 */
+      }
+    }
+    saving = true;
+    try {
+      const ids = [...selection];
+      const res = await api.saveMomentPhotos(ids, libraryId || undefined);
+      live.toast(`已开始保存 ${res.count} 张照片`, 'success');
+      selection = new Set();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function saveOne(photo: MomentPhoto): Promise<void> {
+    try {
+      await api.saveMomentPhotos([photo.id], libraryId || undefined);
+      live.toast('已加入保存队列', 'success');
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    }
+  }
+
+  // ---- 灯箱键盘 ----
+  function onKeydown(event: KeyboardEvent): void {
+    if (lightboxAt === null) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      lightboxAt = null;
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      step(1);
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      step(-1);
+    }
+  }
+
+  function step(delta: number): void {
+    if (lightboxAt === null) return;
+    // 同一条帖子的几张图挨在一起（服务端就是这么排的），所以「前后」天然是先走完同帖。
+    const next = lightboxAt + delta;
+    if (next < 0) {
+      if (delta < 0) wallLoadMoreHint();
+      return;
+    }
+    if (next >= photos.length) {
+      wallLoadMoreHint();
+      return;
+    }
+    lightboxAt = next;
+  }
+
+  /** 翻到已加载的边界时提示滚动加载（不自动替他滚，免得灯箱位置乱跳） */
+  let hintAt = 0;
+  function wallLoadMoreHint(): void {
+    if (Date.now() - hintAt < 3000) return;
+    hintAt = Date.now();
+    live.toast('到已加载的尽头了，关掉大图后继续往下滚', 'info');
+  }
+
+  // ---- 添加博主 ----
+  function openAdd(): void {
+    addOpen = true;
+    addUrl = '';
+    addError = '';
+    addNeedsAuth = false;
+    addCooling = false;
+    addBlocked = false;
+    preview = null;
+  }
+
+  /** 把接口错误翻译成「用户接下来该干什么」 */
+  function noteAddError(err: unknown): void {
+    addError = messageFor(err);
+    addNeedsAuth = err instanceof ApiError && err.code === 'needs_auth';
+    addCooling = err instanceof ApiError && err.code === 'rate_limited';
+    addBlocked = err instanceof ApiError && err.code === 'blocked';
+  }
+
+  /** 手动清掉本地冷却再重试一次（Cookie / IP 换过之后，旧的冷却时间已经没有意义）。 */
+  async function retryAfterCooldown(): Promise<void> {
+    try {
+      await api.clearMomentCooldown('instagram');
+    } catch {
+      // 清不掉就照常重试，最坏情况还是那句「冷却中」
+    }
+    addCooling = false;
+    await resolve();
+  }
+
+  async function resolve(): Promise<void> {
+    const url = addUrl.trim();
+    if (url === '' || addBusy) return;
+    addBusy = true;
+    addError = '';
+    preview = null;
+    try {
+      preview = await api.resolveMoment(url);
+    } catch (err) {
+      noteAddError(err);
+    } finally {
+      addBusy = false;
+    }
+  }
+
+  async function confirmAdd(): Promise<void> {
+    if (addBusy || !preview) return;
+    addBusy = true;
+    addError = '';
+    try {
+      const res = await api.addMoment(addUrl.trim());
+      live.toast(`已添加 @${res.account.handle}，正在回填历史帖子`, 'success');
+      addOpen = false;
+      preview = null;
+      await loadAccounts();
+      wallKey += 1;
+    } catch (err) {
+      noteAddError(err);
+    } finally {
+      addBusy = false;
+    }
+  }
+
+  async function syncNow(account: MomentAccount): Promise<void> {
+    try {
+      const res = await api.syncMomentAccount(account.id, account.backfillDone ? 'auto' : 'full');
+      live.toast(res.queued ? `已投递 @${account.handle} 的同步` : '这个博主已经在队列里了', 'info');
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    }
+  }
+
+  function platformName(key: string): string {
+    return platforms.find((p) => p.key === key)?.name ?? key;
+  }
+
+  /**
+   * 墙上的显示比例。极端长图/超宽图会把整行撑变形（一张 3:1 的全景能让同排其他格子空出一大截），
+   * 所以把比例夹在 3:4 – 16:9 之间：超出的部分裁掉，点开大图仍然看得到完整画面。
+   */
+  function ratio(photo: MomentPhoto): string {
+    if (!(photo.width > 0 && photo.height > 0)) return '1 / 1';
+    const r = Math.min(16 / 9, Math.max(3 / 4, photo.width / photo.height));
+    return `${String(r)}`;
+  }
+</script>
+
+<svelte:window onkeydown={onKeydown} />
+
+<div class="flex flex-col gap-4">
+  <!-- 工具栏：筛选用横向胶囊，右侧是唯一的主动作 -->
+  <div class="flex flex-wrap items-center gap-2">
+    <div class="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1 pb-1">
+      <button
+        type="button"
+        onclick={() => setFilter(null, null)}
+        class="shrink-0 rounded-full px-3 py-1.5 text-meta transition-colors {filterAccount === null &&
+        filterPlatform === null
+          ? 'bg-raise text-fg'
+          : 'text-muted hover:bg-panel hover:text-fg'}"
+      >
+        全部
+      </button>
+      {#each accounts as account (account.id)}
+        <button
+          type="button"
+          onclick={() => setFilter(account.id, null)}
+          title={`@${account.handle} · ${String(account.photoCount)} 张`}
+          class="flex shrink-0 items-center gap-1.5 rounded-full py-1 pl-1 pr-3 text-meta transition-colors {filterAccount ===
+          account.id
+            ? 'bg-raise text-fg'
+            : 'text-muted hover:bg-panel hover:text-fg'} {account.enabled ? '' : 'opacity-50'}"
+        >
+          {#if account.avatarUrl}
+            <img
+              src={imageUrl(account.avatarUrl, 44) ?? ''}
+              alt=""
+              class="h-5 w-5 rounded-full object-cover"
+              loading="lazy"
+              decoding="async"
+            />
+          {:else}
+            <span class="grid h-5 w-5 place-items-center rounded-full bg-panel text-[0.625rem] text-dim">
+              {account.handle.slice(0, 1).toUpperCase()}
+            </span>
+          {/if}
+          <span class="max-w-[9rem] truncate">@{account.handle}</span>
+        </button>
+      {/each}
+    </div>
+
+    <div class="flex shrink-0 items-center gap-2">
+      <!-- 平台在手机上留给「艺人页」那种场景，这里 390px 一行塞不下，直接藏掉 -->
+      {#each platforms as p (p.key)}
+        <button
+          type="button"
+          onclick={() => setFilter(null, filterPlatform === p.key ? null : p.key)}
+          class="hidden rounded-full px-2.5 py-1.5 text-meta transition-colors sm:block {filterPlatform === p.key
+            ? 'bg-raise text-fg'
+            : 'text-dim hover:bg-panel hover:text-fg'}"
+        >
+          {p.name}
+        </button>
+      {/each}
+      <button
+        type="button"
+        onclick={openAdd}
+        class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
+      >
+        添加博主
+      </button>
+    </div>
+  </div>
+
+  {#if accountsError}
+    <p class="rounded-xl bg-panel p-3 text-ui text-brick" role="alert">{accountsError}</p>
+  {/if}
+
+  <!-- 报错先亮出来：needs_auth / rate_limited 都得让用户看见，不能装作没事 -->
+  {#each accounts.filter((a) => a.lastError) as account (account.id)}
+    <div class="flex items-start gap-2 rounded-xl bg-panel px-3 py-2 text-meta text-brick">
+      <span class="font-medium">@{account.handle}</span>
+      <span class="min-w-0 flex-1 text-muted">{account.lastError}</span>
+      <button type="button" class="shrink-0 text-dim hover:text-fg" onclick={() => void syncNow(account)}>
+        重试
+      </button>
+    </div>
+  {/each}
+
+  {#if accountsLoaded && accounts.length === 0}
+    <EmptyState
+      title="还没有订阅任何博主"
+      hint="贴一个 X 或 Instagram 的博主主页链接，抓来的照片会铺满这面墙。Instagram 需要先在设置里配 Cookie。"
+      icon="user"
+    >
+      {#snippet actions()}
+        <button
+          type="button"
+          onclick={openAdd}
+          class="rounded-full bg-hi px-4 py-2 text-ui font-medium text-ink transition-opacity hover:opacity-90"
+        >
+          添加博主
+        </button>
+      {/snippet}
+    </EmptyState>
+  {:else}
+    <InfiniteList
+      load={loadPage}
+      keyOf={(photo: MomentPhoto) => photo.id}
+      reloadKey={wallKey}
+      maxLoadedPages={8}
+      gridClass="grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
+      onItems={(items: MomentPhoto[]) => {
+        photos = items;
+      }}
+    >
+      {#snippet placeholder()}
+        <div class="aspect-3/4 rounded-lg bg-panel"></div>
+      {/snippet}
+
+      {#snippet empty()}
+        <div class="col-span-full">
+          <EmptyState
+            title="还没有抓到照片"
+            hint={activeAccounts.length === 0
+              ? '先把博主启用一下，或者点「添加博主」再加一个。'
+              : '抓取任务可能还没跑完，也可以点上面博主右边的「同步」立刻试一次。'}
+            icon="film"
+          />
+        </div>
+      {/snippet}
+
+      {#snippet children(photo: MomentPhoto)}
+        <div class="group relative overflow-hidden rounded-lg bg-panel">
+          <button
+            type="button"
+            class="block w-full cursor-zoom-in"
+            onclick={() => {
+              lightboxAt = photos.findIndex((p) => p.id === photo.id);
+            }}
+            aria-label={`查看 @${photo.handle} 的照片`}
+          >
+            <img
+              src={imageUrl(photo.thumbUrl, 480) ?? ''}
+              alt={photo.caption ? photo.caption.slice(0, 80) : `@${photo.handle} 的照片`}
+              style:aspect-ratio={ratio(photo)}
+              class="w-full bg-panel object-cover transition-opacity duration-200 group-hover:opacity-90"
+              loading="lazy"
+              decoding="async"
+            />
+          </button>
+
+          <!-- 勾选：右上角，只在悬停/已选时出现，避免墙上到处是控件 -->
+          <button
+            type="button"
+            onclick={() => toggleSelect(photo.id)}
+            aria-pressed={selection.has(photo.id)}
+            aria-label={selection.has(photo.id) ? '取消选择' : '选择这张'}
+            class="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full border transition-all {selection.has(
+              photo.id,
+            )
+              ? 'border-transparent bg-hi text-ink'
+              : 'border-white/40 bg-ink/45 text-white/90 opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="h-3.5 w-3.5">
+              <path d="m5 12.5 4.5 4.5L19 7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+
+          {#if photo.saved}
+            <span
+              class="absolute left-1.5 top-1.5 rounded-full bg-ink/60 px-1.5 py-0.5 text-[0.625rem] text-fg/90"
+              title="已存进本地库"
+            >
+              已存
+            </span>
+          {/if}
+
+          <div
+            class="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-ink/80 to-transparent px-2 pb-1.5 pt-6 text-[0.6875rem] text-white/85 opacity-0 transition-opacity group-hover:opacity-100"
+          >
+            <span class="block truncate">@{photo.handle}</span>
+          </div>
+        </div>
+      {/snippet}
+    </InfiniteList>
+  {/if}
+</div>
+
+<!-- 选中操作条：固定在底部，有选中才出现 -->
+{#if selectionCount > 0}
+  <div
+    class="fixed inset-x-0 bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-30 mx-auto flex w-fit max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-full bg-panel/95 px-3 py-2 text-meta shadow-lg backdrop-blur-xl lg:bottom-6"
+  >
+    <span class="pl-1 text-fg">已选 {selectionCount} 张</span>
+    {#if libraries.length > 1}
+      <select
+        bind:value={libraryId}
+        class="rounded-full border border-white/10 bg-raise px-2 py-1 text-meta text-fg outline-none"
+        aria-label="选择本地库"
+      >
+        {#each libraries as lib (lib.id)}
+          <option value={lib.id}>{lib.name}</option>
+        {/each}
+      </select>
+    {/if}
+    <button type="button" onclick={() => (selection = new Set())} class="rounded-full px-2 py-1 text-dim hover:text-fg">
+      取消
+    </button>
+    <button
+      type="button"
+      onclick={() => void openSave()}
+      disabled={saving}
+      class="rounded-full bg-hi px-3 py-1 font-medium text-ink transition-opacity hover:opacity-90 disabled:opacity-50"
+    >
+      {saving ? '提交中…' : '存进本地库'}
+    </button>
+  </div>
+{/if}
+
+<!-- 灯箱 -->
+{#if current}
+  <div
+    class="fixed inset-0 z-50 flex flex-col bg-ink/94 backdrop-blur-sm"
+    role="dialog"
+    aria-modal="true"
+    aria-label="照片大图"
+  >
+    <div class="flex items-center justify-between px-3 py-2 text-meta text-dim">
+      <span class="tabular-nums">{lightboxAt !== null ? lightboxAt + 1 : 0} / {photos.length}</span>
+      <button type="button" onclick={() => (lightboxAt = null)} class="rounded-full p-2 hover:text-fg" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="h-5 w-5">
+          <path d="M6 6l12 12M18 6 6 18" stroke-linecap="round" />
+        </svg>
+      </button>
+    </div>
+
+    <button
+      type="button"
+      class="relative flex min-h-0 flex-1 items-center justify-center bg-transparent px-2"
+      onclick={(event) => {
+        // 点图两侧（左 30% / 右 30%）翻页，中间关闭
+        const rect = event.currentTarget.getBoundingClientRect();
+        const x = (event.clientX - rect.left) / rect.width;
+        if (x < 0.3) step(-1);
+        else if (x > 0.7) step(1);
+        else lightboxAt = null;
+      }}
+      aria-label="点击左侧上一张、右侧下一张、中间关闭"
+    >
+      <img
+        src={imageUrl(current.url, 1600) ?? current.url}
+        alt={current.caption || `@${current.handle} 的照片`}
+        class="max-h-full max-w-full object-contain"
+        decoding="async"
+      />
+    </button>
+
+    <div class="flex items-start gap-3 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-2">
+      <div class="min-w-0 flex-1">
+        <p class="truncate text-ui text-fg">
+          <span class="text-dim">{platformName(current.platform)}</span> · @{current.handle}
+        </p>
+        {#if current.caption}
+          <p class="mt-0.5 line-clamp-2 whitespace-pre-line text-meta text-muted">{current.caption}</p>
+        {/if}
+        {#if current.postedAt}
+          <p class="mt-1 text-meta text-dim">{formatDateTime(current.postedAt)}</p>
+        {/if}
+      </div>
+      <div class="flex shrink-0 items-center gap-1.5">
+        {#if current.postUrl}
+          <a
+            href={current.postUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            class="rounded-full px-2.5 py-1.5 text-meta text-dim hover:bg-panel hover:text-fg"
+          >
+            原帖
+          </a>
+        {/if}
+        <button
+          type="button"
+          onclick={() => void saveOne(current)}
+          class="rounded-full bg-hi px-3 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
+        >
+          {current.saved ? '再存一次' : '存进本地库'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- 添加博主 -->
+{#if addOpen}
+  <div
+    class="fixed inset-0 z-50 flex items-end justify-center bg-ink/70 p-3 backdrop-blur-sm sm:items-center"
+    role="dialog"
+    aria-modal="true"
+    aria-label="添加博主"
+  >
+    <div class="w-full max-w-md rounded-2xl bg-panel p-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-title font-medium text-fg">添加博主</h2>
+        <button
+          type="button"
+          onclick={() => (addOpen = false)}
+          class="rounded-full p-1.5 text-dim hover:text-fg"
+          aria-label="关闭"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="h-5 w-5">
+            <path d="M6 6l12 12M18 6 6 18" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+
+      <p class="mt-1 text-meta text-muted">粘贴 X 或 Instagram 的主页链接，例如 x.com/某人 或 instagram.com/某人。</p>
+
+      <div class="mt-3 flex gap-2">
+        <input
+          bind:value={addUrl}
+          onkeydown={(event) => {
+            if (event.key === 'Enter') void resolve();
+          }}
+          placeholder="https://x.com/…"
+          class="min-w-0 flex-1 rounded-xl bg-raise px-3 py-2 text-ui text-fg outline-none placeholder:text-dim"
+          spellcheck="false"
+          autocomplete="off"
+        />
+        <button
+          type="button"
+          onclick={() => void resolve()}
+          disabled={addBusy || addUrl.trim() === ''}
+          class="shrink-0 rounded-xl bg-raise px-3 py-2 text-ui text-fg transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {addBusy ? '探测中…' : '探测'}
+        </button>
+      </div>
+
+      {#if addError}
+        <div class="mt-3 rounded-xl bg-raise p-2.5" role="alert">
+          <p class="text-meta text-brick">{addError}</p>
+          {#if addNeedsAuth || addBlocked}
+            <a
+              data-link
+              href="/settings"
+              class="mt-1.5 inline-block text-meta text-fg underline decoration-line underline-offset-2 hover:decoration-fg"
+              onclick={() => ui.openSettings('social')}
+              >{addBlocked ? '去设置里换一份 Cookie' : '去设置 → 动态里粘贴 Instagram Cookie'}</a
+            >
+          {/if}
+          {#if addCooling}
+            <button
+              type="button"
+              class="mt-1.5 text-meta text-fg underline decoration-line underline-offset-2 hover:decoration-fg"
+              onclick={() => void retryAfterCooldown()}
+              >换过 Cookie 了？清除冷却并重试</button
+            >
+          {/if}
+        </div>
+      {/if}
+
+      {#if preview}
+        <div class="mt-3 flex items-center gap-3 rounded-xl bg-raise p-3">
+          {#if preview.avatarUrl}
+            <img src={preview.avatarUrl} alt="" class="h-11 w-11 rounded-full object-cover" />
+          {:else}
+            <span class="grid h-11 w-11 place-items-center rounded-full bg-panel text-ui text-dim">
+              {preview.handle.slice(0, 1).toUpperCase()}
+            </span>
+          {/if}
+          <div class="min-w-0">
+            <p class="truncate text-ui text-fg">{preview.displayName}</p>
+            <p class="truncate text-meta text-dim">
+              {preview.platformName} · @{preview.handle}
+              {#if preview.postCount > 0}· 已有 {preview.postCount} 帖{/if}
+            </p>
+          </div>
+        </div>
+        {#if preview.performerName}
+          <p class="mt-2 text-meta text-muted">会自动关联到艺人「{preview.performerName}」</p>
+        {/if}
+        {#if preview.warning}
+          <p class="mt-1 text-meta text-muted">{preview.warning}</p>
+        {/if}
+        <button
+          type="button"
+          onclick={() => void confirmAdd()}
+          disabled={addBusy}
+          class="mt-3 w-full rounded-xl bg-hi py-2 text-ui font-medium text-ink transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {preview.existingId > 0 ? '重新回填这个博主' : '添加并开始回填'}
+        </button>
+      {/if}
+    </div>
+  </div>
+{/if}

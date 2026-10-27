@@ -13,7 +13,20 @@ import (
 
 	"github.com/mario/myporn/internal/library"
 	"github.com/mario/myporn/internal/model"
+	"github.com/mario/myporn/internal/social/igram"
 )
+
+// socialSyncHours 把设置里的字符串夹到合理区间（1–48 小时）。
+func socialSyncHours(v string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 1 {
+		return 6
+	}
+	if n > 48 {
+		return 48
+	}
+	return n
+}
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	items, err := s.st.ListJobs(r.URL.Query().Get("type"), r.URL.Query().Get("status"), queryInt(r, "limit", 50))
@@ -41,24 +54,46 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 // ---------- 设置 ----------
 
 type settingsDTO struct {
-	SyncIntervalHours   int      `json:"syncIntervalHours"`
-	GlobalProxy         string   `json:"globalProxy"`
-	PlatformProxy       proxyDTO `json:"platformProxy"`
-	NamingTemplate      string   `json:"namingTemplate"`
-	DownloadConcurrency int      `json:"downloadConcurrency"`
-	DownloadRateKB      int      `json:"downloadRateKb"`
-	AutoDownloadNew     bool     `json:"autoDownloadNew"`
-	DefaultLibraryID    int64    `json:"defaultLibraryId"`
-	LibraryRoot         string   `json:"libraryRoot"`
-	FFmpegAvailable     bool     `json:"ffmpegAvailable"`
-	OpenList            olDTO    `json:"openlist"`
+	SyncIntervalHours   int       `json:"syncIntervalHours"`
+	GlobalProxy         string    `json:"globalProxy"`
+	PlatformProxy       proxyDTO  `json:"platformProxy"`
+	NamingTemplate      string    `json:"namingTemplate"`
+	DownloadConcurrency int       `json:"downloadConcurrency"`
+	DownloadRateKB      int       `json:"downloadRateKb"`
+	AutoDownloadNew     bool      `json:"autoDownloadNew"`
+	DefaultLibraryID    int64     `json:"defaultLibraryId"`
+	LibraryRoot         string    `json:"libraryRoot"`
+	FFmpegAvailable     bool      `json:"ffmpegAvailable"`
+	OpenList            olDTO     `json:"openlist"`
+	Social              socialDTO `json:"social"`
+}
+
+// socialDTO 是 M5 社交动态的设置。
+//
+// InstagramCookie 只写不读：Cookie 是登录凭证，前端只需要知道「有没有配」，
+// 每次把明文回传给浏览器等于白白多一处泄漏面。
+type socialDTO struct {
+	SyncHours          int    `json:"syncHours"`
+	HasInstagramCookie bool   `json:"hasInstagramCookie"`
+	InstagramCookie    string `json:"instagramCookie,omitempty"`
+}
+
+// socialPatch 是设置里可以改的社交项；InstagramCookie 传 "" 表示清空。
+type socialPatch struct {
+	SyncHours       *int    `json:"syncHours"`
+	InstagramCookie *string `json:"instagramCookie"`
 }
 
 // proxyDTO 是各平台的专用代理。留空表示跟随全局代理。
+//
+// Instagram / X 也在这里：抓社交动态时的出口 IP 直接决定会不会被风控
+// （见 docs/M5-SOCIAL.md §16.4），所以必须能在界面上改、改完立刻生效。
 type proxyDTO struct {
-	Pornhub  string `json:"pornhub"`
-	Xhamster string `json:"xhamster"`
-	Beeg     string `json:"beeg"`
+	Pornhub   string `json:"pornhub"`
+	Xhamster  string `json:"xhamster"`
+	Beeg      string `json:"beeg"`
+	Instagram string `json:"instagram"`
+	X         string `json:"x"`
 }
 
 type olDTO struct {
@@ -92,9 +127,11 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 		SyncIntervalHours: syncHours,
 		GlobalProxy:       get("global_proxy", s.cfg.GlobalProxy),
 		PlatformProxy: proxyDTO{
-			Pornhub:  get("proxy_pornhub", s.cfg.PlatformProxyFor("pornhub")),
-			Xhamster: get("proxy_xhamster", s.cfg.PlatformProxyFor("xhamster")),
-			Beeg:     get("proxy_beeg", s.cfg.PlatformProxyFor("beeg")),
+			Pornhub:   get("proxy_pornhub", s.cfg.PlatformProxyFor("pornhub")),
+			Xhamster:  get("proxy_xhamster", s.cfg.PlatformProxyFor("xhamster")),
+			Beeg:      get("proxy_beeg", s.cfg.PlatformProxyFor("beeg")),
+			Instagram: get("proxy_instagram", s.cfg.PlatformProxyFor("instagram")),
+			X:         get("proxy_x", s.cfg.PlatformProxyFor("x")),
 		},
 		NamingTemplate:      get("naming_template", library.DefaultTemplate),
 		DownloadConcurrency: conc,
@@ -108,6 +145,10 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 			Root:     get("openlist_root", s.cfg.OpenList.Root),
 			HasToken: token != "",
 		},
+		Social: socialDTO{
+			SyncHours:          socialSyncHours(get("social_sync_hours", "6")),
+			HasInstagramCookie: s.hasInstagramCookie(),
+		},
 	}
 }
 
@@ -116,15 +157,16 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 }
 
 type settingsPatch struct {
-	SyncIntervalHours   *int      `json:"syncIntervalHours"`
-	GlobalProxy         *string   `json:"globalProxy"`
-	PlatformProxy       *proxyDTO `json:"platformProxy"`
-	NamingTemplate      *string   `json:"namingTemplate"`
-	DownloadConcurrency *int      `json:"downloadConcurrency"`
-	DownloadRateKB      *int      `json:"downloadRateKb"`
-	AutoDownloadNew     *bool     `json:"autoDownloadNew"`
-	LibraryRoot         *string   `json:"libraryRoot"`
-	OpenList            *olDTO    `json:"openlist"`
+	SyncIntervalHours   *int         `json:"syncIntervalHours"`
+	GlobalProxy         *string      `json:"globalProxy"`
+	PlatformProxy       *proxyDTO    `json:"platformProxy"`
+	NamingTemplate      *string      `json:"namingTemplate"`
+	DownloadConcurrency *int         `json:"downloadConcurrency"`
+	DownloadRateKB      *int         `json:"downloadRateKb"`
+	AutoDownloadNew     *bool        `json:"autoDownloadNew"`
+	LibraryRoot         *string      `json:"libraryRoot"`
+	OpenList            *olDTO       `json:"openlist"`
+	Social              *socialPatch `json:"social"`
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +191,8 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		set("proxy_pornhub", strings.TrimSpace(p.PlatformProxy.Pornhub))
 		set("proxy_xhamster", strings.TrimSpace(p.PlatformProxy.Xhamster))
 		set("proxy_beeg", strings.TrimSpace(p.PlatformProxy.Beeg))
+		set("proxy_instagram", strings.TrimSpace(p.PlatformProxy.Instagram))
+		set("proxy_x", strings.TrimSpace(p.PlatformProxy.X))
 	}
 	if p.NamingTemplate != nil {
 		set("naming_template", strings.TrimSpace(*p.NamingTemplate))
@@ -172,6 +216,38 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.LibraryRoot != nil {
 		set("library_root", strings.TrimSpace(*p.LibraryRoot))
+	}
+	if p.Social != nil {
+		if p.Social.SyncHours != nil {
+			v := *p.Social.SyncHours
+			if v < 1 {
+				v = 1
+			}
+			if v > 48 {
+				v = 48
+			}
+			set("social_sync_hours", fmt.Sprint(v))
+		}
+		if p.Social.InstagramCookie != nil {
+			raw := strings.TrimSpace(*p.Social.InstagramCookie)
+			if raw == "" {
+				// 传空串 = 清除 Cookie（换号、或不想再用 IG 时用）。
+				if err := s.st.SetSecret(s.box, "social_cookie_instagram", ""); err != nil {
+					writeErr(w, http.StatusInternalServerError, "internal", "清除 Cookie 失败")
+					return
+				}
+			} else {
+				normalized, err := igram.NormalizeCookie(raw)
+				if err != nil {
+					writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+					return
+				}
+				if err := s.st.SetSecret(s.box, "social_cookie_instagram", normalized); err != nil {
+					writeErr(w, http.StatusInternalServerError, "internal", "保存 Cookie 失败")
+					return
+				}
+			}
+		}
 	}
 	if p.OpenList != nil {
 		set("openlist_base_url", strings.TrimSpace(p.OpenList.BaseURL))

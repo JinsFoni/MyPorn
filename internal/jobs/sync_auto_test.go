@@ -67,7 +67,7 @@ func newSyncFixture(t *testing.T, items []model.Video) *syncFixture {
 	reg.Register(ad)
 	cfg := &config.Config{MaxDownload: 2, SyncHours: 6}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	runner := NewRunner(cfg, st, reg, nil, nil, events.NewHub(), log, imgcache.New(t.TempDir(), nil, "", log))
+	runner := NewRunner(cfg, st, reg, nil, nil, nil, events.NewHub(), log, imgcache.New(t.TempDir(), nil, "", log))
 	return &syncFixture{st: st, r: runner, subID: subID, perf: perfID}
 }
 

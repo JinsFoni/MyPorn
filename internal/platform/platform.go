@@ -103,6 +103,11 @@ func ImageHostPlatform(rawURL, fallback string) string {
 	if host == "twimg.com" || strings.HasSuffix(host, ".twimg.com") {
 		return "x"
 	}
+	// Instagram 的照片走 CDN（cdninstagram.com / *.fbcdn.net），代理配置按站点给。
+	if host == "cdninstagram.com" || strings.HasSuffix(host, ".cdninstagram.com") ||
+		host == "fbcdn.net" || strings.HasSuffix(host, ".fbcdn.net") {
+		return "instagram"
+	}
 	return fallback
 }
 
@@ -157,15 +162,11 @@ func (r *Registry) All() []Adapter {
 	return out
 }
 
-// NewHTTPClient 按代理配置构造 HTTP 客户端；proxyURL 为空则直连。
+// NewHTTPClient 用固定代理地址建客户端（启动时一次性决定）。
+//
+// 需要「改设置立刻生效」的场景用 NewDynamicHTTPClient。
 func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
-	tr := &http.Transport{
-		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		MaxIdleConns:        32,
-		MaxIdleConnsPerHost: 8,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
-	}
+	tr := newTransport()
 	if proxyURL != "" {
 		pu, err := url.Parse(proxyURL)
 		if err != nil {
@@ -173,6 +174,50 @@ func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error)
 		}
 		tr.Proxy = http.ProxyURL(pu)
 	}
+	return newClientWith(tr, timeout)
+}
+
+// NewDynamicHTTPClient 的代理是每次发请求时现问的（参数返回空串 = 直连）。
+//
+// 这样「设置里换代理」就不用重启进程：Transport.Proxy 本来就是个函数，
+// 我们只是把它接到设置表上。代理地址填错时把错误抛给 Transport，
+// 请求会明确失败，而不是悄悄直连——用户配错了要能看见。
+func NewDynamicHTTPClient(proxyFor func() string, timeout time.Duration) (*http.Client, error) {
+	tr := newTransport()
+	if proxyFor != nil {
+		tr.Proxy = func(*http.Request) (*url.URL, error) {
+			raw := strings.TrimSpace(proxyFor())
+			if raw == "" {
+				return nil, nil
+			}
+			u, err := url.Parse(raw)
+			if err != nil {
+				return nil, fmt.Errorf("代理地址非法 %q: %w", raw, err)
+			}
+			return u, nil
+		}
+	}
+	return newClientWith(tr, timeout)
+}
+
+func newTransport() *http.Transport {
+	tr := &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		MaxIdleConns:        32,
+		MaxIdleConnsPerHost: 8,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+		// 手工构造的 Transport 默认**不开 HTTP/2**（只有 DefaultTransport 会自动开）。
+		// 实测这是致命的：X 的 syndication 对 HTTP/1.1 直接回 429（"30 次/窗口已用尽"，
+		// 带一个假的 reset），同一个地址用 HTTP/2 立刻 200。也就是说请求头写得再像浏览器，
+		// 走 h1 也永远拿不到数据。开着它对上游更友好，也省一次 TLS 往返。
+		ForceAttemptHTTP2: true,
+	}
+	return tr
+}
+
+// newClientWith 给 Transport 配好超时与 cookie jar。
+func newClientWith(tr *http.Transport, timeout time.Duration) (*http.Client, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}

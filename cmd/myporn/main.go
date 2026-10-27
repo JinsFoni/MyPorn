@@ -26,7 +26,11 @@ import (
 	"github.com/mario/myporn/internal/platform/pornhub"
 	"github.com/mario/myporn/internal/platform/xcom"
 	"github.com/mario/myporn/internal/platform/xhamster"
+	"github.com/mario/myporn/internal/proxying"
 	"github.com/mario/myporn/internal/secret"
+	"github.com/mario/myporn/internal/social"
+	"github.com/mario/myporn/internal/social/igram"
+	socialx "github.com/mario/myporn/internal/social/xcom"
 	"github.com/mario/myporn/internal/store"
 	"github.com/mario/myporn/internal/webui"
 )
@@ -76,13 +80,15 @@ func main() {
 	}
 	defer st.Close()
 
-	reg, err := buildRegistry(cfg, st, box, logger)
+	// 代理解析器只建一次：所有 HTTP 客户端都通过它取代理，于是「设置里改代理」即时生效。
+	px := proxying.New(st, cfg)
+	reg, err := buildRegistry(cfg, st, box, logger, px)
 	if err != nil {
 		logger.Error("初始化平台适配器失败", "err", err)
 		os.Exit(1)
 	}
 
-	avatars := buildAvatarRegistry(cfg, logger)
+	avatars := buildAvatarRegistry(cfg, logger, px)
 	profiles := buildProfileRegistry(reg, logger)
 
 	if *debugParse != "" {
@@ -106,10 +112,24 @@ func main() {
 		return
 	}
 
+	socialReg, err := buildSocialRegistry(cfg, st, box, logger, px)
+	if err != nil {
+		logger.Error("初始化社交适配器失败", "err", err)
+		os.Exit(1)
+	}
+
 	hub := events.NewHub()
 	// 图片缓存服务端一份：HTTP 代理与同步任务共用同一份磁盘缓存（同步时预热封面）。
-	images := imgcache.New(cfg.DataDir, cfg.PlatformProxyFor, cfg.FFmpegPath, logger)
-	runner := jobs.NewRunner(cfg, st, reg, avatars, profiles, hub, logger, images)
+	images := imgcache.New(cfg.DataDir, px.Func(), cfg.FFmpegPath, logger)
+	// 图片缓存上限：照片墙会持续往缓存里堆图（一条帖子就好几张），必须有个天花板。
+	images.SetMaxBytes(int64(cfg.ImgCacheMaxMB) << 20)
+	go func() {
+		if removed, freed := images.Sweep(); removed > 0 {
+			logger.Info("启动时图片缓存超限，已淘汰旧文件",
+				"files", removed, "freedMB", freed/(1<<20))
+		}
+	}()
+	runner := jobs.NewRunner(cfg, st, reg, socialReg, avatars, profiles, hub, logger, images)
 	runner.RegisterDefaults()
 
 	// ffmpeg 只在下载任务的封装步骤用到；缺失不影响浏览与同步。
@@ -126,6 +146,7 @@ func main() {
 
 	go runner.Start(ctx)
 	go runScheduler(ctx, st, runner, logger)
+	go runSocialScheduler(ctx, st, runner, logger)
 	// 启动后补一轮封面（历史数据里可能存着带签名、早就过期的封面地址）。
 	go func() {
 		if n := runner.RepairCovers(ctx); n > 0 {
@@ -133,7 +154,7 @@ func main() {
 		}
 	}()
 
-	srv := httpapi.New(cfg, st, reg, hub, runner, box, logger, webui.FS(), images)
+	srv := httpapi.New(cfg, st, reg, socialReg, hub, runner, box, logger, webui.FS(), images)
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Routes(),
@@ -155,8 +176,84 @@ func main() {
 	logger.Info("已停止")
 }
 
+// buildSocialRegistry 构造社交动态（M5）的适配器。
+//
+// 两个站出网各用各的（可分别挂代理）；Instagram 需要登录态，适配器每次请求现读设置，
+// 用户改完 Cookie 立刻生效，不用重启。
+func buildSocialRegistry(cfg *config.Config, st *store.Store, box *secret.Box, log *slog.Logger,
+	px *proxying.Resolver) (*social.Registry, error) {
+	reg := social.NewRegistry()
+
+	// 设置读取：Cookie 这类敏感值存的是密文，读不到再退回明文（兼容老数据）。
+	setting := func(key string) string {
+		if v, err := st.GetSecret(box, key); err == nil && v != "" {
+			return v
+		}
+		v, _ := st.GetSetting(key)
+		return v
+	}
+
+	xClient, err := platform.NewDynamicHTTPClient(proxyFunc(px, "x"), 25*time.Second)
+	if err != nil {
+		log.Warn("X 客户端初始化失败，改用直连", "err", err)
+		xClient = nil
+	}
+	// 注意：internal/platform/xcom 是「借 X 头像」的适配器，internal/social/xcom 是「抓帖子照片」的，
+	// 两个包同名，这里用 socialx 别名区分。
+	reg.Register(socialx.New(xClient))
+
+	igClient, err := platform.NewDynamicHTTPClient(proxyFunc(px, "instagram"), 25*time.Second)
+	if err != nil {
+		log.Warn("Instagram 客户端初始化失败，改用直连", "err", err)
+		igClient = nil
+	}
+	reg.Register(igram.New(igClient, setting))
+
+	return reg, nil
+}
+
+// runSocialScheduler 每 6 小时（可在设置里改）把一轮「全部博主同步」丢进队列。
+// 这里不按博主算「到期」：两个站的限流都是按 IP 的，集中成一轮串行抓取比错开更可控。
+func runSocialScheduler(ctx context.Context, st *store.Store, runner *jobs.Runner, log *slog.Logger) {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	var lastRun time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		hours := 6
+		if v, err := st.GetSetting("social_sync_hours"); err == nil {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+				hours = n
+			}
+		}
+		if time.Since(lastRun) < time.Duration(hours)*time.Hour {
+			continue
+		}
+		accounts, err := st.ListSocialAccounts(true)
+		if err != nil || len(accounts) == 0 {
+			lastRun = time.Now()
+			continue
+		}
+		if _, err := runner.EnqueueSocialSync(0, "auto"); err != nil {
+			log.Warn("投递社交动态同步失败", "err", err)
+			continue
+		}
+		lastRun = time.Now()
+	}
+}
+
+// proxyFunc 把代理解析器绑到某个平台，得到「每次发请求现问」的取值函数。
+func proxyFunc(px *proxying.Resolver, platformKey string) func() string {
+	return func() string { return px.For(platformKey) }
+}
+
 // buildRegistry 按配置构造各平台适配器。
-func buildRegistry(cfg *config.Config, st *store.Store, box *secret.Box, log *slog.Logger) (*platform.Registry, error) {
+func buildRegistry(cfg *config.Config, st *store.Store, box *secret.Box, log *slog.Logger,
+	px *proxying.Resolver) (*platform.Registry, error) {
 	reg := platform.NewRegistry()
 
 	cookie, err := st.GetSecret(box, "pornhub_cookie")
@@ -167,7 +264,7 @@ func buildRegistry(cfg *config.Config, st *store.Store, box *secret.Box, log *sl
 	if baseURL == "" {
 		baseURL = "https://cn.pornhub.com"
 	}
-	ph, err := pornhub.New(baseURL, cfg.PlatformProxyFor("pornhub"), cookie)
+	ph, err := pornhub.New(baseURL, proxyFunc(px, "pornhub"), cookie)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Pornhub 适配器: %w", err)
 	}
@@ -180,7 +277,7 @@ func buildRegistry(cfg *config.Config, st *store.Store, box *secret.Box, log *sl
 	if xhBase == "" {
 		xhBase = "https://xhamster.com"
 	}
-	xh, err := xhamster.New(xhBase, cfg.PlatformProxyFor("xhamster"))
+	xh, err := xhamster.New(xhBase, proxyFunc(px, "xhamster"))
 	if err != nil {
 		return nil, fmt.Errorf("初始化 xHamster 适配器: %w", err)
 	}
@@ -193,7 +290,7 @@ func buildRegistry(cfg *config.Config, st *store.Store, box *secret.Box, log *sl
 	if bgBase == "" {
 		bgBase = "https://beeg.com"
 	}
-	bg, err := beeg.New(bgBase, cfg.PlatformProxyFor("beeg"))
+	bg, err := beeg.New(bgBase, proxyFunc(px, "beeg"))
 	if err != nil {
 		return nil, fmt.Errorf("初始化 beeg 适配器: %w", err)
 	}
@@ -209,14 +306,14 @@ func buildRegistry(cfg *config.Config, st *store.Store, box *secret.Box, log *sl
 //  2. X —— 有些艺人在 beeg 上查得到人却没照片，但 X 上有主页。
 //
 // Pornhub 的头像藏在页面 DOM 里（改版就抓不到），所以不参与跨站补齐。
-func buildAvatarRegistry(cfg *config.Config, log *slog.Logger) *platform.AvatarRegistry {
+func buildAvatarRegistry(cfg *config.Config, log *slog.Logger, px *proxying.Resolver) *platform.AvatarRegistry {
 	avatars := platform.NewAvatarRegistry()
-	if client, err := platform.NewHTTPClient(cfg.PlatformProxyFor("beeg"), 15*time.Second); err != nil {
+	if client, err := platform.NewDynamicHTTPClient(proxyFunc(px, "beeg"), 15*time.Second); err != nil {
 		log.Warn("初始化 beeg 头像客户端失败，跳过这个来源", "err", err)
 	} else {
 		avatars.Register(beeg.NewAvatarProvider(client))
 	}
-	if client, err := platform.NewHTTPClient(cfg.PlatformProxyFor("x"), 15*time.Second); err != nil {
+	if client, err := platform.NewDynamicHTTPClient(proxyFunc(px, "x"), 15*time.Second); err != nil {
 		log.Warn("初始化 X 头像客户端失败，跳过这个来源", "err", err)
 	} else {
 		avatars.Register(xcom.NewAvatarProvider(client))

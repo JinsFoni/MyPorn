@@ -31,6 +31,11 @@
     /** 同时保留在 DOM 里的最多页数 */
     maxLoadedPages?: number;
     gridClass?: string;
+    /**
+     * 把当前已加载的条目按顺序报给父组件。
+     * 灯箱要在「整条流」里前后翻，而条目列表是本组件内部状态，父组件拿不到。
+     */
+    onItems?: (items: T[]) => void;
   }
 
   let {
@@ -42,6 +47,7 @@
     reloadKey = 0,
     maxLoadedPages = 4,
     gridClass = 'grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5',
+    onItems,
   }: Props = $props();
 
   let pages = $state<Page<T>[]>([]);
@@ -190,6 +196,11 @@
     if (key === seenReloadKey) return;
     seenReloadKey = key;
     void loadFirst();
+  });
+
+  $effect(() => {
+    if (!onItems) return;
+    onItems(pages.filter((p) => p.loaded).flatMap((p) => p.items));
   });
 
   const isEmpty = $derived(!loading && errorMessage === '' && pages.length > 0 && pages.every((p) => p.count === 0));

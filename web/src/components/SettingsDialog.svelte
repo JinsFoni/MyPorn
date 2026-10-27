@@ -10,7 +10,7 @@
   const MOCK: Settings = {
     syncIntervalHours: 6,
     globalProxy: '',
-    platformProxy: { pornhub: 'socks5://127.0.0.1:1080', xhamster: '', beeg: '' },
+    platformProxy: { pornhub: 'socks5://127.0.0.1:1080', xhamster: '', beeg: '', instagram: '', x: '' },
     namingTemplate: '{标题}',
     downloadConcurrency: 2,
     downloadRateKb: 0,
@@ -19,6 +19,7 @@
     libraryRoot: './media',
     ffmpegAvailable: true,
     openlist: { baseUrl: 'http://192.168.0.108:5244', root: '/123云盘/资源目录/MyPorn', hasToken: true },
+    social: { syncHours: 6, hasInstagramCookie: false },
   };
 
   /** 侧边栏分类：左侧栏在弹窗里切换，右侧只渲染当前这一块 */
@@ -27,12 +28,13 @@
     { id: 'network', label: '网络与代理', hint: '全局与按平台代理' },
     { id: 'upload', label: '上传', hint: 'OpenList 上传目标' },
     { id: 'download', label: '下载', hint: '并发、限速与自动下载' },
+    { id: 'social', label: '动态', hint: '博主抓取频率与 Instagram 登录态' },
     { id: 'libraries', label: '本地库', hint: '落盘目录与空间' },
     { id: 'account', label: '账号', hint: '会话与退出' },
   ];
 
   /** 这四个分类共用一个表单，保存按钮在页脚（用 form 属性挂回来） */
-  const FORM_PANES: readonly SettingsPane[] = ['sync', 'network', 'upload', 'download'];
+  const FORM_PANES: readonly SettingsPane[] = ['sync', 'network', 'upload', 'download', 'social'];
 
   let settings = $state<Settings | null>(null);
   let loading = $state(true);
@@ -47,6 +49,8 @@
   let pornhubProxy = $state('');
   let xhamsterProxy = $state('');
   let beegProxy = $state('');
+  let instagramProxy = $state('');
+  let xProxy = $state('');
   let namingTemplate = $state('{标题}');
   let downloadConcurrency = $state(2);
   let downloadRateKb = $state(0);
@@ -54,6 +58,8 @@
   let openlistBaseUrl = $state('');
   let openlistRoot = $state('');
   let openlistToken = $state('');
+  let socialSyncHours = $state(6);
+  let instagramCookie = $state('');
 
   const current = $derived(PANES.find((p) => p.id === ui.settingsPane) ?? PANES[0]);
   const isFormPane = $derived(FORM_PANES.includes(ui.settingsPane));
@@ -65,6 +71,8 @@
     pornhubProxy = value.platformProxy.pornhub;
     xhamsterProxy = value.platformProxy.xhamster;
     beegProxy = value.platformProxy.beeg;
+    instagramProxy = value.platformProxy.instagram ?? '';
+    xProxy = value.platformProxy.x ?? '';
     namingTemplate = value.namingTemplate;
     downloadConcurrency = value.downloadConcurrency;
     downloadRateKb = value.downloadRateKb;
@@ -72,6 +80,8 @@
     openlistBaseUrl = value.openlist.baseUrl;
     openlistRoot = value.openlist.root;
     openlistToken = '';
+    socialSyncHours = value.social.syncHours;
+    instagramCookie = '';
   }
 
   async function load(): Promise<void> {
@@ -99,7 +109,13 @@
     const patch: SettingsPatch = {
       syncIntervalHours,
       globalProxy,
-      platformProxy: { pornhub: pornhubProxy, xhamster: xhamsterProxy, beeg: beegProxy },
+      platformProxy: {
+        pornhub: pornhubProxy,
+        xhamster: xhamsterProxy,
+        beeg: beegProxy,
+        instagram: instagramProxy,
+        x: xProxy,
+      },
       namingTemplate,
       downloadConcurrency,
       downloadRateKb,
@@ -108,6 +124,11 @@
     };
     const token = openlistToken.trim();
     if (token.length > 0) patch.openlist = { ...patch.openlist, token };
+    patch.social = { syncHours: socialSyncHours };
+    // Cookie 只在用户真的粘了新内容时才提交：留空 = 不动（服务端把它当"清除"，
+    // 所以这里必须"没填就不带这个字段"）。
+    const cookie = instagramCookie.trim();
+    if (cookie.length > 0) patch.social = { ...patch.social, instagramCookie: cookie };
     try {
       await api.updateSettings(patch);
       // 重新拉一次：token 永不回显，hasToken 等状态以服务端为准
@@ -187,6 +208,11 @@
       <path d="M12 4v10" />
       <path d="m8 10.5 4 4 4-4" />
       <path d="M4.5 17.5h15" />
+    {:else if id === 'social'}
+      <rect x="3" y="3.5" width="7.5" height="9" rx="2" />
+      <rect x="13.5" y="3.5" width="7.5" height="6" rx="2" />
+      <rect x="13.5" y="12.5" width="7.5" height="8" rx="2" />
+      <rect x="3" y="15.5" width="7.5" height="5" rx="2" />
     {:else if id === 'libraries'}
       <path d="M3.5 7.6a2 2 0 0 1 2-2h3.1l2 2.4h7.9a2 2 0 0 1 2 2v8.4a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2z" />
     {:else}
@@ -413,6 +439,35 @@
                           disabled={saving}
                         />
                       </div>
+                      <div>
+                        <label for="instagram-proxy" class="label-meta mb-1.5">Instagram 专用代理</label>
+                        <input
+                          id="instagram-proxy"
+                          class="field"
+                          type="text"
+                          placeholder="留空则跟随全局代理"
+                          spellcheck="false"
+                          autocomplete="off"
+                          bind:value={instagramProxy}
+                          disabled={saving}
+                        />
+                        <p class="mt-1 text-meta text-dim">
+                          抓动态时的出口 IP 直接决定 IG 会不会拦你。改完保存即刻生效，不用重启。
+                        </p>
+                      </div>
+                      <div>
+                        <label for="x-proxy" class="label-meta mb-1.5">X 专用代理</label>
+                        <input
+                          id="x-proxy"
+                          class="field"
+                          type="text"
+                          placeholder="留空则跟随全局代理"
+                          spellcheck="false"
+                          autocomplete="off"
+                          bind:value={xProxy}
+                          disabled={saving}
+                        />
+                      </div>
                     </div>
                   </section>
                 {:else if ui.settingsPane === 'upload'}
@@ -460,7 +515,7 @@
                       </div>
                     </div>
                   </section>
-                {:else}
+                {:else if ui.settingsPane === 'download'}
                   <section>
                     <p class="text-meta text-dim">并发数改完立即生效；限速只作用于单部影片的分片下载。</p>
                     <div class="mt-3 grid gap-3 sm:grid-cols-2">
@@ -515,6 +570,62 @@
                         ? 'ffmpeg 可用：下载完成后以 -c copy 封装为 mp4，不转码。'
                         : '服务端没有可用的 ffmpeg，下载会在封装步骤失败，请检查镜像或 FFMPEG_PATH。'}
                     </p>
+                  </section>
+                {:else}
+                  <section>
+                    <p class="text-meta text-dim">
+                      两个站的抓取都是按 IP 限流的，所以同一时刻只跑一个同步任务，撞到限流会直接停下来等冷却。
+                    </p>
+                    <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label for="social-hours" class="label-meta mb-1.5">抓取间隔（小时）</label>
+                        <input
+                          id="social-hours"
+                          class="field tabular-nums"
+                          type="number"
+                          min="1"
+                          max="48"
+                          step="1"
+                          bind:value={socialSyncHours}
+                          disabled={saving}
+                        />
+                        <p class="mt-1.5 text-meta text-dim">每轮抓一次；X 免登录一次只有 20 帖，靠多轮慢慢累积。</p>
+                      </div>
+                      <div>
+                        <p class="label-meta mb-1.5">X</p>
+                        <p class="rounded-xl bg-ink/35 px-3 py-2 text-meta text-dim">
+                          不需要登录。免费配额是每 15 分钟 30 次请求（按 IP 计），一次抓取只用 1–2 次。
+                        </p>
+                      </div>
+                    </div>
+
+                    <div class="mt-5">
+                      <div class="flex items-center justify-between">
+                        <label for="ig-cookie" class="label-meta">Instagram Cookie</label>
+                        <span class="text-meta {settings.social.hasInstagramCookie ? 'text-sage' : 'text-dim'}">
+                          {settings.social.hasInstagramCookie ? '已配置' : '未配置'}
+                        </span>
+                      </div>
+                      <p class="mt-1 text-meta text-dim">
+                        Instagram 已经不能免登录抓取，必须贴一段登录态。两种都认：
+                        <span class="text-muted">① 浏览器扩展导出的 cookies.txt</span>（Netscape 格式，
+                        <code class="font-mono"># Netscape HTTP Cookie File</code> 那种，整份粘进来即可，
+                        别的站的 Cookie 会被丢掉）；
+                        <span class="text-muted">② 开发者工具 → Network → 任选一个请求</span>，
+                        把请求头里的 Cookie 整段复制过来。Cookie 加密存库，保存后不再回显。
+                      </p>
+                      <textarea
+                        id="ig-cookie"
+                        class="field mt-2 h-32 resize-y font-mono text-meta"
+                        placeholder={settings.social.hasInstagramCookie
+                          ? '已保存 · 留空表示不修改'
+                          : '# Netscape HTTP Cookie File —— 整份 cookies.txt 粘进来，或 sessionid=…; csrftoken=…'}
+                        spellcheck="false"
+                        autocomplete="off"
+                        bind:value={instagramCookie}
+                        disabled={saving}
+                      ></textarea>
+                    </div>
                   </section>
                 {/if}
 

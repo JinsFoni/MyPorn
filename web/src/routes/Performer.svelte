@@ -290,6 +290,54 @@
     {/if}
   </section>
 
+  {#if performer.socialAccounts?.length}
+    <!-- 社交动态（M5 §8.5）：这位艺人的 X / Instagram 最近 12 张，点任意一张进照片墙的灯箱。
+         只给 12 张、不给总数——这里的作用是「提示艺人页和动态页已经打通」，
+         真要看全部就去动态页（带 account 参数，进去就是过滤好的）。 -->
+    <section class="mt-6">
+      <div class="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+        <h3 class="text-title font-medium text-fg">社交动态</h3>
+        <div class="ml-auto flex flex-wrap items-center gap-1.5">
+          {#each performer.socialAccounts as account (account.id)}
+            <a
+              data-link
+              href={`/moments?account=${String(account.id)}`}
+              class="chip h-7 px-2.5 text-meta text-muted transition-colors hover:bg-raise hover:text-fg"
+              title={`${account.platform === 'x' ? 'X' : 'Instagram'} · ${String(account.photoCount)} 张照片`}
+            >
+              <span class="truncate">@{account.handle}</span>
+              <span class="tabular-nums text-dim">{formatCount(account.photoCount)}</span>
+            </a>
+          {/each}
+        </div>
+      </div>
+
+      {#if performer.socialPhotos?.length}
+        <!-- 12 张、6 列 → 正好两行；再往上加列格子就小到看不清了 -->
+        <div class="grid grid-cols-4 gap-1.5 sm:grid-cols-6">
+          {#each performer.socialPhotos as photo (photo.id)}
+            <a
+              data-link
+              href={`/moments?account=${String(photo.accountId)}`}
+              class="block overflow-hidden rounded-lg bg-panel transition-opacity hover:opacity-90"
+              title={photo.caption ? photo.caption.slice(0, 120) : `@${photo.handle}`}
+            >
+              <img
+                src={imageUrl(photo.thumbUrl, 240) ?? ''}
+                alt=""
+                class="aspect-square h-full w-full object-cover"
+                loading="lazy"
+                decoding="async"
+              />
+            </a>
+          {/each}
+        </div>
+      {:else}
+        <p class="text-meta text-dim">还没抓到照片，抓取任务跑完这里就有图。</p>
+      {/if}
+    </section>
+  {/if}
+
   <section class="mt-6">
     <h3 class="mb-3 text-title font-medium text-fg">影片</h3>
     <InfiniteList load={loadVideos} keyOf={(v: Video) => v.id} reloadKey={listKey}>

@@ -205,6 +205,17 @@
 | M2 ✅ | 本地库 + 下载 + Emby 元数据 + 队列 UI + PWA | 下载后目录被 Emby 正确刮削出海报/标题/艺人；手机加到主屏可用 |
 | M3 | OpenList 上传 + strm + 刷新（含 `/d/` 直链 spike） | 上传后 Emby 用 strm 直接播放远端文件并可拖动 |
 | M4 🚧 | xHamster / beeg adapter（已完成）、新片通知、Emby API 自动扫库（本轮不做） | 三站统一体验 |
+| M5 ✅ | 社交动态：订阅 X / Instagram 博主，抓帖子里的照片做照片墙，可一键存进本地库，并与艺人打通（详见 `docs/M5-SOCIAL.md`） | 粘一个博主链接 → 回填 100 帖 → 照片墙出图 → 一键存进本地库 |
+
+M5 实测结论（2026-10）：X 走 `syndication.twitter.com` 免登录（`@NASA` 一次 20 帖 / 14 张照片入库，
+照片墙出图、灯箱翻页、一键存进本地库落盘 `{库}/X/NASA/照片/{日期}_{帖 id}/01.jpg` 全部走通）；
+Instagram 只能带 Cookie（无 Cookie 时探测直接 409 `needs_auth` 并指到设置页），
+`web_profile_info` + `feed/user` 两段解析与 carousel 拆图已用 fixture 单测覆盖。
+**一个坑必须记住**：X 对 HTTP/1.1 一律回 429，抓取客户端必须开 HTTP/2（`ForceAttemptHTTP2`）。
+「与艺人打通」按 URL 精确比对，艺人页多一块「社交动态」（最近 12 张，点图跳带筛选的照片墙）。
+Instagram 的抓取链路（首屏 / 翻页 / carousel）**没有在真实账号上跑过**——手上没有可用 Cookie，
+只有 fixture 单测；异常路径（无 Cookie → 409 `needs_auth` + 指到设置页）已实测。
+未做：X Cookie / GraphQL 升级（免登录 20 帖上限就先这样，靠每 6 小时一轮慢慢攒）。
 
 M4 实测结论（2026-10，本轮只做两个 adapter）：xHamster（`window.initials` JSON 解析 +
 播放地址密文解密 + AV1/H.264 双清单合并）与 beeg（`store.externulls.com` 公开接口 +

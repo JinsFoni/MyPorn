@@ -36,12 +36,12 @@ type Adapter struct {
 	lim    *rate.Limiter
 }
 
-// New 创建适配器。proxyURL 为空表示直连；cookie 可为空。
-func New(baseURL, proxyURL, cookie string) (*Adapter, error) {
+// New 创建适配器。proxyFor 返回空串表示直连（每次发请求现问，改设置即时生效）；cookie 可为空。
+func New(baseURL string, proxyFor func() string, cookie string) (*Adapter, error) {
 	if baseURL == "" {
 		baseURL = "https://cn.pornhub.com"
 	}
-	hc, err := platform.NewHTTPClient(proxyURL, 30*time.Second)
+	hc, err := platform.NewDynamicHTTPClient(proxyFor, 30*time.Second)
 	if err != nil {
 		return nil, err
 	}

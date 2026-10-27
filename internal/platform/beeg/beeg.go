@@ -64,12 +64,12 @@ type Adapter struct {
 	lim      *rate.Limiter
 }
 
-// New 创建适配器。baseURL 是站点根地址（默认 https://beeg.com），proxyURL 为空表示直连。
-func New(baseURL, proxyURL string) (*Adapter, error) {
+// New 创建适配器。baseURL 是站点根地址（默认 https://beeg.com），proxyFor 返回空串表示直连（每次发请求现问，改设置即时生效）。
+func New(baseURL string, proxyFor func() string) (*Adapter, error) {
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = defaultBase
 	}
-	hc, err := platform.NewHTTPClient(proxyURL, 30*time.Second)
+	hc, err := platform.NewDynamicHTTPClient(proxyFor, 30*time.Second)
 	if err != nil {
 		return nil, err
 	}

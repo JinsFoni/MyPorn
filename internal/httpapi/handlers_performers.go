@@ -12,6 +12,7 @@ import (
 
 	"github.com/mario/myporn/internal/model"
 	"github.com/mario/myporn/internal/platform"
+	"github.com/mario/myporn/internal/store"
 )
 
 // avatarHealTimeout 是后台补头像的超时，够慢也就放弃了，别把 goroutine 挂住。
@@ -37,7 +38,7 @@ var proxyRequired = map[string]bool{"pornhub": true}
 func (s *Server) handlePlatforms(w http.ResponseWriter, _ *http.Request) {
 	out := []map[string]any{}
 	for _, a := range s.reg.All() {
-		proxy := s.cfg.PlatformProxyFor(a.Key())
+		proxy := s.px.For(a.Key())
 		status := "ok"
 		if proxy == "" && proxyRequired[a.Key()] {
 			status = "no_proxy"
@@ -98,6 +99,22 @@ func (s *Server) handleGetPerformer(w http.ResponseWriter, r *http.Request) {
 	// 本地收录数：平台资料页没有「影片总数」，艺人页显示的就是这个。
 	if local, err := s.st.LocalVideoCount(p.ID); err == nil {
 		dto["localVideoCount"] = local
+	}
+	// 社交动态区块（M5 §8.5）：挂在这个艺人名下的博主 + 最近 12 张照片。
+	// 一起塞进同一个响应，页面上就不用再串第二个请求。
+	if accounts, err := s.st.ListSocialAccountsByPerformer(p.ID); err == nil && len(accounts) > 0 {
+		list := make([]momentAccountDTO, 0, len(accounts))
+		for _, a := range accounts {
+			list = append(list, s.accountDTO(a))
+		}
+		dto["socialAccounts"] = list
+		if photos, _, err := s.st.ListMoments(store.MomentsQuery{PerformerID: p.ID, Limit: 12}); err == nil {
+			strip := make([]momentPhotoDTO, 0, len(photos))
+			for _, row := range photos {
+				strip = append(strip, s.photoDTO(row))
+			}
+			dto["socialPhotos"] = strip
+		}
 	}
 	writeJSON(w, http.StatusOK, dto)
 }

@@ -54,6 +54,9 @@ type Service struct {
 
 	mu      sync.Mutex
 	clients map[string]*http.Client
+
+	// maxBytes 是磁盘缓存上限（0 = 不限），见 evict.go。
+	maxBytes int64
 }
 
 // New 构造图片缓存。proxyFor 给出各平台出网用的代理配置（可为 nil）；ffmpeg 为可执行文件路径。
@@ -70,6 +73,7 @@ func (s *Service) Bytes(ctx context.Context, platformKey, raw, width string) ([]
 	}
 	path := s.path(platformKey, upstream)
 	if data, ok := readCache(path); ok {
+		touch(path)
 		return data, true
 	}
 	data, ok := s.fetch(ctx, upstream, platformKey, passthroughAccept)
@@ -77,6 +81,7 @@ func (s *Service) Bytes(ctx context.Context, platformKey, raw, width string) ([]
 		return nil, false
 	}
 	writeCache(path, data)
+	s.maybeSweep()
 	return data, true
 }
 
@@ -90,12 +95,14 @@ func (s *Service) Small(ctx context.Context, platformKey, raw string, smallWidth
 	}
 	smallPath := s.path(platformKey, fmt.Sprintf("%s|s=%d|v=%d", upstream, smallWidth, smallPipeline))
 	if data, ok := readCache(smallPath); ok {
+		touch(smallPath)
 		return data, nil
 	}
 	// 手上有原图就先在本地缩，省一次上游请求。
 	if src, ok := readCache(s.path(platformKey, upstream)); ok {
 		if small, err := s.blurAny(ctx, src, smallWidth); err == nil {
 			writeCache(smallPath, small)
+			s.maybeSweep()
 			return small, nil
 		}
 		// 解不出来——缓存里的这份多半是早先按 `Accept: image/avif` 抓下来的 AVIF，
@@ -110,6 +117,7 @@ func (s *Service) Small(ctx context.Context, platformKey, raw string, smallWidth
 		return nil, err
 	}
 	writeCache(smallPath, small)
+	s.maybeSweep()
 	return small, nil
 }
 
@@ -218,6 +226,9 @@ func writeCache(path string, data []byte) {
 var refererOverrides = map[string]string{
 	"externulls.com": "https://beeg.com/",
 	"twimg.com":      "https://x.com/",
+	// Instagram 的图都在 CDN 上，防盗链认的是站点来源（M5 动态照片墙）。
+	"cdninstagram.com": "https://www.instagram.com/",
+	"fbcdn.net":        "https://www.instagram.com/",
 }
 
 // withImageWidth 把前端的 w= 翻译成图床的服务端缩放参数。

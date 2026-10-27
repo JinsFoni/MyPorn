@@ -47,7 +47,7 @@ func TestLiveUploaders(t *testing.T) {
 	}
 	rows.Close()
 
-	a, _ := New("https://cn.pornhub.com", "", "")
+	a, _ := New("https://cn.pornhub.com", noProxy, "")
 	sem := make(chan struct{}, 6)
 	var wg sync.WaitGroup
 	var mu sync.Mutex

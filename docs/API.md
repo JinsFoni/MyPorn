@@ -190,7 +190,8 @@ type Video = {
 | `not_found` | 404 | 资源不存在 |
 | `unsupported_platform` | 400 | URL 不属于已支持的平台 |
 | `resolve_failed` | 502 | 上游解析/抓取失败 |
-| `rate_limited` | 429 | 上游限流 |
+| `rate_limited` | 429 | 上游限流（带 `details.resetAt`，等到点就好） |
+| `blocked` | 429 | 上游风控拦截（IG 的 429 + HTML 拦截页；**不带** `resetAt`，等没用，要换 IP / 换 Cookie） |
 | `internal` | 500 | 服务端错误 |
 
 ---
@@ -374,3 +375,185 @@ type Video = {
 
 写操作沿用已有接口，不另开：`PATCH /api/subscriptions/{id}`（启用/停用）、
 `POST /api/subscriptions/{id}/sync`（立即同步）、`DELETE /api/subscriptions/{id}`（取消关注）。
+
+## 附：M5 新增接口（动态 / 照片墙）
+
+全部挂在 `requireSession` 之后，与其它接口一样需要会话 Cookie。
+错误码新增：`needs_auth`（409，上游要登录态）、`blocked`（429，上游返回风控拦截页而不是限流 JSON，
+**不带** `resetAt`——等到点也不会好，提示换出口 IP / 重新导出 Cookie）、
+`rate_limited`（429，`error.details.resetAt` 给出冷却结束时刻，
+前端据此显示「HH:MM 之后自动恢复」）、
+`stale_parser`（502，页面结构变了，需要更新解析）、`not_found`（404，账号不存在或已注销）。
+
+### B1. `GET /api/moments`
+
+照片流（照片墙），keyset 分页。
+
+| 参数 | 说明 |
+|---|---|
+| `cursor` | 上一页返回的 `nextCursor`，首页不传 |
+| `limit` | 默认 36，上限 60 |
+| `accountId` | 只看某位博主 |
+| `performerId` | 只看某个艺人名下的全部博主（艺人页「社交动态」用） |
+| `platform` | `x` / `instagram` |
+
+```json
+{
+  "items": [{
+    "id": 12, "postId": "2113776971603689874", "platform": "x",
+    "handle": "nasa", "displayName": "NASA", "avatarUrl": "https://pbs.twimg.com/…",
+    "url": "https://pbs.twimg.com/media/…?name=orig",
+    "thumbUrl": "/api/img?u=…&w=640",
+    "width": 1200, "height": 800, "seq": 1,
+    "caption": "…", "postUrl": "https://x.com/nasa/status/2113776971603689874",
+    "postedAt": "2026-10-23T23:05:00Z",
+    "saved": false, "performerId": 7
+  }],
+  "nextCursor": "MjAyNi0xMC0yM3wyMTEzNzc2OTcxNjAzNjg5ODc0fDE"
+}
+```
+
+排序固定为 `posted_at DESC, post_id DESC, seq ASC`：同一条帖子的几张图永远相邻且按原始顺序，
+灯箱「下一张」因此天然是「先把这个帖子看完再进下一条」。
+
+### B2. `GET /api/moments/accounts`
+
+```json
+{
+  "items": [{
+    "id": 3, "platform": "x", "handle": "nasa", "displayName": "NASA",
+    "avatarUrl": "…", "profileUrl": "https://x.com/nasa",
+    "performerId": 0, "performerName": "",
+    "enabled": true, "postCount": 20, "photoCount": 34,
+    "backfillDone": false, "lastSyncedAt": "2026-10-27T18:00:00Z",
+    "lastError": "", "createdAt": "2026-10-27T17:00:00Z"
+  }],
+  "platforms": [
+    { "key": "x", "name": "X", "needsCookie": false, "hasCookie": true, "hint": "免登录可用，但一次只能取到最近 20 帖" },
+    { "key": "instagram", "name": "Instagram", "needsCookie": true, "hasCookie": false, "hint": "必须先在设置 → 动态里粘贴 Cookie" }
+  ],
+  "unseen": 12
+}
+```
+
+`unseen` 是「上次看动态之后新入库的照片数」，侧边栏红点用它。
+
+### B3. `POST /api/moments/resolve`
+
+`{ "url": "https://x.com/nasa" }` → 只探测、不落库（预览用）。
+返回 `platform` / `platformName` / `handle` / `displayName` / `avatarUrl` / `postCount` /
+`existingId`（已订阅过就是它的 id）/ `warning`（例如 X 免登录只能取 20 帖、IG 没配 Cookie）/
+`performerId` + `performerName`（这个链接已经躺在某个艺人的社交链接里时给，用来在添加前
+提示「会自动关联到艺人 X」）。
+
+未配 Cookie 时探测 Instagram 直接 409 `needs_auth`，消息里带「去哪配」：
+
+```json
+{ "error": { "code": "needs_auth", "message": "Instagram 需要登录态：请在设置 → 动态里粘贴 sessionid" } }
+```
+
+前端拿到 `needs_auth` 会在同一处渲染「去设置 → 动态里粘贴 Instagram Cookie」的链接。
+
+### B4. `POST /api/moments/accounts`
+
+`{ "url": "…" }` → 认平台、抓一次资料、落库，并投递一次 `social_sync`（`mode=full`：从头回填）。
+返回 201 + 账号对象。同一个账号重复提交不会新增行，只重投回填。
+
+### B5. `PATCH /api/moments/accounts/{id}`
+
+`{ "enabled": true }` / `{ "performerId": 7 }` / `{ "performerId": 0 }`（解除与艺人的关联）/
+`{ "mode": "full" }`（清回填断点，下次从头再来）。
+
+### B6. `DELETE /api/moments/accounts/{id}` → 204
+
+级联删帖子与照片记录；**已经存进本地库的文件不删**。
+
+### B7. `POST /api/moments/accounts/{id}/sync`
+
+`{ "mode": "auto" | "full" }`，默认 `auto`（增量：遇到已入库的帖子就停）。
+返回 `{ "queued": true }`；该账号已有在跑/排队中的同步时返回 `queued: false`。
+
+### B8. `POST /api/moments/seen`
+
+标记「动态已看到此刻」。照片墙打开时调一次。
+
+### B9. `POST /api/moments/photos/save`
+
+`{ "photoIds": [12, 13], "libraryId": 1 }`（`photoIds` 上限 200，省略 `libraryId` 用默认库）→
+202 Accepted，入队 `social_save`。落盘路径：
+
+```
+{库根}/{平台显示名}/{博主名}/照片/{YYYY-MM-DD}_{post_id 后 8 位}/{序号两位}.jpg
+```
+
+同一个帖子目录里会写一份 `post.json`（正文、原帖地址、发布时间、图片清单），不写 `.nfo`——
+动态是「看和存」，不进影片库的刮削口径。
+
+### B10. 艺人详情里多出来的两段
+
+`GET /api/performers/{id}` 在粉丝页/艺人页上用，M5 之后**只有该艺人名下挂着博主时**才多两个字段：
+
+```json
+{
+  "socialAccounts": [ { "id": 3, "platform": "x", "handle": "nasa", "photoCount": 34, … } ],
+  "socialPhotos":   [ { "id": 12, "thumbUrl": "…", "accountId": 3, "seq": 1, … } ]
+}
+```
+
+`socialPhotos` 固定给最近 12 张（`hidden=0`），点任意一张跳到 `/moments?account={accountId}`。
+没有关联时两个字段都不出现，老前端不受影响。
+
+### B11. `GET /api/manage/moments`
+
+管理页快照：`items`（与 B2 同构）+ `stats`{accounts, posts, photos, errors} + `hasInstagramCookie`。
+
+### B12. 设置扩展
+
+`GET/PUT /api/settings` 的 `social` 字段：
+
+```json
+{ "syncHours": 6, "hasInstagramCookie": true, "instagramCookie": "（只写，永不回显）" }
+```
+
+`syncHours` 夹在 1–48；`instagramCookie` 只写：不传 = 不动，传空串 = 清除。
+
+`platformProxy` 里的 `instagram` / `x` 与影片平台那三项同一套机制：
+**设置 > 环境变量**，平台专用 > 全局；每个请求发出去之前才取值，所以**保存即生效、不用重启**
+（`internal/proxying`，`Transport.Proxy` 直接接到设置表上）。
+
+`instagramCookie` 收三种写法（服务端统一归一化成 JSON 落库，加密保存）：
+
+1. 浏览器扩展导出的 **Netscape cookies.txt**（`# Netscape HTTP Cookie File`，每行 7 个制表符字段，
+   `#HttpOnly_` 前缀照收；非 `instagram.com` 的行直接丢掉）；
+2. 整段 Cookie 头 `a=1; b=2`；
+3. 归一化后的 JSON（内部存的形式，也认）。
+
+只要里面没有 `sessionid` 就按「未配置」处理并返回 409 `needs_auth`。除三项关键 Cookie 外，
+其余（`mid` / `ig_did` / `datr` 等）会原样带上——IG 的接口少了它们照样会 401 或回空列表。
+
+### B13. SSE 新增事件
+
+| 事件 | 载荷 | 用途 |
+|---|---|---|
+| `photo.new` | `{photoId, accountId, platform, handle}` | 照片墙增量刷新 + 侧边栏未读 +1 |
+| `social.progress` | `{accountId, handle, page, newPhotos, backfilling}` | 抓取过程中的进度（一次同步可能连着好几页） |
+
+### B14. 任务类型
+
+| `type` | 载荷 | 并发 |
+|---|---|---|
+| `social_sync` | `{accountId, mode}`（`accountId=0` 表示全部启用的博主） | 1（限流按 IP 算，并行只会更快撞 429） |
+| `social_save` | `{photoIds, libraryId}` | 跟下载并发数一致 |
+
+定时器：每 10 分钟醒一次，距上次抓取超过 `social.syncHours`（默认 6）就投递一轮 `social_sync`。
+
+### B15. 手动清除冷却
+
+```
+POST /api/moments/cooldown
+{ "platform": "instagram" }        // 省略或空串 = 清所有平台
+→ 200 { "cleared": ["instagram"] }
+```
+
+冷却时间是「上一次撞墙时按 429 猜的」，用户换了 Cookie / 换了出口 IP 之后那个时间已经没有意义。
+这个接口只清本地计时器，不碰上游任何状态；界面上对应「换过 Cookie 了？清除冷却并重试」。

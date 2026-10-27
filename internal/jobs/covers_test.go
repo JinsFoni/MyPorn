@@ -67,7 +67,7 @@ func newCoverFixture(t *testing.T, ad platform.Adapter) (*Runner, *store.Store, 
 	reg := platform.NewRegistry()
 	reg.Register(ad)
 	cfg := &config.Config{}
-	return NewRunner(cfg, st, reg, nil, nil, events.NewHub(), log, img), st, img
+	return NewRunner(cfg, st, reg, nil, nil, nil, events.NewHub(), log, img), st, img
 }
 
 func addVideo(t *testing.T, st *store.Store, key, thumb string) int64 {

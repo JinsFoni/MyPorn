@@ -156,3 +156,21 @@ make backend           # 先编译
 | 艺人头像 | 资料页的 DOM 头像**解析不出来**（ld+json 里没有 image），所以借资料时头像字段通常是空的，头像继续走 §11 的跨站借图 | 不改也不影响 |
 | 简介质量 | 不少老艺人的简介只是一串 OnlyFans 地址（Riley Reid = `Onlyfans.com/rileyreidx3`），比本网站的简介还少，所以「纯网址简介」不覆盖本地 | 艺人页简介变成一行网址 → 清理规则失效 |
 
+
+## 五、社交动态（M5，`internal/social/`）
+
+| 点 | 现状（2026-10 实测） | 改版后怎么发现 |
+|---|---|---|
+| X 抓取入口 | `syndication.twitter.com/srv/timeline-profile/screen-name/<handle>`，数据在 `__NEXT_DATA__.props.pageProps.timeline.entries[]` | 502 `stale_parser`「页面结构变了」，或 `hasResults:false` |
+| X 协议版本 | **必须 HTTP/2**：同一地址 HTTP/1.1 一律 429（还带假的 `x-rate-limit-reset`），HTTP/2 才 200。`platform.NewHTTPClient` 里 `ForceAttemptHTTP2: true` 是硬要求 | 突然持续 429 而 curl 正常 → 先查协议版本 |
+| X 条数 | 固定 20 条、**没有游标**，翻页无从谈起；`?name=orig` 拿原图 | 想拿更多只能上 Cookie/GraphQL（本轮没做） |
+| X 限流 | 约 30 次/15 分钟（按 IP）。`remaining:0` 但 `reset` 已过期是缓存的旧头，不能当限流 | 冷却到点仍 429 → 可能配额被同 IP 的其它工具占满 |
+| X 转推 | 原帖在 `retweeted_status` 里，按原帖 id 去重 | 同一张照片入库两次 → 去重键失效 |
+| IG 免登录 | **已完全关闭**（`401 require_login` / `429 spam`），必须 Cookie（`sessionid` / `csrftoken` / `ds_user_id`） | 探测报 409 `needs_auth` 属正常 |
+| IG 429 二义 | `api/v1/users/web_profile_info` 对**有效 Cookie**回 429 + HTML 拦截页（`<title>Page Not Found</title>`，含 `logged-in` class）；对无 Cookie 请求回 JSON 401 `require_login`。**2026-10-28 实测**：换 UA / Origin / Sec-Fetch / priority 全一样，说明是会话或 IP 被标记 | 若某天拦截页消失、又能拿到 JSON，说明 IG 放松了该 IP；届时 `blocked` 分支自然不再触发，不必改代码 |
+| IG 出口 IP | 抓 IG 建议固定住宅代理：设置 → 网络与代理 → Instagram 专用代理（保存即生效，`proxy_instagram`），环境变量 `PLATFORM_PROXY_INSTAGRAM` / `GLOBAL_PROXY` 只作兜底。机房 IP 容易被直接拦 | 配了代理仍报 `blocked` → 该代理 IP 也脏，换一个（可在同一处直接改，不用重启） |
+| IG Cookie 写法 | 三种都认：Netscape cookies.txt（`# Netscape HTTP Cookie File`，7 个制表符字段，`#HttpOnly_` 前缀）、整段 Cookie 头、JSON。非 `instagram.com` 的行丢掉 | 贴上整份导出仍报「没找到 sessionid」→ 导出文件的列数/分隔符变了（应把原始行贴出来核对） |
+| IG 首屏 | `web_profile_info`（`?__a=1&__d=dis` 那套已废） | 502 `stale_parser` |
+| IG 翻页 | `feed/user/<id>/?max_id=`，`more_available` 决定是否继续 | 只抓到第一页 |
+| IG 图片地址 | 带签名、**几小时内过期**。缓存过的照常显示，没缓存的过期就 404（走占位图） | 老照片成片变灰 → 正常现象，想要就点存库 |
+| 与艺人关联 | 只比对 `performers.social_json` 里已有链接的规范化 URL，命中才关联；绝不按名字猜 | 艺人页没有「社交动态」区块 → 要么没关联，要么艺人资料里没这条链接 |

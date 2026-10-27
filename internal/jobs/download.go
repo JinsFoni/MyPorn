@@ -43,7 +43,8 @@ func (r *Runner) httpClient(platformKey string) *http.Client {
 	if c, ok := r.clients[platformKey]; ok {
 		return c
 	}
-	c, err := platform.NewHTTPClient(r.cfg.PlatformProxyFor(platformKey), 0)
+	// 代理是动态问的：改设置里的代理不用重启，下一个分片就走新出口。
+	c, err := platform.NewDynamicHTTPClient(func() string { return r.proxyFor(platformKey) }, 0)
 	if err != nil {
 		c, _ = platform.NewHTTPClient("", 0)
 	}

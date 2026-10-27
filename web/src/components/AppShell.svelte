@@ -22,12 +22,13 @@
   interface NavItem {
     href: string;
     label: string;
-    icon: 'feed' | 'performers' | 'discover' | 'downloads' | 'manage' | 'settings';
+    icon: 'feed' | 'moments' | 'performers' | 'discover' | 'downloads' | 'manage' | 'settings';
     isActive: (path: string) => boolean;
   }
 
   const NAV: readonly NavItem[] = [
     { href: '/', label: '关注', icon: 'feed', isActive: (p) => p === '/' || p.startsWith('/video') },
+    { href: '/moments', label: '动态', icon: 'moments', isActive: (p) => p.startsWith('/moments') },
     { href: '/performers', label: '艺人', icon: 'performers', isActive: (p) => p.startsWith('/performer') },
     { href: '/discover', label: '发现', icon: 'discover', isActive: (p) => p.startsWith('/discover') },
     { href: '/downloads', label: '下载', icon: 'downloads', isActive: (p) => p.startsWith('/downloads') },
@@ -40,12 +41,17 @@
     download: '下载',
     upload: '上传',
     strm: '生成 strm',
+    social_sync: '抓取动态',
+    social_save: '保存照片',
   };
 
   const activeHref = $derived(NAV.find((item) => item.isActive(router.path))?.href ?? '');
 
   // 设置不进侧边列表，单独摆在侧边栏右下角（只显示齿轮图标）；移动端底部 tab 仍保留五项
   const SIDE_NAV = NAV.filter((item) => item.icon !== 'settings');
+  // 移动端底部只有 6 格：加「动态」之后把「发现」收进艺人页（那里本来就有搜索和推荐位），
+  // 否则 7 格在 320px 屏上每格只剩 45px，字都要挤掉。
+  const MOBILE_NAV = NAV.filter((item) => item.icon !== 'discover');
   const settingsActive = $derived(ui.settingsOpen);
 
   /** 移动端底部 tab 的共用样式 */
@@ -83,6 +89,14 @@
         'video.new': () => {
           scheduleBump();
         },
+        'photo.new': () => {
+          live.bumpMoments();
+          live.setMomentsUnseen(live.momentsUnseen + 1);
+        },
+        'social.progress': (data) => {
+          // 抓取过程中也刷新照片墙：一次同步可能连着好几页，不必等 round 结束
+          if (data.newPhotos > 0) live.bumpMoments();
+        },
       },
       { onStatus: (connected) => live.setConnected(connected) },
     );
@@ -90,6 +104,7 @@
     // 首次进来对齐一次下载队列，保证角标准确
     live.refreshDownloads(true);
     void live.ensurePerformerAvatars();
+    void live.refreshMomentsUnseen();
 
     const onOffline = (): void => live.toast('网络已断开，实时更新暂停', 'error');
     const onOnline = (): void => live.toast('网络已恢复', 'info');
@@ -121,6 +136,12 @@
       <!-- 关注：一帧画面 + 播放三角（比原来的表格线更像“视频流”） -->
       <rect x="3" y="5" width="18" height="14" rx="4" />
       <path d="M9.2 9.5v5L13.6 12z" fill="currentColor" />
+    {:else if name === 'moments'}
+      <!-- 动态：一张「照片墙」——三格圆角方块，右上角一格错开，像瀑布流的错位 -->
+      <rect x="3" y="3.5" width="7.5" height="9" rx="2" />
+      <rect x="13.5" y="3.5" width="7.5" height="6" rx="2" />
+      <rect x="13.5" y="12.5" width="7.5" height="8" rx="2" />
+      <rect x="3" y="15.5" width="7.5" height="5" rx="2" />
     {:else if name === 'performers'}
       <circle cx="9" cy="9" r="3" />
       <path d="M3.5 19a5.5 5.5 0 0 1 11 0" />
@@ -182,6 +203,13 @@
         aria-hidden="true"
       >
         {live.activeDownloads}
+      </span>
+    {:else if item.href === '/moments' && live.momentsUnseen > 0}
+      <span
+        class="absolute -right-2 -top-1 min-w-[0.9375rem] rounded-full bg-hi px-1 text-[0.625rem] font-medium leading-[0.9375rem] text-ink tabular-nums"
+        aria-hidden="true"
+      >
+        {live.momentsUnseen > 9 ? '9+' : live.momentsUnseen}
       </span>
     {/if}
   </span>
@@ -284,6 +312,13 @@
             >
               {live.activeDownloads}
             </span>
+          {:else if item.href === '/moments' && live.momentsUnseen > 0}
+            <span
+              class="rounded-full bg-hi px-[0.3rem] text-[0.6875rem] font-medium leading-4 tabular-nums text-ink"
+              aria-label={`${String(live.momentsUnseen)} 张新照片`}
+            >
+              {live.momentsUnseen > 99 ? '99+' : live.momentsUnseen}
+            </span>
           {/if}
         </a>
       {/each}
@@ -342,7 +377,7 @@
     aria-label="主导航"
   >
     <ul class="grid grid-cols-6">
-      {#each NAV as item (item.href)}
+      {#each MOBILE_NAV as item (item.href)}
         {@const isActive = item.icon === 'settings' ? settingsActive : activeHref === item.href}
         <li>
           {#if item.icon === 'settings'}

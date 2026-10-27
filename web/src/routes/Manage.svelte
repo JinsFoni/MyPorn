@@ -11,7 +11,13 @@
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
   import { navigate } from '../lib/router.svelte';
-  import type { ManageCount, ManageResponse, ManageSubscription } from '../lib/types';
+  import type {
+    ManageCount,
+    ManageResponse,
+    ManageSubscription,
+    MomentAccount,
+    MomentsManageResponse,
+  } from '../lib/types';
 
   /**
    * 管理页：统计 + 关注管理。
@@ -21,7 +27,7 @@
    * 页签不走地址栏：两个页签看的是同一份数据，只是展开方式不同，刷新回到「统计」即可。
    */
 
-  type Tab = 'stats' | 'subs';
+  type Tab = 'stats' | 'subs' | 'moments';
 
   let tab = $state<Tab>('stats');
   let data = $state<ManageResponse | null>(null);
@@ -32,6 +38,12 @@
   let busyId = $state<number | null>(null);
   let bulkBusy = $state(false);
   let reloadSeq = 0;
+
+  // ---- 动态管理（M5）：单独一个接口，切到这个页签才去拉 ----
+  let moments = $state<MomentsManageResponse | null>(null);
+  let momentsLoading = $state(false);
+  let momentsError = $state('');
+  let momentBusyId = $state<number | null>(null);
 
   const stats = $derived(data?.stats ?? null);
   const subs = $derived(data?.subscriptions ?? []);
@@ -53,8 +65,94 @@
     }
   }
 
+  async function loadMoments(): Promise<void> {
+    momentsLoading = moments === null;
+    momentsError = '';
+    try {
+      moments = await api.manageMoments();
+    } catch (err) {
+      momentsError = messageFor(err);
+    } finally {
+      momentsLoading = false;
+    }
+  }
+
+  async function syncMoment(account: MomentAccount): Promise<void> {
+    momentBusyId = account.id;
+    try {
+      const res = await api.syncMomentAccount(account.id, account.backfillDone ? 'auto' : 'full');
+      live.toast(res.queued ? `已投递 @${account.handle} 的同步` : '这个博主已经在队列里了', 'info');
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      momentBusyId = null;
+    }
+  }
+
+  async function refillMoment(account: MomentAccount): Promise<void> {
+    momentBusyId = account.id;
+    try {
+      await api.patchMomentAccount(account.id, { mode: 'full' });
+      const res = await api.syncMomentAccount(account.id, 'full');
+      live.toast(res.queued ? `已从头回填 @${account.handle}` : '@' + account.handle + ' 已在队列里', 'success');
+      await loadMoments();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      momentBusyId = null;
+    }
+  }
+
+  async function unlinkMoment(account: MomentAccount): Promise<void> {
+    momentBusyId = account.id;
+    try {
+      await api.patchMomentAccount(account.id, { performerId: 0 });
+      live.toast(`已解除 @${account.handle} 与艺人的关联`, 'info');
+      await loadMoments();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      momentBusyId = null;
+    }
+  }
+
+  async function toggleMoment(account: MomentAccount): Promise<void> {
+    momentBusyId = account.id;
+    try {
+      await api.patchMomentAccount(account.id, { enabled: !account.enabled });
+      await loadMoments();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      momentBusyId = null;
+    }
+  }
+
+  async function removeMoment(account: MomentAccount): Promise<void> {
+    if (!window.confirm(`取消订阅 @${account.handle}？已存进本地库的照片不会删除。`)) return;
+    momentBusyId = account.id;
+    try {
+      await api.deleteMomentAccount(account.id);
+      live.toast(`已取消 @${account.handle}`, 'info');
+      await loadMoments();
+      live.bumpMoments();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      momentBusyId = null;
+    }
+  }
+
   onMount(() => {
     void load();
+  });
+
+  // 切到「动态管理」时按需拉一次
+  let momentsLoadedOnce = false;
+  $effect(() => {
+    if (tab !== 'moments' || momentsLoadedOnce) return;
+    momentsLoadedOnce = true;
+    void loadMoments();
   });
 
   // 同步完成 / 有新片入库：重取一次快照（feedVersion 由 AppShell 的 SSE 统一 +1）
@@ -316,6 +414,18 @@
           关注管理
           <span class="ml-1 tabular-nums text-dim">{formatCount(subs.length)}</span>
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'moments'}
+          class={tabClass(tab === 'moments')}
+          onclick={() => (tab = 'moments')}
+        >
+          动态管理
+          {#if moments}
+            <span class="ml-1 tabular-nums text-dim">{formatCount(moments.stats.accounts)}</span>
+          {/if}
+        </button>
       </div>
       <div class="flex items-center gap-2">
         <span class="hidden text-meta text-dim sm:inline">
@@ -472,7 +582,7 @@
           {/if}
         </section>
       </div>
-    {:else}
+    {:else if tab === 'subs'}
       <!-- 关注管理 -->
       <div class="mt-3 flex flex-col gap-2">
         <div class="flex flex-wrap items-center gap-2">
@@ -537,6 +647,156 @@
               />
             {/each}
           </ul>
+        {/if}
+      </div>
+    {:else}
+      <!-- 动态管理（M5）：博主列表 + 每人的抓取状态 -->
+      <div class="mt-3 flex flex-col gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-meta text-dim">
+            {#if moments}
+              共 {formatCount(moments.stats.accounts)} 位博主 · {formatCount(moments.stats.posts)} 帖 ·
+              {formatCount(moments.stats.photos)} 张照片
+              {#if moments.stats.errors > 0}
+                · <span class="text-brick">异常 {formatCount(moments.stats.errors)} 位</span>
+              {/if}
+            {:else}
+              正在载入…
+            {/if}
+          </span>
+          <div class="ml-auto flex items-center gap-2">
+            {#if moments && !moments.hasInstagramCookie}
+              <span class="text-meta text-dim">Instagram 未配置 Cookie，加不了 IG 博主</span>
+            {/if}
+            <button type="button" class="btn btn-ghost h-8" onclick={() => void loadMoments()}>刷新</button>
+            <button type="button" class="btn h-8" onclick={() => navigate('/moments')}>打开照片墙</button>
+          </div>
+        </div>
+
+        {#if momentsError}
+          <p class="panel px-4 py-3 text-ui text-brick" role="alert">{momentsError}</p>
+        {:else if momentsLoading || moments === null}
+          <div class="panel px-4 py-10 text-center text-ui text-dim">正在载入…</div>
+        {:else if moments.items.length === 0}
+          <EmptyState
+            title="还没有订阅任何博主"
+            hint="在「动态」里贴一个 X 或 Instagram 的主页链接就能开始抓图。"
+            icon="user"
+          >
+            {#snippet actions()}
+              <button type="button" class="btn btn-primary" onclick={() => navigate('/moments')}>
+                去动态添加
+              </button>
+            {/snippet}
+          </EmptyState>
+        {:else}
+          <ul class="panel divide-y divide-line">
+            {#each moments.items as account (account.id)}
+              <li class="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                {#if account.avatarUrl}
+                  <img
+                    src={imageUrl(account.avatarUrl, 80) ?? ''}
+                    alt=""
+                    class="h-9 w-9 shrink-0 rounded-full object-cover"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                {:else}
+                  <span
+                    class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-raise text-meta text-dim"
+                  >
+                    {account.handle.slice(0, 1).toUpperCase()}
+                  </span>
+                {/if}
+
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="truncate text-ui text-fg">{account.displayName || account.handle}</span>
+                    <span class="shrink-0 text-meta text-dim">{account.platform === 'x' ? 'X' : 'Instagram'}</span>
+                    {#if !account.enabled}
+                      <span class="shrink-0 rounded-full bg-raise px-1.5 text-meta text-dim">已停用</span>
+                    {/if}
+                  </div>
+                  <div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-meta text-dim">
+                    <span class="truncate">@{account.handle}</span>
+                    <span aria-hidden="true">·</span>
+                    <span class="tabular-nums">{formatCount(account.postCount)} 帖 / {formatCount(account.photoCount)} 张</span>
+                    {#if account.performerName}
+                      <span aria-hidden="true">·</span>
+                      <a
+                        data-link
+                        href={`/performer/${String(account.performerId)}`}
+                        class="truncate text-muted hover:text-fg"
+                        >艺人 {account.performerName}</a
+                      >
+                      <button
+                        type="button"
+                        class="shrink-0 text-dim hover:text-brick"
+                        disabled={momentBusyId === account.id}
+                        onclick={() => void unlinkMoment(account)}
+                        title="解除与艺人的关联（只影响关联，不删任何东西）"
+                      >
+                        解除
+                      </button>
+                    {:else if account.performerId === 0}
+                      <span aria-hidden="true">·</span>
+                      <span class="text-dim">未关联艺人</span>
+                    {/if}
+                    {#if account.lastSyncedAt}
+                      <span aria-hidden="true">·</span>
+                      <span>{relativeTime(account.lastSyncedAt)}同步</span>
+                    {/if}
+                    {#if account.backfillDone}
+                      <span aria-hidden="true">·</span>
+                      <span>历史已回填</span>
+                    {/if}
+                  </div>
+                  {#if account.lastError}
+                    <p class="mt-1 line-clamp-2 text-meta text-brick">{account.lastError}</p>
+                  {/if}
+                </div>
+
+                <div class="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={momentBusyId === account.id}
+                    onclick={() => void syncMoment(account)}
+                  >
+                    同步
+                  </button>
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={momentBusyId === account.id}
+                    onclick={() => void refillMoment(account)}
+                    title="清掉回填断点，从头再抓一遍"
+                  >
+                    重填
+                  </button>
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={momentBusyId === account.id}
+                    onclick={() => void toggleMoment(account)}
+                  >
+                    {account.enabled ? '停用' : '启用'}
+                  </button>
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-brick/80 transition-colors hover:bg-raise hover:text-brick"
+                    disabled={momentBusyId === account.id}
+                    onclick={() => void removeMoment(account)}
+                  >
+                    删除
+                  </button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+          <p class="text-meta text-dim">
+            删除博主只清记录，已经存进本地库的照片不会被删。
+          </p>
         {/if}
       </div>
     {/if}

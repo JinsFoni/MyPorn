@@ -32,6 +32,10 @@ class LiveStore {
   downloads = $state<DownloadItem[]>([]);
   downloadsLoaded = $state(false);
   totalDownloadBytes = $state(0);
+  /** 社交动态：上次看过之后新入库的照片数（侧边栏角标） */
+  momentsUnseen = $state(0);
+  /** 有新照片进来就 +1，照片墙据此刷新 */
+  momentsVersion = $state(0);
   /** performerId -> 头像（影片卡左侧那颗圆头像；只拉一次订阅艺人） */
   performerAvatars = $state<Record<number, string>>({});
   private avatarsRequested = false;
@@ -50,6 +54,24 @@ class LiveStore {
 
   bumpFeed(): void {
     this.feedVersion += 1;
+  }
+
+  bumpMoments(): void {
+    this.momentsVersion += 1;
+  }
+
+  setMomentsUnseen(n: number): void {
+    this.momentsUnseen = n;
+  }
+
+  /** 拉一次「动态」的未看计数（启动时与进入页面后用）。失败静默：红点不值得弹错。 */
+  async refreshMomentsUnseen(): Promise<void> {
+    try {
+      const res = await api.momentAccounts();
+      this.momentsUnseen = res.unseen;
+    } catch {
+      /* 忽略 */
+    }
   }
 
   setConnected(value: boolean): void {

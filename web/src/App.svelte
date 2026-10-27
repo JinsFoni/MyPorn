@@ -43,6 +43,13 @@
     return managePage;
   }
 
+  /** 动态照片墙同理懒加载（灯箱、瀑布流都在里面） */
+  let momentsPage: Promise<{ default: PlainPage }> | null = null;
+  function loadMoments(): Promise<{ default: PlainPage }> {
+    momentsPage ??= import('./routes/Moments.svelte') as Promise<{ default: PlainPage }>;
+    return momentsPage;
+  }
+
   let ready = $state(false);
 
   const match = $derived(router.match);
@@ -53,6 +60,7 @@
     performer: '',
     discover: '',
     downloads: '',
+    moments: '动态',
     manage: '管理',
     video: '',
     settings: '',
@@ -127,6 +135,15 @@
       {:then mod}
         {@const VideoPage = mod.default}
         <VideoPage id={shown.params.id} />
+      {:catch}
+        <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
+      {/await}
+    {:else if shown.name === 'moments'}
+      {#await loadMoments()}
+        <p class="py-16 text-center text-ui text-dim">正在载入…</p>
+      {:then mod}
+        {@const MomentsPage = mod.default}
+        <MomentsPage />
       {:catch}
         <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
       {/await}

@@ -145,7 +145,15 @@
   >
     新片最多
   </button>
-  <p class="ml-auto shrink-0 text-meta text-dim">
+  <!-- 移动端底部 tab 只留 6 格，「发现」的入口挪到这里（桌面端侧边栏仍然直连） -->
+  <a
+    data-link
+    href="/discover"
+    class="chip ml-auto h-8 shrink-0 px-3 text-ui text-muted transition-colors hover:bg-raise hover:text-fg lg:hidden"
+  >
+    发现
+  </a>
+  <p class="ml-auto shrink-0 text-meta text-dim lg:ml-auto">
     <span class="tabular-nums">{items.length}</span> 位
   </p>
 </div>

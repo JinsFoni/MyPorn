@@ -29,7 +29,7 @@ func TestLiveHLSSegmentDownload(t *testing.T) {
 		vkey = "6798a78e9c631"
 	}
 
-	a, err := New("https://cn.pornhub.com", "", "")
+	a, err := New("https://cn.pornhub.com", noProxy, "")
 	if err != nil {
 		t.Fatal(err)
 	}

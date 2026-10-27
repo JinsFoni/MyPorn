@@ -19,7 +19,9 @@ import (
 	"github.com/mario/myporn/internal/imgcache"
 	"github.com/mario/myporn/internal/jobs"
 	"github.com/mario/myporn/internal/platform"
+	"github.com/mario/myporn/internal/proxying"
 	"github.com/mario/myporn/internal/secret"
+	"github.com/mario/myporn/internal/social"
 	"github.com/mario/myporn/internal/store"
 )
 
@@ -27,6 +29,8 @@ type Server struct {
 	cfg     *config.Config
 	st      *store.Store
 	reg     *platform.Registry
+	social  *social.Registry   // 社交动态（M5）适配器
+	px      *proxying.Resolver // 代理解析器：设置里的代理改完立刻生效
 	hub     *events.Hub
 	runner  *jobs.Runner
 	box     *secret.Box
@@ -39,11 +43,12 @@ type Server struct {
 	mu      sync.Mutex
 }
 
-func New(cfg *config.Config, st *store.Store, reg *platform.Registry, hub *events.Hub,
-	runner *jobs.Runner, box *secret.Box, log *slog.Logger, static fs.FS,
+func New(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg *social.Registry,
+	hub *events.Hub, runner *jobs.Runner, box *secret.Box, log *slog.Logger, static fs.FS,
 	images *imgcache.Service) *Server {
 	return &Server{
-		cfg: cfg, st: st, reg: reg, hub: hub, runner: runner, box: box, log: log,
+		cfg: cfg, st: st, reg: reg, social: socialReg, hub: hub, runner: runner, box: box, log: log,
+		px:     proxying.New(st, cfg),
 		static: static, images: images, limiter: newLoginLimiter(), started: time.Now(),
 		clients: map[string]*http.Client{},
 	}
@@ -61,7 +66,8 @@ func (s *Server) platformClientLocked(key string) *http.Client {
 	if c, ok := s.clients[key]; ok {
 		return c
 	}
-	c, err := platform.NewHTTPClient(s.cfg.PlatformProxyFor(key), 20*time.Second)
+	// 动态问代理：用户在设置里换完，下一个请求立刻走新出口。
+	c, err := platform.NewDynamicHTTPClient(func() string { return s.px.For(key) }, 20*time.Second)
 	if err != nil {
 		c, _ = platform.NewHTTPClient("", 20*time.Second)
 	}
@@ -73,13 +79,15 @@ func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
-	// 普通接口给 60s；/api/stream 是长时间在传的媒体流，交给请求上下文自己收尾，
-	// 否则看长片时一到点就被掐断。
+	// 普通接口给 60s；长连接自己收尾，不进这个盒子：
+	//   - /api/stream 是边下边传的媒体流，一到点就被掐断等于看长片必断；
+	//   - /api/events 是 SSE，超时写手一发就会在已经流出去的响应上再写一次头
+	//     （日志里每分钟一条 "superfluous response.WriteHeader call"）。
 	timed := middleware.Timeout(60 * time.Second)
 	r.Use(func(next http.Handler) http.Handler {
 		h := timed(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if strings.HasPrefix(req.URL.Path, "/api/stream") {
+			if isLongLived(req.URL.Path) {
 				next.ServeHTTP(w, req)
 				return
 			}
@@ -136,6 +144,19 @@ func (s *Server) Routes() http.Handler {
 			// 管理页：统计 + 关注管理，一次请求给全（见 handlers_manage.go）
 			pr.Get("/manage", s.handleManage)
 
+			// 社交动态（M5）：照片墙 + 博主管理 + 一键存进本地库
+			pr.Get("/moments", s.handleListMoments)
+			pr.Get("/moments/accounts", s.handleListMomentAccounts)
+			pr.Post("/moments/accounts", s.handleCreateMomentAccount)
+			pr.Post("/moments/resolve", s.handleResolveMoment)
+			pr.Patch("/moments/accounts/{id}", s.handlePatchMomentAccount)
+			pr.Delete("/moments/accounts/{id}", s.handleDeleteMomentAccount)
+			pr.Post("/moments/accounts/{id}/sync", s.handleSyncMomentAccount)
+			pr.Post("/moments/seen", s.handleMarkMomentsSeen)
+			pr.Post("/moments/photos/save", s.handleSaveMomentPhotos)
+			pr.Post("/moments/cooldown", s.handleClearMomentCooldown)
+			pr.Get("/manage/moments", s.handleManageMoments)
+
 			pr.Get("/settings", s.handleGetSettings)
 			pr.Put("/settings", s.handlePutSettings)
 
@@ -151,6 +172,12 @@ func (s *Server) Routes() http.Handler {
 
 	r.NotFound(s.serveSPA)
 	return r
+}
+
+// isLongLived 报告这个路径是不是「靠连接本身活着」的接口，不该套超时中间件。
+func isLongLived(path string) bool {
+	// 用全等而不是前缀：/api/streams 这种将来真出现了要照旧走超时。
+	return path == "/api/stream" || path == "/api/events"
 }
 
 // ---------- JSON 工具 ----------

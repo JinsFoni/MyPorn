@@ -78,6 +78,10 @@ export interface Performer {
   nextSyncAt: string | null;
   newVideoCount: number;
   lastError: string | null;
+  /** 挂在这位艺人名下的博主（艺人详情接口才给；没有就 undefined） */
+  socialAccounts?: MomentAccount[];
+  /** 这些博主最近 12 张照片（艺人详情接口才给） */
+  socialPhotos?: MomentPhoto[];
 }
 
 export interface PerformerPage {
@@ -199,11 +203,20 @@ export interface OpenListSettings {
   hasToken: boolean;
 }
 
+/** 社交动态（M5） */
+export interface SocialSettings {
+  /** 多久抓一轮（小时） */
+  syncHours: number;
+  /** Instagram 是否已配 Cookie（Cookie 本身不回显） */
+  hasInstagramCookie: boolean;
+}
+
 export interface Settings {
   syncIntervalHours: number;
   globalProxy: string;
   /** 按平台覆盖代理；空字符串 = 直连 */
-  platformProxy: { pornhub: string; xhamster: string; beeg: string };
+  /** 平台专用代理；instagram / x 决定抓动态时的出口 IP */
+  platformProxy: { pornhub: string; xhamster: string; beeg: string; instagram: string; x: string };
   namingTemplate: string;
   downloadConcurrency: number;
   /** 单任务下载限速（KB/s），0 = 不限 */
@@ -216,21 +229,24 @@ export interface Settings {
   /** 服务端 ffmpeg 是否可用（不可用时下载会在封装步骤失败） */
   ffmpegAvailable: boolean;
   openlist: OpenListSettings;
+  social: SocialSettings;
 }
 
 /** PUT /api/settings：字段均可选；token 单独写，响应不回显 */
 export interface SettingsPatch {
   syncIntervalHours?: number;
   globalProxy?: string;
-  platformProxy?: { pornhub?: string; xhamster?: string; beeg?: string };
+  platformProxy?: { pornhub?: string; xhamster?: string; beeg?: string; instagram?: string; x?: string };
   namingTemplate?: string;
   autoDownloadNew?: boolean;
   downloadConcurrency?: number;
   downloadRateKb?: number;
   openlist?: { baseUrl?: string; root?: string; token?: string };
+  /** instagramCookie 传空串表示清除 */
+  social?: { syncHours?: number; instagramCookie?: string };
 }
 
-export type JobType = 'sync' | 'download' | 'upload' | 'strm';
+export type JobType = 'sync' | 'download' | 'upload' | 'strm' | 'social_sync' | 'social_save';
 export type JobStatus = 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'canceled';
 
 export interface Job {
@@ -282,6 +298,23 @@ export interface SyncProgress {
 }
 
 /** SSE: video.new */
+/** SSE：有新照片入库（照片墙据此插入/刷新） */
+export interface PhotoNewEvent {
+  photoId: number;
+  accountId: number;
+  platform: string;
+  handle: string;
+}
+
+/** SSE：某个博主的抓取进度 */
+export interface SocialProgressEvent {
+  accountId: number;
+  handle: string;
+  page: number;
+  newPhotos: number;
+  backfilling: boolean;
+}
+
 export interface VideoNewEvent {
   videoId: number;
   performerId: number;
@@ -492,4 +525,89 @@ export interface ManageResponse {
   generatedAt: string;
   stats: ManageStats;
   subscriptions: ManageSubscription[];
+}
+
+// ---- 社交动态（M5）----
+
+/** 一个被订阅的社交博主 */
+export interface MomentAccount {
+  id: number;
+  platform: string;
+  handle: string;
+  displayName: string;
+  avatarUrl: string;
+  profileUrl: string;
+  /** 关联的艺人的 id（0 = 未关联） */
+  performerId: number;
+  performerName: string;
+  enabled: boolean;
+  /** 历史帖子是否已经回填完 */
+  backfillDone: boolean;
+  postCount: number;
+  photoCount: number;
+  lastSyncedAt: string | null;
+  /** 最近一次失败原因；空串 = 正常 */
+  lastError: string;
+}
+
+/** 照片墙上的一格 */
+export interface MomentPhoto {
+  id: number;
+  /** 已经过 /api/img 代理的地址 */
+  url: string;
+  thumbUrl: string;
+  width: number;
+  height: number;
+  postedAt: string | null;
+  /** 是否已存进某个本地库 */
+  saved: boolean;
+  accountId: number;
+  handle: string;
+  platform: string;
+  postUrl: string;
+  caption: string;
+}
+
+export interface MomentsPage {
+  items: MomentPhoto[];
+  nextCursor?: string;
+}
+
+export interface SocialPlatformInfo {
+  key: string;
+  name: string;
+  needsCookie: boolean;
+  hasCookie: boolean;
+  hint: string;
+}
+
+export interface MomentsAccountsResponse {
+  items: MomentAccount[];
+  /** 上次看过之后新入库的照片数 */
+  unseen: number;
+  platforms: SocialPlatformInfo[];
+}
+
+/** 添加博主前的探测结果 */
+export interface MomentResolve {
+  /** 链接已经躺在某个艺人的社交链接里时，给出会关联到谁 */
+  performerId: number;
+  performerName: string;
+  platform: string;
+  platformName: string;
+  handle: string;
+  displayName: string;
+  avatarUrl: string;
+  profileUrl: string;
+  /** 非 0 表示库里已经有了 */
+  existingId: number;
+  needsCookie: boolean;
+  postCount: number;
+  warning?: string;
+}
+
+export interface MomentsManageResponse {
+  items: MomentAccount[];
+  stats: { accounts: number; posts: number; photos: number; errors: number };
+  hasInstagramCookie: boolean;
 }

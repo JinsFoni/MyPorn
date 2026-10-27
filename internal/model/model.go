@@ -244,6 +244,10 @@ const (
 
 const (
 	JobTypeSync = "sync"
+	// JobTypeSocialSync 是 M5 社交动态：抓一个博主的新帖子（target_id = 博主 id，0 表示全部）。
+	JobTypeSocialSync = "social_sync"
+	// JobTypeSocialSave 是 M5 社交动态：把照片存进本地库。
+	JobTypeSocialSave = "social_save"
 )
 
 // Library 是一个本地媒体库（一个根目录）。

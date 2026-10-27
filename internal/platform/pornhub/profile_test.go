@@ -155,7 +155,7 @@ func TestLiveResolveProfile(t *testing.T) {
 	if custom := os.Getenv("LIVE_NAME"); custom != "" {
 		names = []string{custom}
 	}
-	a, err := New("https://cn.pornhub.com", "", "")
+	a, err := New("https://cn.pornhub.com", noProxy, "")
 	if err != nil {
 		t.Fatal(err)
 	}
