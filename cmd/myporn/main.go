@@ -19,6 +19,7 @@ import (
 	"github.com/mario/myporn/internal/config"
 	"github.com/mario/myporn/internal/events"
 	"github.com/mario/myporn/internal/httpapi"
+	"github.com/mario/myporn/internal/imgcache"
 	"github.com/mario/myporn/internal/jobs"
 	"github.com/mario/myporn/internal/platform"
 	"github.com/mario/myporn/internal/platform/beeg"
@@ -106,7 +107,9 @@ func main() {
 	}
 
 	hub := events.NewHub()
-	runner := jobs.NewRunner(cfg, st, reg, avatars, profiles, hub, logger)
+	// 图片缓存服务端一份：HTTP 代理与同步任务共用同一份磁盘缓存（同步时预热封面）。
+	images := imgcache.New(cfg.DataDir, cfg.PlatformProxyFor, cfg.FFmpegPath, logger)
+	runner := jobs.NewRunner(cfg, st, reg, avatars, profiles, hub, logger, images)
 	runner.RegisterDefaults()
 
 	// ffmpeg 只在下载任务的封装步骤用到；缺失不影响浏览与同步。
@@ -123,8 +126,14 @@ func main() {
 
 	go runner.Start(ctx)
 	go runScheduler(ctx, st, runner, logger)
+	// 启动后补一轮封面（历史数据里可能存着带签名、早就过期的封面地址）。
+	go func() {
+		if n := runner.RepairCovers(ctx); n > 0 {
+			logger.Info("启动封面修复完成", "张数", n)
+		}
+	}()
 
-	srv := httpapi.New(cfg, st, reg, hub, runner, box, logger, webui.FS())
+	srv := httpapi.New(cfg, st, reg, hub, runner, box, logger, webui.FS(), images)
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           srv.Routes(),

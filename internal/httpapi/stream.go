@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mario/myporn/internal/hls"
+	"github.com/mario/myporn/internal/imgcache"
 )
 
 // mediaUserAgent 是抓流用的 UA（与平台适配器一致）。
@@ -179,7 +180,7 @@ func platformReferer(s *Server, platformKey string, u *url.URL) string {
 			}
 		}
 	}
-	return refererFor(u)
+	return imgcache.RefererFor(u)
 }
 
 // matchOriginalURL 还原查询串里的原始地址（保留签名参数）。

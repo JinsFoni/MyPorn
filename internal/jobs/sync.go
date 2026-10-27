@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/mario/myporn/internal/model"
+	"github.com/mario/myporn/internal/store"
 )
 
 type syncPayload struct {
@@ -86,6 +87,8 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 
 	page := startPage
 	totalNew := 0
+	// 新片的封面地址要趁「刚解析到、签名还新鲜」的时候抓进缓存，见 covers.go。
+	var newCovers []store.VideoThumb
 	// 只在增量同步里收集新片 id：首次全量回填动辄几百部，绝不能自动下载。
 	var autoIDs []int64
 	finished := false
@@ -142,6 +145,11 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 				r.log.Warn("关联影片与艺人失败", "video", vid, "err", err)
 			}
 			totalNew++
+			if item.ThumbURL != "" {
+				newCovers = append(newCovers, store.VideoThumb{
+					ID: vid, Platform: item.Platform, PlatformVideoID: item.PlatformVideoID, ThumbURL: item.ThumbURL,
+				})
+			}
 			if !full {
 				autoIDs = append(autoIDs, vid)
 			}
@@ -214,6 +222,8 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 	}
 
 	c.Progress(100, fmt.Sprintf("同步完成，新增 %d 部", totalNew), 0, 0, 0)
+	r.warmCovers(newCovers)
+	r.repairInBackground()
 	if len(autoIDs) > 0 {
 		r.maybeAutoDownload(autoIDs)
 	}

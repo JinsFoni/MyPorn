@@ -1,4 +1,4 @@
-package httpapi
+package imgcache
 
 import (
 	"bytes"
@@ -7,28 +7,11 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"io"
+	"log/slog"
 	"os/exec"
 	"testing"
 )
-
-func TestSmallWidthParam(t *testing.T) {
-	cases := map[string]int{
-		"48":   48,
-		" 64 ": 64,
-		"8":    8,
-		"256":  256,
-		"":     0,
-		"7":    0, // 太小，糊了也没意义
-		"512":  0, // 太大，那就不是「小图」了
-		"abc":  0,
-		"-48":  0,
-	}
-	for in, want := range cases {
-		if got := smallWidthParam(in); got != want {
-			t.Errorf("smallWidthParam(%q) = %d, 期望 %d", in, got, want)
-		}
-	}
-}
 
 // testImage 造一张 400×300 的 PNG：左半红、右半蓝，中间一条白线。
 // 有硬边界才验得出「缩下去以后还在原来的位置」。
@@ -142,12 +125,12 @@ func TestBlurredSmallCapsWidthToSource(t *testing.T) {
 	}
 }
 
-// 隐私模式这条路在 HTTP 层用的是 blurredSmallAny：Go 解不了就找 ffmpeg。
+// 隐私模式这条路走的是 blurAny：Go 解不了就找 ffmpeg。
 func TestBlurredSmallAnyGoPath(t *testing.T) {
-	s := &Server{}
-	out, err := s.blurredSmallAny(context.Background(), testImage(t), 48)
+	s := New(t.TempDir(), nil, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	out, err := s.blurAny(context.Background(), testImage(t), 48)
 	if err != nil {
-		t.Fatalf("blurredSmallAny: %v", err)
+		t.Fatalf("blurAny: %v", err)
 	}
 	img, err := jpeg.Decode(bytes.NewReader(out))
 	if err != nil {
@@ -160,8 +143,8 @@ func TestBlurredSmallAnyGoPath(t *testing.T) {
 
 // 彻底解不出来时必须报错，让上层发空白占位——绝不能退化成「把原图发出去」。
 func TestBlurredSmallAnyRejectsGarbage(t *testing.T) {
-	s := &Server{}
-	if _, err := s.blurredSmallAny(context.Background(), []byte("<html>403 Forbidden</html>"), 48); err == nil {
+	s := New(t.TempDir(), nil, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, err := s.blurAny(context.Background(), []byte("<html>403 Forbidden</html>"), 48); err == nil {
 		t.Fatal("垃圾字节应当报错")
 	}
 }
@@ -172,7 +155,7 @@ func TestFFmpegShrink(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("这台机器没装 ffmpeg，跳过兜底通路测试")
 	}
-	s := &Server{}
+	s := New(t.TempDir(), nil, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	out, err := s.ffmpegShrink(context.Background(), testImage(t), 48)
 	if err != nil {
 		t.Fatalf("ffmpegShrink: %v", err)

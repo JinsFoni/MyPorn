@@ -16,6 +16,7 @@ import (
 
 	"github.com/mario/myporn/internal/config"
 	"github.com/mario/myporn/internal/events"
+	"github.com/mario/myporn/internal/imgcache"
 	"github.com/mario/myporn/internal/library"
 	"github.com/mario/myporn/internal/model"
 	"github.com/mario/myporn/internal/platform"
@@ -88,7 +89,7 @@ func makeJPEG(t *testing.T, dir string) []byte {
 func buildRunner(t *testing.T, st *store.Store, reg *platform.Registry, cfg *config.Config) *Runner {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return NewRunner(cfg, st, reg, nil, nil, events.NewHub(), log)
+	return NewRunner(cfg, st, reg, nil, nil, events.NewHub(), log, imgcache.New(t.TempDir(), nil, "", log))
 }
 
 func TestDownloadJobEndToEnd(t *testing.T) {

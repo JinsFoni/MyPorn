@@ -72,6 +72,46 @@ func (s *Store) ListVideosMissingMeta(limit int) ([]*model.Video, error) {
 	return out, rows.Err()
 }
 
+// VideoThumb 是封面预热/修复用的最小字段集。
+type VideoThumb struct {
+	ID              int64
+	Platform        string
+	PlatformVideoID string
+	ThumbURL        string
+}
+
+// ListVideoThumbs 按 id 倒序列出带封面的影片（封面预热/修复用）。
+// beforeID 是游标，传 0 表示从最新的开始。
+func (s *Store) ListVideoThumbs(beforeID int64, limit int) ([]VideoThumb, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if beforeID <= 0 {
+		beforeID = 1 << 62
+	}
+	rows, err := s.db.Query(`SELECT id, platform, platform_video_id, thumb_url
+		FROM videos WHERE thumb_url <> '' AND id < ? ORDER BY id DESC LIMIT ?`, beforeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []VideoThumb
+	for rows.Next() {
+		var v VideoThumb
+		if err := rows.Scan(&v.ID, &v.Platform, &v.PlatformVideoID, &v.ThumbURL); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// UpdateVideoThumb 覆盖封面地址。旧地址可能带签名且已过期，只能用新解析到的换掉。
+func (s *Store) UpdateVideoThumb(id int64, thumbURL string) error {
+	_, err := s.db.Exec(`UPDATE videos SET thumb_url = ? WHERE id = ?`, thumbURL, id)
+	return err
+}
+
 // FillVideoMeta 用详情页解析到的元数据补齐影片记录：只填空缺字段，
 // 不覆盖已有内容（列表页给的信息粗，详情页才准，但已有数据没必要反复写）。
 func (s *Store) FillVideoMeta(id int64, meta *model.Video) error {

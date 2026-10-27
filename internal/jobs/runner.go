@@ -16,6 +16,7 @@ import (
 
 	"github.com/mario/myporn/internal/config"
 	"github.com/mario/myporn/internal/events"
+	"github.com/mario/myporn/internal/imgcache"
 	"github.com/mario/myporn/internal/library"
 	"github.com/mario/myporn/internal/model"
 	"github.com/mario/myporn/internal/platform"
@@ -38,10 +39,13 @@ type Runner struct {
 	reg      *platform.Registry
 	hub      *events.Hub
 	enc      *library.Encoder
+	img      *imgcache.Service
 	log      *slog.Logger
 	interval time.Duration
 	avatars  *AvatarFiller
 	profiles *ProfileFiller
+
+	repairing atomic.Bool // 封面修复是否已有一轮在跑
 
 	mu      sync.Mutex
 	workers []*worker
@@ -55,9 +59,9 @@ type Runner struct {
 // profileSources 是站外资料来源（nil 等于不借资料）。
 func NewRunner(cfg *config.Config, st *store.Store, reg *platform.Registry,
 	avatarSources *platform.AvatarRegistry, profileSources *platform.ProfileRegistry,
-	hub *events.Hub, log *slog.Logger) *Runner {
+	hub *events.Hub, log *slog.Logger, images *imgcache.Service) *Runner {
 	return &Runner{
-		cfg: cfg, st: st, reg: reg, hub: hub, log: log,
+		cfg: cfg, st: st, reg: reg, hub: hub, log: log, img: images,
 		enc:      library.NewEncoder(cfg.FFmpegPath, cfg.FFprobePath),
 		interval: time.Duration(cfg.SyncHours) * time.Hour,
 		byType:   map[string]*worker{},

@@ -16,6 +16,7 @@ import (
 
 	"github.com/mario/myporn/internal/config"
 	"github.com/mario/myporn/internal/events"
+	"github.com/mario/myporn/internal/imgcache"
 	"github.com/mario/myporn/internal/jobs"
 	"github.com/mario/myporn/internal/platform"
 	"github.com/mario/myporn/internal/secret"
@@ -31,19 +32,41 @@ type Server struct {
 	box     *secret.Box
 	log     *slog.Logger
 	static  fs.FS
+	images  *imgcache.Service // 图片缓存（与同步任务共用同一份磁盘缓存）
 	limiter *loginLimiter
 	started time.Time
-	clients map[string]*http.Client // 平台图片代理专用
+	clients map[string]*http.Client // 平台出网客户端（图片代理 / 串流共用）
 	mu      sync.Mutex
 }
 
 func New(cfg *config.Config, st *store.Store, reg *platform.Registry, hub *events.Hub,
-	runner *jobs.Runner, box *secret.Box, log *slog.Logger, static fs.FS) *Server {
+	runner *jobs.Runner, box *secret.Box, log *slog.Logger, static fs.FS,
+	images *imgcache.Service) *Server {
 	return &Server{
 		cfg: cfg, st: st, reg: reg, hub: hub, runner: runner, box: box, log: log,
-		static: static, limiter: newLoginLimiter(), started: time.Now(),
+		static: static, images: images, limiter: newLoginLimiter(), started: time.Now(),
 		clients: map[string]*http.Client{},
 	}
+}
+
+// platformClient 取某个平台出网用的客户端。
+func (s *Server) platformClient(key string) *http.Client {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.platformClientLocked(key)
+}
+
+// platformClientLocked 供已持锁的调用方使用（streamClient 会复制它）。
+func (s *Server) platformClientLocked(key string) *http.Client {
+	if c, ok := s.clients[key]; ok {
+		return c
+	}
+	c, err := platform.NewHTTPClient(s.cfg.PlatformProxyFor(key), 20*time.Second)
+	if err != nil {
+		c, _ = platform.NewHTTPClient("", 20*time.Second)
+	}
+	s.clients[key] = c
+	return c
 }
 
 func (s *Server) Routes() http.Handler {

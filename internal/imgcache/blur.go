@@ -1,4 +1,4 @@
-package httpapi
+package imgcache
 
 // 隐私模式要的「小糊图」：把上游那张封面/头像缩到几十像素宽、糊一下、压成 JPEG 再发。
 //
@@ -42,13 +42,13 @@ func blurredSmall(data []byte, width int) ([]byte, error) {
 	return encodeSmall(src, width)
 }
 
-// blurredSmallAny 是给 HTTP 层用的版本：Go 解不了就交给 ffmpeg 转一道再解。
+// blurAny 是给 HTTP 层与同步任务用的版本：Go 解不了就交给 ffmpeg 转一道再解。
 //
 // 为什么需要它：pornhub 的封面走 `pix-*.phncdn.com/.../rs:fit:320:180` 这种图床，
 // 谈下来给的是 **AVIF**，而 Go 这边（stdlib + golang.org/x/image）没有 AVIF 解码器。
 // ffmpeg 有（libdav1d），而且本来就是这个项目的硬依赖——只在这条路径上多起一个进程，
 // 生成的小图有缓存，一张图一辈子只解一次。
-func (s *Server) blurredSmallAny(ctx context.Context, data []byte, width int) ([]byte, error) {
+func (s *Service) blurAny(ctx context.Context, data []byte, width int) ([]byte, error) {
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		jpegBytes, ferr := s.ffmpegShrink(ctx, data, width)
@@ -69,12 +69,10 @@ var imgFfmpegSlots = make(chan struct{}, 3)
 // ffmpegShrink 用 ffmpeg 把任意格式（AVIF/HEIC/…）解出来并缩到 width 宽，输出 JPEG。
 // 在这里 ffmpeg 只当解码器用，缩放交给它顺带做掉（flags=area 就是面积平均，
 // 跟 scaleArea 一个意思），出来再走一遍 encodeSmall 的盒式模糊。
-func (s *Server) ffmpegShrink(ctx context.Context, data []byte, width int) ([]byte, error) {
-	bin := "ffmpeg"
-	if s.runner != nil {
-		if p := s.runner.Encoder().FFmpeg; p != "" {
-			bin = p
-		}
+func (s *Service) ffmpegShrink(ctx context.Context, data []byte, width int) ([]byte, error) {
+	bin := s.ffmpeg
+	if bin == "" {
+		bin = "ffmpeg"
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
