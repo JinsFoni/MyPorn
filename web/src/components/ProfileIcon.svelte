@@ -18,8 +18,9 @@
      填充而非描边，那几段上万字符的 `d` 住在 `$lib/profileGlyphs`，走下面 `glyph` 那一支渲染。
      例外二：`胸部`（胸罩）和 `穿环`（带珠的环）是照用户给的 PNG 重画的线稿——原图是位图，
      放大后逐行量出骨点，再按本项目的 2 描边落成矢量。
-     例外三：`体重`（哑铃）、`性别` 的 ♂ 以及页头的 `影片`（胶片）、`排名`（皇冠）取自 peach
-     的雪碧图（`web/index.html` 的 `#i-dumbbell` / `#i-mars` / `#i-film` / `#i-crown`）。 */
+     例外三：`体重`（哑铃）、`性别` 的 ♂ 以及页头的 `排名`（皇冠）取自 peach 的雪碧图
+     （`web/index.html` 的 `#i-dumbbell` / `#i-mars` / `#i-crown`）；页头的 `影片` 是照用户给的
+     24px PNG 描的（清单条 + 带播放三角的画面）。 */
   type IconKind =
     | 'heart'
     | 'users'
@@ -128,15 +129,12 @@
     <path d="M16 3h5v5" />
     <path d="m21 3-6.75 6.75" />
   {:else if kind === 'film'}
-    <!-- 胶片（peach 的 `i-film`）：页头「N部影片」那一行 -->
-    <rect width="18" height="18" x="3" y="3" rx="2" />
-    <path d="M7 3v18" />
-    <path d="M3 7.5h4" />
-    <path d="M3 12h18" />
-    <path d="M3 16.5h4" />
-    <path d="M17 3v18" />
-    <path d="M17 7.5h4" />
-    <path d="M17 16.5h4" />
+    <!-- 影片计数：一条清单条 + 一块带播放三角的画面（照用户给的 24px PNG 描的，
+         原件就是 24 网格、2px 边，所以坐标和描边都能 1:1 照抄；清单条两端是平头不是圆头，
+         方框的角也是直角，所以这两处单独把 `round` 改回 `butt` / `miter`）。 -->
+    <path d="M5 4h14" stroke-linecap="butt" />
+    <rect x="3" y="8" width="18" height="12" stroke-linejoin="miter" />
+    <path d="M10 11v5.6l4.7-2.8z" fill="currentColor" stroke="none" />
   {:else if kind === 'rank'}
     <!-- 皇冠（peach 的 `i-crown`）：页头「排名」那一行 -->
     <path
