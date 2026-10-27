@@ -1,6 +1,7 @@
 <script lang="ts">
   import officialIcon from '../assets/social/official.png';
   import twitterIcon from '../assets/social/twitter.png';
+  import instagramIcon from '../assets/social/instagram.png';
   import type { SocialLink } from '../lib/types';
 
   interface Props {
@@ -27,16 +28,17 @@
     return 'web';
   }
 
-  /* Instagram 那枚图还没进来：用户发的 base64 在传输中截断，IDAT 的 CRC 对不上、解不出来，
-     先空着走下面那条线稿兜底，等图到位再把 `instagram: instagramIcon` 加回来。 */
   const MARKS: Partial<Record<IconKind, string>> = {
     official: officialIcon,
     x: twitterIcon,
+    instagram: instagramIcon,
   };
 </script>
 
 {#if social.length}
-  <ul class="flex flex-wrap items-center gap-1 {className}">
+  <!-- `-my-1.5`：每个圆底座 32px、图标 20px，比旁边 20px 的正文行高一圈；上下各收 6px，
+       图标中线才落在正文第一行的中线上（那一行是 `items-start` 排的）。 -->
+  <ul class="flex flex-wrap items-center gap-1 -my-1.5 {className}">
     {#each social as link (link.url)}
       {@const kind = kindOf(link)}
       {@const mark = MARKS[kind]}
@@ -75,15 +77,9 @@
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              {#if kind === 'instagram'}
-                <rect x="3.5" y="3.5" width="17" height="17" rx="4.6" />
-                <circle cx="12" cy="12" r="4" />
-                <circle cx="16.9" cy="7.1" r="0.9" fill="currentColor" stroke="none" />
-              {:else}
-                <circle cx="12" cy="12" r="8.5" />
-                <path d="M3.5 12h17" />
-                <path d="M12 3.5c2.3 2.4 3.5 5.3 3.5 8.5S14.3 18.1 12 20.5c-2.3-2.4-3.5-5.3-3.5-8.5S9.7 5.9 12 3.5Z" />
-              {/if}
+              <circle cx="12" cy="12" r="8.5" />
+              <path d="M3.5 12h17" />
+              <path d="M12 3.5c2.3 2.4 3.5 5.3 3.5 8.5S14.3 18.1 12 20.5c-2.3-2.4-3.5-5.3-3.5-8.5S9.7 5.9 12 3.5Z" />
             </svg>
           {/if}
         </a>
