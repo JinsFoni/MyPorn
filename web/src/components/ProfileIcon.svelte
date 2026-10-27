@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { BODY_GLYPH_PATH, BODY_GLYPH_VIEWBOX } from '../lib/bodyGlyph';
+  import { BODY_GLYPH_PATHS, BODY_GLYPH_VIEWBOX } from '../lib/bodyGlyph';
 
   interface Props {
     /** 资料行的标签文字（「出身地」「体重」……），用来挑字形 */
@@ -58,16 +58,14 @@
     return 'dot';
   }
 
-  /* 尺寸：常见字形是 14×14 的方框；`身材` 那枚是 1 : 3.4 的站姿剪影，框跟着收成 4×14，
-     这样右边标签只被推开 8px（方框要推 20px），左栏那几行看起来还是齐的。 */
+  /* 尺寸：一律 14×14 方框。`身材` 那枚紧框量出来 1 : 1.29（近乎方形），照常放进方框里，
+     按高度撑满→实际画成 11×14，跟旁边几枚线稿一样齐。 */
   const kind = $derived(kindOf(label));
 </script>
 
 <svg
   viewBox={kind === 'body' ? BODY_GLYPH_VIEWBOX : '0 0 24 24'}
-  class={kind === 'body'
-    ? 'mr-1 inline-block h-3.5 w-1 shrink-0 align-[-0.15em]'
-    : 'mr-1.5 inline-block h-3.5 w-3.5 shrink-0 align-[-0.15em]'}
+  class="mr-1.5 inline-block h-3.5 w-3.5 shrink-0 align-[-0.15em]"
   aria-hidden="true"
   fill="none"
   stroke="currentColor"
@@ -77,7 +75,9 @@
 >
   {#if kind === 'body'}
     <!-- 唯一的填充字形：1024 网格、没有描边，靠 fill 上色 -->
-    <path d={BODY_GLYPH_PATH} fill="currentColor" stroke="none" />
+    {#each BODY_GLYPH_PATHS as d}
+      <path {d} fill="currentColor" stroke="none" />
+    {/each}
   {:else if kind === 'heart'}
     <path
       d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
