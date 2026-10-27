@@ -227,8 +227,14 @@
             />
           </div>
 
+          <!-- 计数与身材、排名一样，标签前挂一枚 16px 字形（资料行同一枚组件、同一套间距），
+               于是这三行的文字都从同一条竖线起排；订阅跟在影片数后面，共用那枚胶片。 -->
           <p class="flex flex-wrap items-center gap-x-3 gap-y-1 text-ui text-dim">
-            <span class="tabular-nums">{formatCount(performer.localVideoCount ?? performer.videoCount ?? 0)}部影片</span>
+            <span class="tabular-nums"
+              ><ProfileIcon label="影片" />{formatCount(
+                performer.localVideoCount ?? performer.videoCount ?? 0,
+              )}部影片</span
+            >
             {#if performer.subscriberCount !== null}
               <span aria-hidden="true">·</span>
               <span class="tabular-nums">{formatCount(performer.subscriberCount)}订阅</span>
@@ -238,7 +244,7 @@
           {#if bodyText}
             <!-- 身材：站点资料行里的「身高」「三围」抓取时已归一成公制，紧跟在影片数下面，
                  所以它们在下面的资料行里不再重复出现。
-                 标签前挂一枚 14px 剪影（跟资料行同一枚字形、同一套间距），左边这一栏的
+                 标签前挂一枚 16px 剪影（跟资料行同一枚字形、同一套间距），左边这一栏的
                  「标签 + 读数」就都从同一条竖线起排。 -->
             <p class="flex flex-wrap items-baseline gap-x-2 text-ui">
               <span class="text-dim"><ProfileIcon label="身材" />身材</span>
@@ -249,7 +255,7 @@
           {#if rankText}
             <!-- 排名：站点「排名信息」块里的模特排名（越小越靠前），跟身材一样是页头的读数 -->
             <p class="flex flex-wrap items-baseline gap-x-2 text-ui">
-              <span class="text-dim">排名</span>
+              <span class="text-dim"><ProfileIcon label="排名" />排名</span>
               <span class="tabular-nums text-muted">#{rankText}</span>
             </p>
           {/if}

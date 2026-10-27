@@ -33,10 +33,10 @@
       style="--rows-2: {rowsAt2}; --rows-3: {rowsAt3}"
     >
       {#each rows as field (field.label)}
-        <!-- 标签前挂一个 16px 字形（见 ProfileIcon），标签列因此留 5rem：
+        <!-- 标签前挂一个 16px 字形（见 ProfileIcon，跟 peach 资料卡同口径），标签列因此留 5rem：
              图标 16 + 间距 6 + 最长的「出身地」42 ≈ 64px，四个字的标签也放得下。 -->
         <div class="grid grid-cols-[5rem_minmax(0,1fr)] items-baseline gap-2">
-          <dt class="text-ui text-dim"><ProfileIcon label={field.label} />{field.label}</dt>
+          <dt class="text-ui text-dim"><ProfileIcon label={field.label} value={field.value} />{field.label}</dt>
           <dd class="min-w-0 break-words text-ui text-fg">{field.value}</dd>
         </div>
       {/each}

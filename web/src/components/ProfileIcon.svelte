@@ -1,28 +1,30 @@
 <script lang="ts">
-  import { BODY_GLYPH_PATHS, BODY_GLYPH_VIEWBOX } from '../lib/bodyGlyph';
-  import { HAIR_GLYPH_PATHS, HAIR_GLYPH_VIEWBOX } from '../lib/hairGlyph';
+  import { PROFILE_GLYPHS } from '../lib/profileGlyphs';
 
   interface Props {
     /** 资料行的标签文字（「出身地」「体重」……），用来挑字形 */
     label: string;
+    /** 这一行的值。只有「性别」用它——同一个标签下 ♀ / ♂ 得分开画 */
+    value?: string;
   }
 
-  let { label }: Props = $props();
+  let { label, value = '' }: Props = $props();
 
-  /* 只做单色字形，跟侧边栏 / 社交链接同一套：24 网格、1.6 描边、14px。
+  /* 只做单色字形，跟侧边栏 / 社交链接同一套：24 网格、2 描边、16px（跟 `mr-1.5` 的 6px 间距，
+     跟 https://github.com/JinsFoni/peach 的资料卡同一口径——那边就是 16px / stroke 2）。
      认标签里的关键词而不是整串相等——站点是中文站，但字段按艺人有增有减，
      还可能冒出英文标签，所以用 includes 兜住。顺序即优先级（先具体后笼统）。
-     例外一：`身材`（躯干）和 `发色`（头发）用的是用户给的 iconfont 图标——1024 网格、
-     填充而非描边，两段几千字符的 `d` 各自住在 `$lib/bodyGlyph` / `$lib/hairGlyph`，
-     走下面 `FILL_GLYPHS` 那一支渲染（`stroke-width=0` + `fill=currentColor`）。
-     例外二：`胸部`（胸罩）是照用户给的 24px PNG 重画的线稿——原图是位图，放大后逐行量出
-     骨点，再按本项目的 1.6 描边落成矢量；它本来就是 24 网格，就跟其余线稿写在一起。
-     例外三：`体重`（哑铃）和 `种族`（脚印）两枚取自 https://github.com/JinsFoni/peach
-     的资料卡（它 `web/index.html` 的 `#i-dumbbell` / `#i-footprints`），其余仍是本项目自己那套。 */
+     例外一：`身材`、`发色`、`感情`、`种族`、`纹身` 五枚是用户给的 iconfont 图标——1024 网格、
+     填充而非描边，那几段上万字符的 `d` 住在 `$lib/profileGlyphs`，走下面 `glyph` 那一支渲染。
+     例外二：`胸部`（胸罩）和 `穿环`（带珠的环）是照用户给的 PNG 重画的线稿——原图是位图，
+     放大后逐行量出骨点，再按本项目的 2 描边落成矢量。
+     例外三：`体重`（哑铃）、`性别` 的 ♂ 以及页头的 `影片`（胶片）、`排名`（皇冠）取自 peach
+     的雪碧图（`web/index.html` 的 `#i-dumbbell` / `#i-mars` / `#i-film` / `#i-crown`）。 */
   type IconKind =
     | 'heart'
     | 'users'
-    | 'user'
+    | 'female'
+    | 'male'
     | 'pin'
     | 'height'
     | 'weight'
@@ -30,62 +32,70 @@
     | 'body'
     | 'bra'
     | 'globe'
-    | 'footprints'
+    | 'ethnicity'
     | 'eye'
     | 'hair'
     | 'drop'
+    | 'tattoo'
     | 'tag'
-    | 'pen'
-    | 'ring'
+    | 'piercing'
     | 'star'
     | 'calendar'
+    | 'film'
+    | 'rank'
     | 'dot';
 
-  function kindOf(label: string): IconKind {
+  /** 哪几枚走「填充字形」（`$lib/profileGlyphs` 里那几枚 iconfont 图标）。 */
+  const FILL_GLYPHS: Partial<Record<IconKind, keyof typeof PROFILE_GLYPHS>> = {
+    body: 'body',
+    hair: 'hair',
+    heart: 'heart',
+    ethnicity: 'ethnicity',
+    tattoo: 'tattoo',
+  };
+
+  function kindOf(label: string, value: string): IconKind {
     const s = label.toLowerCase();
     const has = (...keys: string[]) => keys.some((k) => s.includes(k));
 
     if (has('感情', '婚姻', '恋爱', '状态')) return 'heart';
     if (has('喜欢', '取向')) return 'users';
-    if (has('性别', 'gender')) return 'user';
+    // 性别按值分：女 → ♀（用户给的那枚）、男 → ♂（peach 的 `i-mars`），认不出时仍按 ♀。
+    if (has('性别', 'gender')) return /男|male/i.test(value) && !/女|female/i.test(value) ? 'male' : 'female';
     if (has('出身', '出生地', '来自', '籍贯', '地点', '城市', '国家')) return 'pin';
     if (has('身高', 'height')) return 'height';
     if (has('体重', 'weight')) return 'weight';
     if (has('身材', 'body')) return 'body';
     if (has('三围', '罩杯', 'measure')) return 'ruler';
-    if (has('种族', 'ethnic')) return 'footprints';
+    if (has('种族', 'ethnic')) return 'ethnicity';
     if (has('民族', '语言', '国籍')) return 'globe';
     if (has('眼睛', 'eye')) return 'eye';
     if (has('发色', '头发', 'hair')) return 'hair';
     if (has('颜色', 'color')) return 'drop';
-    if (has('纹身', 'tattoo')) return 'pen';
-    if (has('穿环', 'pierc')) return 'ring';
+    if (has('纹身', 'tattoo')) return 'tattoo';
+    if (has('穿环', 'pierc')) return 'piercing';
     if (has('胸部', '假奶', '乳房', 'bra', 'bust')) return 'bra';
     if (has('手术', '其他特征')) return 'tag';
     if (has('兴趣', '爱好', 'hobb')) return 'star';
+    if (has('影片', '作品数', 'film')) return 'film';
+    if (has('排名', 'rank')) return 'rank';
     if (has('年份', '出道', '活跃', '生日', '年龄', 'age', 'year')) return 'calendar';
     return 'dot';
   }
 
-  /* 两枚 iconfont 填充字形：画框、`d` 都跟原件一致，只换填充色。 */
-  const FILL_GLYPHS: Partial<Record<IconKind, { viewBox: string; paths: string[] }>> = {
-    body: { viewBox: BODY_GLYPH_VIEWBOX, paths: BODY_GLYPH_PATHS },
-    hair: { viewBox: HAIR_GLYPH_VIEWBOX, paths: HAIR_GLYPH_PATHS },
-  };
-
-  /* 尺寸：一律 14×14 方框，填充字形按画框等比缩进去：`身材` 画成 9.6×14、`发色` 13.4×14
-     （两枚都按高度撑满，画框见各自的 `$lib/*Glyph`）。 */
-  const kind = $derived(kindOf(label));
-  const glyph = $derived(FILL_GLYPHS[kind]);
+  /* 尺寸：一律 16×16 方框。填充字形按各自的紧框等比缩进去（`$lib/profileGlyphs` 里注了
+     每一枚画成多大：躯干 10.9×16、发色 15.3×16、感情 16×13……），线稿自己撑满 16。 */
+  const kind = $derived(kindOf(label, value));
+  const glyph = $derived(FILL_GLYPHS[kind] ? PROFILE_GLYPHS[FILL_GLYPHS[kind]!] : null);
 </script>
 
 <svg
   viewBox={glyph ? glyph.viewBox : '0 0 24 24'}
-  class="mr-1.5 inline-block h-3.5 w-3.5 shrink-0 align-[-0.15em]"
+  class="mr-1.5 inline-block h-4 w-4 shrink-0 align-[-0.15em]"
   aria-hidden="true"
   fill="none"
   stroke="currentColor"
-  stroke-width={glyph ? 0 : 1.6}
+  stroke-width={glyph ? 0 : 2}
   stroke-linecap="round"
   stroke-linejoin="round"
 >
@@ -103,18 +113,41 @@
     <path d="M3.8 18.8 Q2.6 18.8 2.55 15.8 V11.3 Q2.55 10.5 3.2 10.5 H8.2 Q8.9 10.5 9.2 11 L12 15.3" />
     <path d="M20.2 18.8 Q21.4 18.8 21.45 15.8 V11.3 Q21.45 10.5 20.8 10.5 H15.8 Q15.1 10.5 14.8 11 L12 15.3" />
     <path d="M3.8 18.8 H20.2" />
-  {:else if kind === 'heart'}
+  {:else if kind === 'piercing'}
+    <!-- 穿环：一个大环，下沿穿着一颗实心珠（照用户给的 30px PNG 量出来的比例） -->
+    <circle cx="12" cy="11.9" r="8.8" />
+    <circle cx="12" cy="20" r="2.4" fill="currentColor" stroke="none" />
+  {:else if kind === 'female'}
+    <!-- ♀：一个环 + 竖直的茎 + 一道横（照用户给的 32px PNG 量的） -->
+    <circle cx="12" cy="8.3" r="5" />
+    <path d="M12 14.3v7.1" />
+    <path d="M8.2 17.6h7.6" />
+  {:else if kind === 'male'}
+    <!-- ♂（peach 的 `i-mars`） -->
+    <circle cx="10" cy="14" r="6" />
+    <path d="M16 3h5v5" />
+    <path d="m21 3-6.75 6.75" />
+  {:else if kind === 'film'}
+    <!-- 胶片（peach 的 `i-film`）：页头「N部影片」那一行 -->
+    <rect width="18" height="18" x="3" y="3" rx="2" />
+    <path d="M7 3v18" />
+    <path d="M3 7.5h4" />
+    <path d="M3 12h18" />
+    <path d="M3 16.5h4" />
+    <path d="M17 3v18" />
+    <path d="M17 7.5h4" />
+    <path d="M17 16.5h4" />
+  {:else if kind === 'rank'}
+    <!-- 皇冠（peach 的 `i-crown`）：页头「排名」那一行 -->
     <path
-      d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
+      d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z"
     />
+    <path d="M5 21h14" />
   {:else if kind === 'users'}
     <circle cx="9.5" cy="7" r="4" />
     <path d="M2.5 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2" />
     <path d="M17 3.4a4 4 0 0 1 0 7.2" />
     <path d="M21.5 21v-2a4 4 0 0 0-3-3.6" />
-  {:else if kind === 'user'}
-    <circle cx="12" cy="8" r="3.6" />
-    <path d="M5 20.5c0-3.6 3.1-6 7-6s7 2.4 7 6" />
   {:else if kind === 'pin'}
     <path d="M20 10c0 5.4-8 12-8 12s-8-6.6-8-12a8 8 0 0 1 16 0Z" />
     <circle cx="12" cy="10" r="2.8" />
@@ -123,6 +156,7 @@
     <path d="M8.5 7 12 3.5 15.5 7" />
     <path d="M8.5 17 12 20.5 15.5 17" />
   {:else if kind === 'weight'}
+    <!-- 哑铃（peach 的 `i-dumbbell`） -->
     <path
       d="M17.596 12.768a2 2 0 1 0 2.829-2.829l-1.768-1.767a2 2 0 0 0 2.828-2.829l-2.828-2.828a2 2 0 0 0-2.829 2.828l-1.767-1.768a2 2 0 1 0-2.829 2.829z"
     />
@@ -142,15 +176,6 @@
     <circle cx="12" cy="12" r="8.5" />
     <path d="M3.5 12h17" />
     <path d="M12 3.5c2.3 2.4 3.5 5.3 3.5 8.5S14.3 18.1 12 20.5c-2.3-2.4-3.5-5.3-3.5-8.5S9.7 5.9 12 3.5Z" />
-  {:else if kind === 'footprints'}
-    <path
-      d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z"
-    />
-    <path
-      d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z"
-    />
-    <path d="M16 17h4" />
-    <path d="M4 13h4" />
   {:else if kind === 'eye'}
     <path d="M2.8 12S6.4 5.8 12 5.8 21.2 12 21.2 12 17.6 18.2 12 18.2 2.8 12 2.8 12Z" />
     <circle cx="12" cy="12" r="2.8" />
@@ -159,12 +184,6 @@
   {:else if kind === 'tag'}
     <path d="M20.5 12.8 12.8 20.5a2.1 2.1 0 0 1-3 0L3.5 14.2V3.5h10.7l6.3 6.3a2.1 2.1 0 0 1 0 3Z" />
     <circle cx="8" cy="8" r="1.4" />
-  {:else if kind === 'pen'}
-    <path d="M16.6 3.4a2.9 2.9 0 0 1 4 4L8 20.1l-5.5 1.5 1.5-5.5L16.6 3.4Z" />
-    <path d="M15 5l4 4" />
-  {:else if kind === 'ring'}
-    <circle cx="12" cy="12" r="7.2" />
-    <circle cx="12" cy="12" r="2.2" />
   {:else if kind === 'star'}
     <path d="M12 3.8l2.5 5.1 5.6.8-4 4 .9 5.6-5-2.7-5 2.7.9-5.6-4-4 5.6-.8z" />
   {:else if kind === 'calendar'}
