@@ -38,13 +38,13 @@
 {#if social.length}
   <!-- `-my-1.5`：每个圆底座 32px、图标 20px，比旁边 20px 的正文行高一圈；上下各收 6px，
        图标中线才落在正文第一行的中线上（那一行是 `items-start` 排的）。 -->
-  <ul class="flex flex-wrap items-center gap-1 -my-1.5 {className}">
+  <ul class="flex flex-wrap items-center gap-2 -my-1.5 {className}">
     {#each social as link (link.url)}
       {@const kind = kindOf(link)}
       {@const mark = MARKS[kind]}
       <li>
         <!-- 外链一律新窗口 + noopener：这些地址来自上游页面，不能让它拿到 window.opener。
-             底座 32px 见方、图标 20px：品牌标本来就不是单色，硬压成我们那套线稿会认不出来，
+             底座 32px 见方、图标 22px：品牌标本来就不是单色，硬压成我们那套线稿会认不出来，
              所以这几个圆圈里是原色图；悬停只给一层白雾，不改图标本身。 -->
         <a
           href={link.url}
@@ -62,14 +62,14 @@
               alt=""
               width="48"
               height="48"
-              class="h-5 w-5 {kind === 'x' ? 'invert' : ''}"
+              class="h-[22px] w-[22px] {kind === 'x' ? 'invert' : ''}"
               loading="lazy"
               decoding="async"
             />
           {:else}
             <svg
               viewBox="0 0 24 24"
-              class="h-[18px] w-[18px] text-muted"
+              class="h-5 w-5 text-muted"
               aria-hidden="true"
               fill="none"
               stroke="currentColor"
