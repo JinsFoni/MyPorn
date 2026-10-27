@@ -55,9 +55,12 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
-    /* 放大一点：blur 会把四周糊到透明，露出底色就有一道边 */
-    transform: scale(1.16);
-    filter: blur(22px) saturate(1.2);
+    /* 放大一点：blur 会把四周糊到透明，露出底色就有一道边（刚好够盖住 6px 的晕开即可）。
+       放太大就成了「图片被放大」——画面会被硬生生拉近一截，所以只放 1.08 */
+    transform: scale(1.08);
+    /* 只糊到「看不懂细节」，别糊到「看不出是什么」：糊得越重越像一张被硬拉大的图。
+       6px 是调出来的：还认得出是谁、在干什么，但细节全化开，正好是「正在对上焦」那个瞬间 */
+    filter: blur(6px) saturate(1.15);
   }
 
   .video-veil-scrim {
