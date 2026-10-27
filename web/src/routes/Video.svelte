@@ -4,6 +4,7 @@
   import EmptyState from '../components/EmptyState.svelte';
   import Skeleton from '../components/Skeleton.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
+  import VideoLoading from '../components/VideoLoading.svelte';
   import { api, messageFor } from '../lib/api';
   import { formatBandwidth, formatCount, formatDate, formatDuration, relativeTime } from '../lib/format';
   import { imageUrl } from '../lib/img';
@@ -254,11 +255,7 @@
           onFailed={onFailed}
         >
           {#snippet overlay()}
-            {#if loadingPlayback && !playError}
-              <div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/50">
-                <p class="text-ui text-muted">正在解析播放地址…</p>
-              </div>
-            {:else if playError}
+            {#if playError}
               <div class="pointer-events-auto absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center">
                 <p class="max-w-md text-ui text-fg/90">{playError}</p>
                 <div class="flex flex-wrap items-center justify-center gap-2">
@@ -276,9 +273,7 @@
     {:else}
       <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-black">
         {#if loadingPlayback}
-          <div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/50">
-            <p class="text-ui text-muted">正在解析播放地址…</p>
-          </div>
+          <VideoLoading {poster} label="正在解析播放地址" />
         {:else if playError}
           <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
             <p class="max-w-md text-ui text-fg/90">{playError}</p>

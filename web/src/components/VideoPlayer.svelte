@@ -10,7 +10,8 @@
    *   1. **清晰度菜单**与**氛围模式**开关：两个按钮挂进皮肤底部控制条右侧那一组里（见 lib/playerBar.ts），
    *      和自带的音量/设置/画中画/全屏排在同一行、一起显隐；
    *   2. **氛围模式**本身：把当前画面缩到 32×18 的画布上再放大模糊，给播放器四周蒙一层同色光；
-   *   3. **音量记忆**（`localStorage`，等媒体就绪才套用，否则会被播放器默认的满音量盖掉）。
+   *   3. **音量记忆**（`localStorage`，等媒体就绪才套用，否则会被播放器默认的满音量盖掉）；
+   *   4. **加载态**（见 VideoLoading.svelte）：糊掉的封面垫底 + 中间转环，出画面就淡出。
    *
    * 片源策略（见 lib/player.ts）：每个清晰度是**一条独立的清单/直链**，由后端解析后交给这里，
    * 所以播放器一次只放一条，切档＝换 source 并保留进度；不用 hls.js 的自适应 ABR。
@@ -22,6 +23,8 @@
   import '@videojs/html/i18n';
   import { prefersReducedMotion, type QualityOption } from '../lib/player';
   import { mountPlayerBar, type PlayerBar, type PlayerBarState } from '../lib/playerBar';
+  import VideoLoading from './VideoLoading.svelte';
+  import { fade } from 'svelte/transition';
 
   /** hlsjs-video 的 `source` 属性（原生 <video> 没有；按需断言） */
   interface EngineSourceHost extends HTMLElement {
@@ -111,6 +114,10 @@
   let lastVolume = { volume: -1, muted: false };
 
   let ambient = $state(readAmbient());
+  /** 媒体还没法出画面：盖一层「糊封面 + 加载环」，等 playing/canplay 就收掉 */
+  let buffering = $state(true);
+  /** 媒体已经能出画面了吗：能的话加载态就只糊当前这一帧，不再拿封面顶上 */
+  let hasFrame = $state(false);
   /** 底部控制条里的自定义按钮（清晰度 / 氛围模式），皮肤 shadow root 渲染好之后才挂得上 */
   let bar: PlayerBar | null = null;
   let barTries = 0;
@@ -211,12 +218,81 @@
     );
   }
 
+  // ---------- 加载态：糊封面 + 加载环 ----------
+
+  /** 已经挂上监听的那个 <video>（原生就是媒体元素本身，HLS 是 hlsjs-video 里那个） */
+  let boundVideo: HTMLVideoElement | null = null;
+  /** 缓冲要持续一小会儿才盖上去：普通拖动进度条时数据就在本地，盖一下反而闪 */
+  let busyTimer: number | undefined;
+
+  function mediaReady(): void {
+    if (busyTimer !== undefined) {
+      clearTimeout(busyTimer);
+      busyTimer = undefined;
+    }
+    hasFrame = true;
+    buffering = false;
+  }
+
+  /** 兜底：时间在走就说明数据是通的，别让加载态一直挂着（个别引擎只发 waiting 不发 playing） */
+  function mediaTicking(): void {
+    if (buffering && boundVideo !== null && boundVideo.readyState >= 3) mediaReady();
+  }
+
+  function mediaBusy(): void {
+    if (busyTimer !== undefined) return;
+    busyTimer = window.setTimeout(() => {
+      busyTimer = undefined;
+      buffering = true;
+    }, 240);
+  }
+
+  /** 换片源会把画面清掉：退回「糊封面」，别让中间那截黑屏露出来 */
+  function mediaCleared(): void {
+    hasFrame = false;
+    mediaBusy();
+  }
+
+  /** 媒体元素一出现就挂上（HLS 的内层 <video> 要等 shadow root 有；attach 会反复进来，总会挂上） */
+  function bindMediaLoad(): void {
+    const video = innerVideo();
+    if (!video || video === boundVideo) return;
+    unbindMediaLoad();
+    boundVideo = video;
+    // 能放 / 正在放 / 有画面了 → 收掉；等数据 / 被清空 → 盖回来
+    video.addEventListener('canplay', mediaReady);
+    video.addEventListener('playing', mediaReady);
+    video.addEventListener('loadeddata', mediaReady);
+    video.addEventListener('waiting', mediaBusy);
+    video.addEventListener('timeupdate', mediaTicking);
+    video.addEventListener('emptied', mediaCleared);
+    video.addEventListener('loadstart', mediaCleared);
+  }
+
+  function unbindMediaLoad(): void {
+    const video = boundVideo;
+    boundVideo = null;
+    if (busyTimer !== undefined) {
+      clearTimeout(busyTimer);
+      busyTimer = undefined;
+    }
+    if (!video) return;
+    video.removeEventListener('canplay', mediaReady);
+    video.removeEventListener('playing', mediaReady);
+    video.removeEventListener('loadeddata', mediaReady);
+    video.removeEventListener('waiting', mediaBusy);
+    video.removeEventListener('timeupdate', mediaTicking);
+    video.removeEventListener('emptied', mediaCleared);
+    video.removeEventListener('loadstart', mediaCleared);
+  }
+
   /** 把当前 src/type 装进播放器；播放器还没挂上媒体（store.target 为空）时稍后重试 */
   function attach(): void {
     tuneSkin();
     const s = store();
     const el = mediaEl;
     if (!s || !el) return;
+    bindMediaLoad();
     if (!s.target) {
       if (retryTimer === undefined && attempts < 60) {
         attempts += 1;
@@ -237,6 +313,8 @@
       const at = s.currentTime;
       pendingSeek = Number.isFinite(at) && at > 1 ? at : 0;
       pendingPlay = !s.paused;
+      // 换片源（切清晰度 / 切代理）必然要重新缓冲，立刻盖上，别让中间那截黑屏露出来
+      buffering = true;
     }
     applySource(el, { src, type });
     if (!switching) {
@@ -495,6 +573,7 @@
       if (barTimer !== undefined) clearTimeout(barTimer);
       bar?.destroy();
       bar = null;
+      unbindMediaLoad();
       stopAmbientLoop();
     };
   });
@@ -590,6 +669,13 @@
             <video bind:this={mediaEl} playsinline preload="metadata" aria-label={title}></video>
           {/if}
 
+          <!-- 加载态：糊掉的封面垫底 + 中间转环（皮肤的大播放键在它上面，照样能点） -->
+          {#if buffering}
+            <div class="video-veil-host" transition:fade={{ duration: 200 }}>
+              <VideoLoading poster={hasFrame ? null : poster} />
+            </div>
+          {/if}
+
           <!-- 页面浮层：默认不吃指针事件；自己需要交互的地方自己加 pointer-events-auto -->
           {#if overlay}
             <div class="overlay-layer">{@render overlay()}</div>
@@ -631,6 +717,13 @@
     .ambient-glow {
       transition: none;
     }
+  }
+
+  /* 加载态在外面套一层只为了让淡出挂在有个盒子的元素上 */
+  .video-veil-host {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
   }
 
   .overlay-layer {
