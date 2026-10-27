@@ -1,5 +1,6 @@
 <script lang="ts">
   import { BODY_GLYPH_PATHS, BODY_GLYPH_VIEWBOX } from '../lib/bodyGlyph';
+  import { HAIR_GLYPH_PATHS, HAIR_GLYPH_VIEWBOX } from '../lib/hairGlyph';
 
   interface Props {
     /** 资料行的标签文字（「出身地」「体重」……），用来挑字形 */
@@ -11,7 +12,9 @@
   /* 只做单色字形，跟侧边栏 / 社交链接同一套：24 网格、1.6 描边、14px。
      认标签里的关键词而不是整串相等——站点是中文站，但字段按艺人有增有减，
      还可能冒出英文标签，所以用 includes 兜住。顺序即优先级（先具体后笼统）。
-     例外一：`身材` 用的是用户给的 iconfont 剪影（1024 网格、填充），见 `$lib/bodyGlyph`。
+     例外一：`身材`（躯干）和 `发色`（头发）用的是用户给的 iconfont 图标——1024 网格、
+     填充而非描边，两段几千字符的 `d` 各自住在 `$lib/bodyGlyph` / `$lib/hairGlyph`，
+     走下面 `FILL_GLYPHS` 那一支渲染（`stroke-width=0` + `fill=currentColor`）。
      例外二：`胸部`（胸罩）是照用户给的 24px PNG 重画的线稿——原图是位图，放大后逐行量出
      骨点，再按本项目的 1.6 描边落成矢量；它本来就是 24 网格，就跟其余线稿写在一起。
      例外三：`体重`（哑铃）和 `种族`（脚印）两枚取自 https://github.com/JinsFoni/peach
@@ -29,6 +32,7 @@
     | 'globe'
     | 'footprints'
     | 'eye'
+    | 'hair'
     | 'drop'
     | 'tag'
     | 'pen'
@@ -52,7 +56,8 @@
     if (has('种族', 'ethnic')) return 'footprints';
     if (has('民族', '语言', '国籍')) return 'globe';
     if (has('眼睛', 'eye')) return 'eye';
-    if (has('发色', 'hair') || has('颜色', 'color')) return 'drop';
+    if (has('发色', '头发', 'hair')) return 'hair';
+    if (has('颜色', 'color')) return 'drop';
     if (has('纹身', 'tattoo')) return 'pen';
     if (has('穿环', 'pierc')) return 'ring';
     if (has('胸部', '假奶', '乳房', 'bra', 'bust')) return 'bra';
@@ -62,24 +67,31 @@
     return 'dot';
   }
 
-  /* 尺寸：一律 14×14 方框。`身材` 那枚紧框量出来 1 : 1.47，照常放进方框里，
-     按高度撑满→实际画成 9.6×14，跟旁边几枚线稿一样齐。 */
+  /* 两枚 iconfont 填充字形：画框、`d` 都跟原件一致，只换填充色。 */
+  const FILL_GLYPHS: Partial<Record<IconKind, { viewBox: string; paths: string[] }>> = {
+    body: { viewBox: BODY_GLYPH_VIEWBOX, paths: BODY_GLYPH_PATHS },
+    hair: { viewBox: HAIR_GLYPH_VIEWBOX, paths: HAIR_GLYPH_PATHS },
+  };
+
+  /* 尺寸：一律 14×14 方框，填充字形按画框等比缩进去：`身材` 画成 9.6×14、`发色` 13.4×14
+     （两枚都按高度撑满，画框见各自的 `$lib/*Glyph`）。 */
   const kind = $derived(kindOf(label));
+  const glyph = $derived(FILL_GLYPHS[kind]);
 </script>
 
 <svg
-  viewBox={kind === 'body' ? BODY_GLYPH_VIEWBOX : '0 0 24 24'}
+  viewBox={glyph ? glyph.viewBox : '0 0 24 24'}
   class="mr-1.5 inline-block h-3.5 w-3.5 shrink-0 align-[-0.15em]"
   aria-hidden="true"
   fill="none"
   stroke="currentColor"
-  stroke-width={kind === 'body' ? 0 : 1.6}
+  stroke-width={glyph ? 0 : 1.6}
   stroke-linecap="round"
   stroke-linejoin="round"
 >
-  {#if kind === 'body'}
-    <!-- 唯一的填充字形：1024 网格、没有描边，靠 fill 上色 -->
-    {#each BODY_GLYPH_PATHS as d}
+  {#if glyph}
+    <!-- 填充字形（1024 网格、没有描边）：靠 fill 上色，颜色跟着标签走 -->
+    {#each glyph.paths as d}
       <path {d} fill="currentColor" stroke="none" />
     {/each}
   {:else if kind === 'bra'}
