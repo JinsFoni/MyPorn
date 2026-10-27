@@ -44,10 +44,12 @@
     sm: 'h-6 w-6 rounded-[0.625rem]',
     xs: 'h-5 w-5 rounded-[0.375rem]',
   };
+  // 图标比底座每边只小 3px：这几家的 logo 自带留白（beeg 的字标、xHamster 的仓鼠头
+  // 在原图里都只占七成），再按「底座 − 8px」留白缩下去，16px 下就只剩一条细线了。
   const IMG: Record<'md' | 'sm' | 'xs', string> = {
-    md: 'h-6 w-6',
-    sm: 'h-4 w-4',
-    xs: 'h-3 w-3',
+    md: 'h-[1.625rem] w-[1.625rem]',
+    sm: 'h-[1.125rem] w-[1.125rem]',
+    xs: 'h-[0.875rem] w-[0.875rem]',
   };
 </script>
 

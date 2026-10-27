@@ -195,7 +195,7 @@
           resolved = null;
         }}
       >
-        <PlatformIcon platform={p.key} label={platformLabel(p.key)} size="xs" />
+        <PlatformIcon platform={p.key} label={platformLabel(p.key)} size="sm" />
         {platformLabel(p.key)}
       </button>
     {/each}
@@ -244,7 +244,7 @@
           <p class="truncate text-ui font-medium text-fg">{resolved.name}</p>
           <p class="mt-0.5 flex items-center gap-1.5 text-meta tabular-nums text-dim">
             {formatCount(resolved.videoCount)} 部影片
-            <PlatformIcon platform={resolved.platform} label={platformLabel(resolved.platform)} size="xs" />
+            <PlatformIcon platform={resolved.platform} label={platformLabel(resolved.platform)} size="sm" />
           </p>
         </div>
         <button
