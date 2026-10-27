@@ -31,8 +31,11 @@
   const thumb = $derived(imageUrl(video.thumbUrl, 480));
   const performerLine = $derived(video.performers.map((p) => p.name).join('、'));
   const firstPerformer = $derived(video.performers[0] ?? null);
+  // 头像表里存的是后端代理地址，也要过一遍 imageUrl：隐私模式下它得换成小糊图
   const avatar = $derived(
-    firstPerformer?.id != null && !avatarFailed ? live.performerAvatars[firstPerformer.id] : undefined,
+    firstPerformer?.id != null && !avatarFailed
+      ? imageUrl(live.performerAvatars[firstPerformer.id], 36)
+      : undefined,
   );
   const monogram = $derived(firstPerformer ? firstPerformer.name.trim().charAt(0).toUpperCase() : '');
 
