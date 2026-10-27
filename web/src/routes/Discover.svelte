@@ -185,7 +185,7 @@
       <button
         type="button"
         class="chip h-8 gap-1.5 pl-1.5 pr-3 text-meta transition-colors {platform === p.key
-          ? 'bg-hi text-ink hover:bg-hi'
+          ? 'bg-raise text-fg ring-1 ring-white/25 ring-inset hover:bg-raise'
           : 'hover:bg-raise'}"
         aria-pressed={platform === p.key}
         onclick={() => {
