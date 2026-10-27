@@ -47,6 +47,10 @@ func Open(path string) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, err
 	}
+	// 老数据的资料行里可能还留着后来决定不入库的那几行（职业状态等），启动时清一次。
+	if err := s.pruneProfileLabels(); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 

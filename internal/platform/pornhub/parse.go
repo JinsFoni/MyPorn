@@ -248,6 +248,9 @@ var profileDropLabels = []string{
 	"turn on", "turn off", "video views", "profile views", "videos watched",
 }
 
+// 注意：「职业状态 / 工作起始及结束时间」是**全站口径**的不入库项，
+// 列表在 model.neverStoreProfileLabels（model.DropProfileLabel），这里不重复一份。
+
 func dropProfileLabel(label string) bool {
 	l := strings.ToLower(strings.TrimSpace(label))
 	if l == "" {
@@ -277,7 +280,7 @@ func parseProfileInfo(doc *goquery.Document) []model.ProfileField {
 		if value == "" {
 			value = strings.TrimSpace(s.Find("span").Last().Text())
 		}
-		if value == "" || value == label || dropProfileLabel(label) {
+		if value == "" || value == label || dropProfileLabel(label) || model.DropProfileLabel(label) {
 			return
 		}
 		out = append(out, model.ProfileField{Label: label, Value: value})

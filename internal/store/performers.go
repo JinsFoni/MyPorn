@@ -27,6 +27,54 @@ func jsonBlock[T any](v []T) string {
 	return "[]"
 }
 
+// profileBlock 序列化资料行，顺手过掉「任何平台都不入库」的那几行
+// （职业状态 / 工作起始及结束时间等，见 model.DropProfileLabel）。
+// 解析层已经丢过一遍，这里再兜一次底：跨站借资料、老代码路径都不会把它们写进来。
+func profileBlock(rows []model.ProfileField) string {
+	return jsonBlock(model.CleanProfile(rows))
+}
+
+// pruneProfileLabels 把库里还留着的「不该入库」资料行删掉（幂等）。
+// 只处理真的含有这些行的记录，正常情况下启动时一行都不会写。
+func (s *Store) pruneProfileLabels() error {
+	rows, err := s.db.Query(`SELECT id, profile_json FROM performers
+		WHERE profile_json IS NOT NULL AND profile_json NOT IN ('', '[]')`)
+	if err != nil {
+		return err
+	}
+	type pending struct {
+		id  int64
+		raw string
+	}
+	var todo []pending
+	for rows.Next() {
+		var id int64
+		var raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var items []model.ProfileField
+		if err := json.Unmarshal([]byte(raw), &items); err != nil {
+			continue // 一行坏数据不值得让服务起不来
+		}
+		if cleaned := model.CleanProfile(items); len(cleaned) != len(items) {
+			todo = append(todo, pending{id: id, raw: jsonBlock(cleaned)})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, u := range todo {
+		if _, err := s.db.Exec(`UPDATE performers SET profile_json = ? WHERE id = ?`, u.raw, u.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // parseBlock 解析库里的 JSON 数组，坏了就当空（不让一行脏数据拖垮整页）。
 func parseBlock[T any](raw string) []T {
 	raw = strings.TrimSpace(raw)
@@ -107,7 +155,7 @@ func (s *Store) UpsertPerformer(p *model.Performer) (int64, error) {
 			subscriber_count = COALESCE(excluded.subscriber_count, performers.subscriber_count),
 			last_fetched_at = excluded.last_fetched_at`,
 		p.Platform, p.PerformerID, p.Name, p.URL, p.AvatarURL, p.Bio,
-		jsonBlock(p.Profile), jsonBlock(p.Social), bodyBlock(p.Body), p.Rank,
+		profileBlock(p.Profile), jsonBlock(p.Social), bodyBlock(p.Body), p.Rank,
 		nullInt(p.VideoCount), nullInt(p.SubscriberCount), now())
 	if err != nil {
 		return 0, err
@@ -214,7 +262,7 @@ func (s *Store) ListPerformersByPlatform(platformKey string) ([]*model.Performer
 func (s *Store) UpdatePerformerProfile(p *model.Performer) error {
 	_, err := s.db.Exec(`UPDATE performers SET bio = ?, profile_json = ?, social_json = ?,
 		body_json = ?, model_rank = ?, avatar_url = ? WHERE id = ?`,
-		p.Bio, jsonBlock(p.Profile), jsonBlock(p.Social), bodyBlock(p.Body), p.Rank, p.AvatarURL, p.ID)
+		p.Bio, profileBlock(p.Profile), jsonBlock(p.Social), bodyBlock(p.Body), p.Rank, p.AvatarURL, p.ID)
 	return err
 }
 

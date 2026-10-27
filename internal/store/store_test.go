@@ -146,6 +146,68 @@ func TestPerformerProfileAndSocialRoundTrip(t *testing.T) {
 	}
 }
 
+// 「职业状态 / 工作起始及结束时间」写入时就被挡掉，老数据在启动时被清掉。
+func TestPerformerProfileDropsNeverStoredLabels(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prune.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	id, err := st.UpsertPerformer(&model.Performer{
+		Platform: "xhamster", PerformerID: "riley-reid", Name: "Riley Reid",
+		Profile: []model.ProfileField{
+			{Label: "感情状态", Value: "非单身"},
+			{Label: "职业状态", Value: "活跃的"},
+			{Label: "工作起始及结束时间", Value: "2011 至 今"},
+			{Label: "性别", Value: "女性"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := st.GetPerformer(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Profile) != 2 || p.Profile[0].Label != "感情状态" || p.Profile[1].Label != "性别" {
+		t.Fatalf("写入时应丢掉那两行，实际 %+v", p.Profile)
+	}
+
+	// 模拟老数据：绕开 Upsert 直接塞进带这两行的 JSON，再开一次库（启动清理）。
+	// 换库文件，避免上面那行干扰统计。
+	oldPath := filepath.Join(dir, "old.db")
+	old, err := Open(oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldID, err := old.UpsertPerformer(&model.Performer{Platform: "xhamster", PerformerID: "old", Name: "Old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.db.Exec(`UPDATE performers SET profile_json = ? WHERE id = ?`,
+		`[{"label":"职业状态","value":"活跃的"},{"label":"性别","value":"女性"}]`, oldID); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	p, err = reopened.GetPerformer(oldID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Profile) != 1 || p.Profile[0].Label != "性别" {
+		t.Fatalf("启动时应清掉老数据里的那两行，实际 %+v", p.Profile)
+	}
+}
+
 // 身材：四项目存取要一致；这次没解析到（Body 全 0）时不能把库里的抹掉。
 func TestPerformerBodyRoundTrip(t *testing.T) {
 	st := newTestStore(t)

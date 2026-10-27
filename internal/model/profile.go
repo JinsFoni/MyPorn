@@ -75,6 +75,46 @@ func socialLinksEqual(a, b []SocialLink) bool {
 	return true
 }
 
+// neverStoreProfileLabels 是**任何平台都不入库**的资料行，按包含匹配（中英文文案不同）。
+//
+//   - 「职业状态 / 工作起始及结束时间」：用户明确不要这两项，站点给了也不收；
+//   - 性癖偏好（会勾起/会浇灭我性欲的是）和平台浏览量在 Pornhub 解析阶段就被丢掉了，
+//     那是该站点特有的行，见 internal/platform/pornhub/parse.go 的 profileDropLabels。
+var neverStoreProfileLabels = []string{
+	"职业状态", "工作起始",
+	"career status", "career start",
+}
+
+// DropProfileLabel 判断这一行资料是否根本不该入库（任何平台都不收）。
+func DropProfileLabel(label string) bool {
+	l := strings.ToLower(strings.TrimSpace(label))
+	if l == "" {
+		return false
+	}
+	for _, bad := range neverStoreProfileLabels {
+		if strings.Contains(l, bad) {
+			return true
+		}
+	}
+	return false
+}
+
+// CleanProfile 返回过掉 neverStoreProfileLabels 的副本，其余行顺序不变。
+// 老数据里可能还留着这些行，写入与启动清理都走这里。
+func CleanProfile(rows []ProfileField) []ProfileField {
+	if len(rows) == 0 {
+		return rows
+	}
+	out := make([]ProfileField, 0, len(rows))
+	for _, r := range rows {
+		if DropProfileLabel(r.Label) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 // urlishRe 认出简介里的网址：带协议的、带 www. 的，以及裸域名（onlyfans.com/xxx）。
 var urlishRe = regexp.MustCompile(`(?i)(?:https?://|www\.)\S+|\b[\w-]+\.(?:com|net|org|xxx|tv|me|co|link|cc|vip)\S*`)
 

@@ -155,6 +155,8 @@ func TestParsePerformerProfileAndSocial(t *testing.T) {
   </ul></div>
   <div class="js-infoText"><div class="content-columns">
     <div class="infoPiece"><span>性别:</span><span itemprop="gender" class="smallInfo">女性</span></div>
+    <div class="infoPiece"><span>职业状态:</span><span class="smallInfo">活跃的</span></div>
+    <div class="infoPiece"><span>工作起始及结束时间:</span><span class="smallInfo">2011 至 今</span></div>
     <div class="infoPiece"><span>出身地:</span><span itemprop="birthPlace" class="smallInfo">Czech Republic</span></div>
     <div class="infoPiece"><span>三围:</span><span itemprop="measurements" class="smallInfo">35-25-36</span></div>
     <div class="infoPiece"><span>身高:</span><span itemprop="height" class="smallInfo">5&#039; 6&quot; (167cm)</span></div>
@@ -173,7 +175,8 @@ func TestParsePerformerProfileAndSocial(t *testing.T) {
 	if p.Bio != "Love being here from time to time." {
 		t.Errorf("简介应取 .aboutMeSection 正文，实际 %q", p.Bio)
 	}
-	// 身高/三围已经被认出来变成 p.Body，资料行里不再重复；性癖两项 + 播放量/已看视频照旧丢掉。
+	// 身高/三围已经被认出来变成 p.Body，资料行里不再重复；性癖两项 + 播放量/已看视频照旧丢掉；
+	// 「职业状态 / 工作起始及结束时间」是全站口径不入库（model.DropProfileLabel）。
 	wantProfile := [][2]string{
 		{"性别", "女性"},
 		{"出身地", "Czech Republic"},

@@ -485,3 +485,7 @@ type ProfileProvider interface {
 换取资料完整度；代价是两家平台的站内统计与 Pornhub 的编排方式不同步
 （例如 Pornhub 的「排名 #269」出现在 beeg 的艺人页上）。
 
+**资料行的取舍口径**：`model.DropProfileLabel` 里那几行（职业状态、工作起始及结束时间）
+是**任何平台都不入库**的——解析时丢、写库时再兜一次、老数据在启动时清一次
+（`store.pruneProfileLabels`，幂等）。要改这个口径只需改 `model` 里那一张表，不用重扫艺人。
+

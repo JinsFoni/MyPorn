@@ -132,4 +132,42 @@ func TestBioIsJustALink(t *testing.T) {
 	}
 }
 
+// 「职业状态 / 工作起始及结束时间」任何平台都不入库。
+func TestDropProfileLabel(t *testing.T) {
+	drop := []string{
+		"职业状态", "工作起始及结束时间", "Career Status", "career start and end time",
+		" 职业状态 ",
+	}
+	for _, l := range drop {
+		if !DropProfileLabel(l) {
+			t.Errorf("%q 应被丢掉", l)
+		}
+	}
+	keep := []string{"感情状态", "性别", "出身地", "发色", "身高", "Career", "状态", ""}
+	for _, l := range keep {
+		if DropProfileLabel(l) {
+			t.Errorf("%q 不该被丢掉", l)
+		}
+	}
+}
+
+func TestCleanProfile(t *testing.T) {
+	in := []ProfileField{
+		{Label: "感情状态", Value: "单身"},
+		{Label: "职业状态", Value: "活跃的"},
+		{Label: "工作起始及结束时间", Value: "2011 至 今"},
+		{Label: "性别", Value: "女性"},
+	}
+	out := CleanProfile(in)
+	if len(out) != 2 || out[0].Label != "感情状态" || out[1].Label != "性别" {
+		t.Fatalf("应只剩 2 行且顺序不变，实际 %+v", out)
+	}
+	if len(in) != 4 {
+		t.Error("不该改动入参")
+	}
+	if CleanProfile(nil) != nil {
+		t.Error("空输入应原样返回")
+	}
+}
+
 func intPtr(n int) *int { return &n }
