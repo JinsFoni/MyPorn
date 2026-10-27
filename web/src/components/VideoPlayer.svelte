@@ -40,6 +40,8 @@
     engine: 'hls' | 'native';
     poster?: string | null;
     title: string;
+    /** 影片标识（变了就把抓帧缓存清掉，别拿上一部片子的画面垫底） */
+    videoKey?: string | number;
     /** 清晰度列表（降序）；只有一条或为空时不显示菜单按钮 */
     qualities?: QualityOption[];
     selectedQuality?: string | null;
@@ -58,6 +60,7 @@
     engine,
     poster = null,
     title,
+    videoKey = '',
     qualities = [],
     selectedQuality = null,
     onSelectQuality,
@@ -116,8 +119,8 @@
   let ambient = $state(readAmbient());
   /** 媒体还没法出画面：盖一层「糊封面 + 加载环」，等 playing/canplay 就收掉 */
   let buffering = $state(true);
-  /** 媒体已经能出画面了吗：能的话加载态就只糊当前这一帧，不再拿封面顶上 */
-  let hasFrame = $state(false);
+  /** 加载态用的底图：最近一帧的缩略图（data URL）。没有就退回封面 */
+  let veilArt = $state<string | null>(null);
   /** 底部控制条里的自定义按钮（清晰度 / 氛围模式），皮肤 shadow root 渲染好之后才挂得上 */
   let bar: PlayerBar | null = null;
   let barTries = 0;
@@ -225,31 +228,87 @@
   /** 缓冲要持续一小会儿才盖上去：普通拖动进度条时数据就在本地，盖一下反而闪 */
   let busyTimer: number | undefined;
 
+  /**
+   * 自己抓最后一帧当加载态的底图。
+   *
+   * 本来想省事，用 `backdrop-filter` 让浏览器把下面那一帧糊掉——但视频是独立的合成层，
+   * 能不能被 backdrop 采样到看浏览器/解码路径，实测同一串操作有时糊出上一帧、有时糊出黑的，
+   * 拖动进度条正好撞上「黑」，就成了用户看到的黑屏。所以这里每 250ms 把画面缩到 320×180
+   * 存一份，缓冲时拿它当底图：一定糊的是真画面，跟合成器怎么排布无关。
+   */
+  let snapCanvas: HTMLCanvasElement | null = null;
+  let snapAt = 0;
+  const SNAP_W = 320;
+  const SNAP_H = 180;
+
+  function captureFrame(): void {
+    const video = boundVideo;
+    if (!video || video.readyState < 2 || video.videoWidth === 0) return;
+    const now = performance.now();
+    if (now - snapAt < 250) return;
+    snapAt = now;
+    if (!snapCanvas) {
+      snapCanvas = document.createElement('canvas');
+      snapCanvas.width = SNAP_W;
+      snapCanvas.height = SNAP_H;
+    }
+    try {
+      snapCanvas.getContext('2d')?.drawImage(video, 0, 0, SNAP_W, SNAP_H);
+    } catch {
+      // 画不进去就维持上一张
+    }
+  }
+
+  /** 盖上加载层之前把快照定格成图片（只在每次开始缓冲时编码一次，很便宜） */
+  function freezeArt(): void {
+    if (!snapCanvas) return;
+    try {
+      veilArt = snapCanvas.toDataURL('image/jpeg', 0.55);
+    } catch {
+      veilArt = null;
+    }
+  }
+
+  /** 换影片（同一路由实例换了 id）时清掉抓帧缓存：新片子的第一次缓冲不该看到上一部的画面 */
+  $effect(() => {
+    void videoKey;
+    snapCanvas = null;
+    snapAt = 0;
+    veilArt = null;
+  });
+
+  function beginBuffering(): void {
+    if (buffering) return;
+    freezeArt();
+    buffering = true;
+  }
+
   function mediaReady(): void {
     if (busyTimer !== undefined) {
       clearTimeout(busyTimer);
       busyTimer = undefined;
     }
-    hasFrame = true;
     buffering = false;
   }
 
   /** 兜底：时间在走就说明数据是通的，别让加载态一直挂着（个别引擎只发 waiting 不发 playing） */
   function mediaTicking(): void {
+    captureFrame();
     if (buffering && boundVideo !== null && boundVideo.readyState >= 3) mediaReady();
   }
 
   function mediaBusy(): void {
+    // 卡住的那一刻画面还在（进度条拖过去也是），先抓一眼再盖上
+    captureFrame();
     if (busyTimer !== undefined) return;
     busyTimer = window.setTimeout(() => {
       busyTimer = undefined;
-      buffering = true;
+      beginBuffering();
     }, 240);
   }
 
-  /** 换片源会把画面清掉：退回「糊封面」，别让中间那截黑屏露出来 */
+  /** 换片源会把画面清掉：盖上糊底图，别让中间那截黑屏露出来 */
   function mediaCleared(): void {
-    hasFrame = false;
     mediaBusy();
   }
 
@@ -265,6 +324,8 @@
     video.addEventListener('loadeddata', mediaReady);
     video.addEventListener('waiting', mediaBusy);
     video.addEventListener('timeupdate', mediaTicking);
+    // 暂停状态下的跳转不会有 waiting：跳完抓一帧，下次缓冲才有正确底图
+    video.addEventListener('seeked', captureFrame);
     video.addEventListener('emptied', mediaCleared);
     video.addEventListener('loadstart', mediaCleared);
   }
@@ -282,6 +343,7 @@
     video.removeEventListener('loadeddata', mediaReady);
     video.removeEventListener('waiting', mediaBusy);
     video.removeEventListener('timeupdate', mediaTicking);
+    video.removeEventListener('seeked', captureFrame);
     video.removeEventListener('emptied', mediaCleared);
     video.removeEventListener('loadstart', mediaCleared);
   }
@@ -314,7 +376,7 @@
       pendingSeek = Number.isFinite(at) && at > 1 ? at : 0;
       pendingPlay = !s.paused;
       // 换片源（切清晰度 / 切代理）必然要重新缓冲，立刻盖上，别让中间那截黑屏露出来
-      buffering = true;
+      beginBuffering();
     }
     applySource(el, { src, type });
     if (!switching) {
@@ -669,10 +731,10 @@
             <video bind:this={mediaEl} playsinline preload="metadata" aria-label={title}></video>
           {/if}
 
-          <!-- 加载态：糊掉的封面垫底 + 中间转环（皮肤的大播放键在它上面，照样能点） -->
+          <!-- 加载态：糊掉的封面 / 刚才那一帧垫底 + 中间转环（皮肤的大播放键在它上面，照样能点） -->
           {#if buffering}
             <div class="video-veil-host" transition:fade={{ duration: 200 }}>
-              <VideoLoading poster={hasFrame ? null : poster} />
+              <VideoLoading poster={veilArt ?? poster} />
             </div>
           {/if}
 
