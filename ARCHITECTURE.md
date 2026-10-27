@@ -244,6 +244,10 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
   - **什么时候收放**：`canplay` / `playing` / `loadeddata` 立刻收（淡出 200ms）；`waiting` 要持续 240ms 才盖上来，
     免得普通拖动（数据就在本地）也闪一下；`timeupdate` 且 `readyState >= 3` 作为兜底，个别引擎只发 `waiting` 不发 `playing`。
     自动播放被浏览器拦下时停在 `canplay`——就是海报 + 皮肤的大播放键，不能一直转圈。
+  - **跳进已缓冲的那一段不盖**：`waiting` 里先看目标时间（`currentTime`，拖动时就是手指所在的位置）在不在 `video.buffered` 里
+    （留 0.3s 尾巴余量，正好卡在缓冲区末尾时最后几帧可能还没解出来）。在的话把等待门槛从 240ms 放宽到 1.2s，
+    并且定时器真正触发时只要 `readyState >= 3` 就直接放弃——数据在本地，这一跳本来就该「接着放」，
+    把一次毫无停顿的跳转说成「正在缓冲」比不盖还糟。真卡住（解码没跟上）才轮到加载态兜底。
   这一层 `pointer-events: none`，盖着的时候暂停/全屏照样点得到。
   **底层的 `.video-veil` 底色不能写成不透明**（`var(--color-ink)`）：那就等于把底图整个盖掉，缓冲时看见就是一整块黑。
   **这一层的 `z-index` 只能是 5，必须压在控制条下面**：皮肤的控制条内容 `z-index: 30`、它那条暗角是 `10`，
@@ -254,8 +258,15 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
   （和 `playerBar` 注入按钮同一招；非分层样式压得住它的 `@layer`）。两者吃的是同一批事件（`waiting` / `seeking`），关掉不丢状态。
 - **错误处理**：皮肤自带错误弹窗会跟本站的「重新解析 / 用代理播放」浮层打架，所以订阅 `store.error` 后立刻
   `dismissError()`，把文案交给页面自己的浮层。
-- **快捷键**：皮肤自带（空格/K、←→ ±10s、↑↓ 音量、M 静音、F 全屏、单击暂停、双击左右 ±10s、双击中间全屏）；
-  页面再挂一个 window 监听，让焦点不在播放器里时也能用同一套键。
+- **快捷键**：皮肤自带一套（空格/K、←→、↑↓、M 静音、F 全屏、0-9 百分比、单击暂停、双击左右 ±10s、双击中间全屏），
+  挂在皮肤 shadow root 的 `.media-container` 上；页面再挂一个 window 监听，让焦点不在播放器里时也能用同一套键。
+  两侧的步长统一由 `SEEK_STEP`／`VOLUME_STEP` 两个常量决定，现在是 **←→ ±5s、↑↓ ±10%**（`j`/`l` 跟箭头同一个动作，一起改）：
+  - 皮肤那套是 shadow root 里一串 `<media-hotkey keys= action= value=>`，`value` 就是单次步长，不写就走包里的默认值
+    （`seekStep` 按方向 ±10s、`volumeStep` ±5%，见 `@videojs/core` 的 `getMediaInputActionValue`）。所以不用禁用它重写一套，
+    只要在 `tuneSkin()` 里按 `keys` 把 `value` 改成站点的值；元素自己 `update()` 会重新注册监听。
+  - 「这次按键归谁管」看**合成路径里有没有皮肤那个 shadow root**，不能看 `host.contains()`：焦点在皮肤内部控件上时
+    事件会穿过 shadow root（皮肤管，页面监听直接返回）；但焦点落在 `<video-skin>` 宿主元素本身时（点过播放器再点空白处），
+    事件根本不进 shadow DOM，皮肤那套监听不会触发——按 `contains` 判断会连页面监听一起跳过，表现为**左右键完全没反应**。
 - **音量记忆**：存 `localStorage` 的 `myporn.player.volume`（`{volume, muted}`），但必须等媒体就绪（`canPlay`）再套用，
   否则会被播放器默认的满音量盖掉，并且会把默认值写回去污染记忆。**没存过也要从第一下就开始记**：媒体就绪时
   把当前值当作基线写进 `lastVolume`，否则「第一次调音量」这条路根本走不到写入分支。

@@ -265,7 +265,7 @@
                     <button type="button" class="btn btn-primary" onclick={switchToProxy}>用代理播放</button>
                   {/if}
                 </div>
-                <p class="text-meta text-dim">空格 暂停 · ← → 快退快进 10 秒 · F 全屏 · M 静音</p>
+                <p class="text-meta text-dim">空格 暂停 · ← → 快退快进 5 秒 · ↑ ↓ 音量 · F 全屏 · M 静音</p>
               </div>
             {/if}
           {/snippet}
@@ -381,7 +381,7 @@
         </a>
 
         <p class="mt-4 text-meta leading-relaxed text-dim">
-          播放器快捷键：空格/K 播放暂停 · ← → 快退快进 10 秒 · ↑ ↓ 音量 · M 静音 · F 全屏；画面单击暂停，双击左右两侧快退快进、双击中间全屏。
+          播放器快捷键：空格/K 播放暂停 · ← → 快退快进 5 秒 · ↑ ↓ 音量（10%） · M 静音 · F 全屏；画面单击暂停，双击左右两侧快退快进、双击中间全屏。
         </p>
       </aside>
     </div>

@@ -99,6 +99,13 @@
   const VOLUME_KEY = 'myporn.player.volume';
   const AMBIENT_KEY = 'myporn.ambient';
 
+  /**
+   * 快捷键的步长：←→ 一次 5 秒（皮肤默认 10 秒太长——一按就跳掉整整一场戏的开头），
+   * ↑↓ 一次 10% 音量。皮肤里那一串 `<media-hotkey>` 和下面窗口级的监听共用这两个数。
+   */
+  const SEEK_STEP = 5;
+  const VOLUME_STEP = 0.1;
+
   /** 换片源后要恢复的进度/播放状态 */
   let pendingSeek = 0;
   let pendingPlay = false;
@@ -213,6 +220,7 @@
    * 中间和上面保持原亮度。`--media-*` 是皮肤的公开调色口，改它比覆盖它的内部类名稳。
    */
   function tuneSkin(): void {
+    tuneHotkeys();
     hideSkinSpinner();
     const container = skinEl?.shadowRoot?.querySelector('.media-container');
     if (!(container instanceof HTMLElement)) return;
@@ -220,6 +228,32 @@
       '--media-controls-gradient',
       'linear-gradient(to top, rgb(0 0 0 / 0.3), rgb(0 0 0 / 0) 26%)',
     );
+  }
+
+  /**
+   * 皮肤自带的快捷键是「←→ 一次 10s、↑↓ 一次 5% 音量」。本站要的是 **←→ 5s、↑↓ 10%**。
+   * 它落成 shadow root 里一串 `<media-hotkey keys= action= value=>`，`value` 就是这一步的量
+   * （不写就走包里的默认值：`seekStep` 按方向 ±10、`volumeStep` ±0.05，见
+   * `@videojs/core` 的 `getMediaInputActionValue`）。所以照着键位把 `value` 改掉就行，
+   * 元素自己 `update()` 会重新注册监听，不用手动解绑。
+   * `j` / `l` 跟左右箭头是同一个动作（快退 / 快进），一起改成 5s——同一件事不该有两个步长。
+   */
+  function tuneHotkeys(): void {
+    const root = skinEl?.shadowRoot;
+    if (!root) return;
+    const steps: Record<string, number> = {
+      arrowright: SEEK_STEP,
+      l: SEEK_STEP,
+      arrowleft: -SEEK_STEP,
+      j: -SEEK_STEP,
+      arrowup: VOLUME_STEP,
+      arrowdown: -VOLUME_STEP,
+    };
+    for (const el of root.querySelectorAll<HTMLElement & { value?: number }>('media-hotkey')) {
+      const step = steps[(el.getAttribute('keys') ?? '').toLowerCase()];
+      if (step === undefined || el.value === step) continue;
+      el.value = step;
+    }
   }
 
   /**
@@ -295,6 +329,21 @@
     veilArt = null;
   });
 
+  /**
+   * 目标时间是不是已经在缓冲区里。
+   *
+   * 拖进度条拖回**已经缓冲过**的那一段时，数据就在本地，解出来就能立刻接着放——这时候还盖一层
+   * 「正在缓冲」的糊图，等于把本来毫无停顿的一次跳转说成卡了。所以命中缓冲区就**不许**盖。
+   * 留 0.3s 余量：正好落在缓冲区尾巴上时，最后几帧可能还没解出来，那种情况仍按缓冲处理。
+   */
+  function bufferedAt(video: HTMLVideoElement, time: number): boolean {
+    const ranges = video.buffered;
+    for (let i = 0; i < ranges.length; i += 1) {
+      if (time >= ranges.start(i) && time <= ranges.end(i) - 0.3) return true;
+    }
+    return false;
+  }
+
   function beginBuffering(): void {
     if (buffering) return;
     freezeArt();
@@ -315,14 +364,27 @@
     if (buffering && boundVideo !== null && boundVideo.readyState >= 3) mediaReady();
   }
 
+  /**
+   * 要卡多久才盖上加载态。普通情况 240ms——数据就在本地的一次普通拖动，不该闪一下糊图。
+   * 命中缓冲区时更久（1.2s）：这种跳转本来就该「直接接着放」，只有真出了意外（解码卡住）
+   * 才轮到加载态兜底，别把一次正常的跳转说成「正在缓冲」。
+   */
+  const BUSY_DELAY = 240;
+  const BUSY_DELAY_BUFFERED = 1200;
+
   function mediaBusy(): void {
     // 卡住的那一刻画面还在（进度条拖过去也是），先抓一眼再盖上
     captureFrame();
     if (busyTimer !== undefined) return;
+    const video = boundVideo;
+    const local = video !== null && bufferedAt(video, video.currentTime);
     busyTimer = window.setTimeout(() => {
       busyTimer = undefined;
+      const now = boundVideo;
+      // 这一刻再看一眼：这段时间里画面已经回来了（跳进缓冲区、或者只是抖了一下）就别盖
+      if (now !== null && now.readyState >= 3) return;
       beginBuffering();
-    }, 240);
+    }, local ? BUSY_DELAY_BUFFERED : BUSY_DELAY);
   }
 
   /** 换片源会把画面清掉：盖上糊底图，别让中间那截黑屏露出来 */
@@ -661,10 +723,13 @@
   /** 页面级快捷键：焦点不在播放器里时也能用（在播放器里由皮肤自己的 hotkey 接管，这里不重复处理） */
   function onKeydown(event: KeyboardEvent): void {
     const s = store();
-    const host = playerEl;
-    if (!s || !host) return;
-    // 皮肤控件和我们的两个按钮都在 shadow root 里，`contains` 跨不过 shadow 边界，所以看合成路径
-    if (event.composedPath().some((node) => node instanceof Node && host.contains(node))) return;
+    if (!s) return;
+    // 皮肤自己有一套 hotkey，挂在 `.media-container` 上。判断「这次按键归不归它管」要看**合成路径里有没有
+    // 那个 shadow root**：焦点在皮肤内部的按钮上时路径会穿过 shadow root（它管，我们不重复处理）；
+    // 而焦点落在 `<video-skin>` 这个宿主元素本身时（点过播放器又按 Tab / 点空白处），事件根本不进 shadow DOM，
+    // 皮肤那套监听不会触发——用 `host.contains()` 判断会把这情形一起漏掉，结果左右键完全没反应。
+    const root = skinEl?.shadowRoot;
+    if (root && event.composedPath().includes(root)) return;
     const target = event.target;
     if (target instanceof HTMLElement) {
       const tag = target.tagName;
@@ -675,6 +740,12 @@
     const seek = (delta: number): void => {
       const max = s.duration > 0 ? s.duration : s.currentTime + Math.abs(delta);
       void s.seek(Math.min(max, Math.max(0, s.currentTime + delta))).catch(() => {});
+    };
+
+    /** 音量按 10% 一档走：浮点累加会漂（0.30000000000000004），所以先取整再夹回 0~1 */
+    const nudgeVolume = (delta: number): void => {
+      const next = Math.round((s.volume + delta) * 100) / 100;
+      s.setVolume(Math.min(1, Math.max(0, next)));
     };
 
     switch (event.key) {
@@ -693,19 +764,19 @@
         break;
       case 'ArrowLeft':
         event.preventDefault();
-        seek(-10);
+        seek(-SEEK_STEP);
         break;
       case 'ArrowRight':
         event.preventDefault();
-        seek(10);
+        seek(SEEK_STEP);
         break;
       case 'ArrowUp':
         event.preventDefault();
-        s.setVolume(Math.min(1, Math.round((s.volume + 0.1) * 10) / 10));
+        nudgeVolume(VOLUME_STEP);
         break;
       case 'ArrowDown':
         event.preventDefault();
-        s.setVolume(Math.max(0, Math.round((s.volume - 0.1) * 10) / 10));
+        nudgeVolume(-VOLUME_STEP);
         break;
       case 'm':
       case 'M':
