@@ -616,7 +616,7 @@
     <button type="button" class="absolute inset-0 bg-ink/85 backdrop-blur-sm" aria-label="关闭" onclick={closeDetail}
     ></button>
     <div
-      class="relative z-10 max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-sheet p-4 sm:max-w-3xl sm:rounded-2xl"
+      class="relative z-10 max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-sheet p-4 sm:max-w-4xl sm:rounded-2xl md:max-w-5xl lg:max-w-[min(92vw,84rem)]"
     >
       <div class="flex items-start justify-between gap-3">
         <h2 class="text-title font-medium leading-snug text-fg">{v.title}</h2>
