@@ -221,7 +221,7 @@
    */
   function tuneSkin(): void {
     tuneHotkeys();
-    hideSkinSpinner();
+    patchSkin();
     const container = skinEl?.shadowRoot?.querySelector('.media-container');
     if (!(container instanceof HTMLElement)) return;
     container.style.setProperty(
@@ -257,16 +257,30 @@
   }
 
   /**
-   * 皮肤自带一个「缓冲中」指示器：半透明底 + 它自己的转环，压在 `z-index: 30`。
-   * 加载态已经交给 `.video-veil` 统一接管，两个环会叠在一起、粗细和转速还不一样，
-   * 所以把皮肤那个按掉。两者是同一批事件喂出来的（waiting / seeking），按掉不会丢状态。
+   * 皮肤的两处内伤，一段 `<style>` 一起打补丁（这两处都没有 `--media-*` 出口，只能覆盖它的
+   * 类名；`.media-slider-buffer` / `.media-buffering-indicator` 是它稳定的公开结构）。
+   *
+   * ① 皮肤自带的「缓冲中」指示器：半透明底 + 它自己的转环，压在 `z-index: 30`。加载态已经
+   *    交给 `.video-veil` 统一接管，两个环会叠在一起、粗细和转速还不一样，所以把皮肤那个
+   *    按掉。两者是同一批事件喂出来的（waiting / seeking），按掉不会丢状态。
+   * ② **进度条上根本看不出缓冲到哪**：默认皮肤把轨槽 `.media-slider-track:before` 和已缓冲
+   *    `.media-slider-buffer:before` 写成同一个 `color-mix(in oklab, currentcolor 20%,
+   *    transparent)`，两层又完全重合、圆角和高度都一样，于是「已缓冲」这层跟空槽同色，等于
+   *    不存在。实测一条 684 秒的片子稳定缓冲在 25–32 秒，只有总长的 4.4%（466px 的轨道上
+   *    约 20px），这点宽度再跟底色一个颜色，就是用户说的「当前播放位置后面基本没显示缓冲」。
+   *    把已缓冲提到 62%：空槽 20% → 已缓冲 62% → 已播 100%，同一根白色轴上三档分得开，
+   *    也不破坏单色调。45% 实测还是太轻——轨道直接压在画面上，亮帧时 45% 与 20% 都糊成一片
+   *    浅色，62% 才在亮帧/暗帧两边都读得出来。
    */
-  function hideSkinSpinner(): void {
+  function patchSkin(): void {
     const root = skinEl?.shadowRoot;
-    if (!root || root.querySelector('style[data-myporn-spinner]')) return;
+    if (!root || root.querySelector('style[data-myporn-skin]')) return;
     const style = document.createElement('style');
-    style.dataset.mypornSpinner = '';
-    style.textContent = '.media-buffering-indicator{display:none !important}';
+    style.dataset.mypornSkin = '';
+    style.textContent = [
+      '.media-buffering-indicator{display:none !important}',
+      '.media-slider-buffer:before{background-color:color-mix(in oklab,currentcolor 62%,transparent) !important}',
+    ].join('\n');
     root.append(style);
   }
 
