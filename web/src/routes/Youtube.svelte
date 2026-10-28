@@ -13,7 +13,6 @@
   import InfiniteList from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import YtCard from '../components/YtCard.svelte';
-  import SocialTabs from '../components/SocialTabs.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import VideoLoading from '../components/VideoLoading.svelte';
   import { api, messageFor } from '../lib/api';
@@ -465,9 +464,10 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="flex flex-col gap-4">
-  <!-- 顶部：与「动态」共用的分段切换 + 主动作 -->
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <SocialTabs active="youtube" />
+  <!-- 顶部：只有主动作。「动态 / YouTube」的分段切换只留在这条流的入口（/moments）：
+       进了 YouTube 以后，回「动态」走侧边栏（手机上走底栏第 2 格）就行，
+       两处都给反而像两个页面互相抢入口。 -->
+  <div class="flex flex-wrap items-center justify-end gap-3">
     <div class="flex items-center gap-2">
       {#if unseenTotal > 0}
         <button
