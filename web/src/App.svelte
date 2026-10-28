@@ -75,8 +75,10 @@
     discover: '',
     downloads: '',
     moments: '动态',
-    youtube: 'YouTube',
-    bilibili: 'B 站',
+    // YouTube / B 站这两页自己渲染页头（TopBar）：标题那一行右侧要放页内动作
+    // （「全部标为已看 / 添加频道」这类按钮的状态住在页面里），由 AppShell 统一渲染就没法接上。
+    youtube: '',
+    bilibili: '',
     manage: '管理',
     video: '',
     settings: '',

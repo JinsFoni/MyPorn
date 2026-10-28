@@ -19,6 +19,7 @@
   import { onMount } from 'svelte';
   import InfiniteList from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
+  import TopBar from '../components/TopBar.svelte';
   import VideoCard from '../components/VideoCard.svelte';
   import PlatformIcon from '../components/PlatformIcon.svelte';
   import { api, messageFor } from '../lib/api';
@@ -222,29 +223,30 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex flex-col gap-4">
-  <!-- 顶部：只有主动作。和 YouTube 一样，不在页内再放「动态 / YouTube / B 站」的切换：
-       那是 /moments 这个入口的事（桌面走侧边栏，手机上走底部第 2 格）。 -->
-  <div class="flex flex-wrap items-center justify-end gap-3">
-    <div class="flex items-center gap-2">
-      {#if unseenTotal > 0}
-        <button
-          type="button"
-          class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
-          onclick={() => void markAllSeen()}
-        >
-          {filterChannel === null ? '全部标为已看' : '这位标为已看'}
-        </button>
-      {/if}
+<!-- 页头自己画：「全部标为已看 / 添加 UP 主」要待在标题那一行，和 YouTube 那页同构。
+     这两个按钮的状态（未读总数、添加弹窗）都住在本页，所以标题由本页渲染，见 App.svelte 的 DEFAULT_TITLE。 -->
+<TopBar title="B 站">
+  {#snippet actions()}
+    {#if unseenTotal > 0}
       <button
         type="button"
-        class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
-        onclick={openAdd}
+        class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
+        onclick={() => void markAllSeen()}
       >
-        添加 UP 主
+        {filterChannel === null ? '全部标为已看' : '这位标为已看'}
       </button>
-    </div>
-  </div>
+    {/if}
+    <button
+      type="button"
+      class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
+      onclick={openAdd}
+    >
+      添加 UP 主
+    </button>
+  {/snippet}
+</TopBar>
+
+<div class="flex flex-col gap-4">
 
   <!-- 未登录：这不是故障，是 B 站的规则（未登录只给 720P / 480P）。 -->
   {#if health && !health.hasCookie}

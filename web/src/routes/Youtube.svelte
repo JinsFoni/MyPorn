@@ -11,6 +11,7 @@
    */
   import { onMount } from 'svelte';
   import InfiniteList from '../components/InfiniteList.svelte';
+  import TopBar from '../components/TopBar.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import YtCard from '../components/YtCard.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
@@ -487,30 +488,31 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex flex-col gap-4">
-  <!-- 顶部：只有主动作。「动态 / YouTube」的分段切换只留在这条流的入口（/moments）：
-       进了 YouTube 以后，回「动态」走侧边栏（手机上走底栏第 2 格）就行，
-       两处都给反而像两个页面互相抢入口。 -->
-  <div class="flex flex-wrap items-center justify-end gap-3">
-    <div class="flex items-center gap-2">
-      {#if unseenTotal > 0}
-        <button
-          type="button"
-          class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
-          onclick={() => void markAllSeen()}
-        >
-          全部标为已看
-        </button>
-      {/if}
+<!-- 页头自己画：「全部标为已看 / 添加频道」要待在标题那一行，而不是在页内单独占一行
+     （那一行原来只在右边飘着两个按钮，左边空着，看着像没画完）。
+     这两个按钮的状态（未读总数、添加弹窗）都住在本页，所以标题由本页渲染，见 App.svelte 的 DEFAULT_TITLE。 -->
+<TopBar title="YouTube">
+  {#snippet actions()}
+    {#if unseenTotal > 0}
       <button
         type="button"
-        class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
-        onclick={openAdd}
+        class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
+        onclick={() => void markAllSeen()}
       >
-        添加频道
+        全部标为已看
       </button>
-    </div>
-  </div>
+    {/if}
+    <button
+      type="button"
+      class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
+      onclick={openAdd}
+    >
+      添加频道
+    </button>
+  {/snippet}
+</TopBar>
+
+<div class="flex flex-col gap-4">
 
   <!-- yt-dlp 缺失/过期是这个功能最常见的故障，直接摆在页面上，不藏在设置里 -->
   {#if health && !health.found}
