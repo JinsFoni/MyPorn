@@ -846,7 +846,6 @@
                 poster={veilArt ?? poster}
                 {posterFallback}
                 kind={veilArt ? 'frame' : 'poster'}
-                hint={veilArt ? '' : '正在载入画面…'}
               />
             </div>
           {/if}

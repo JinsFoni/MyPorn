@@ -1,11 +1,15 @@
 <script lang="ts">
   /**
-   * 播放器加载态：一张垫底的图（封面，或者播放中缓冲时抓下来的那一帧）+ 中间转环 + 一行小字。
+   * 播放器加载态：一张垫底的图（封面，或者播放中缓冲时抓下来的那一帧）+ 中间一个转环。
    *
    * 为什么不用黑底 + 一行「正在解析播放地址…」：那片黑跟加载完的封面差得太远，一闪一换很晃眼；
    * 而等片源解析完、直接把封面原样铺满又很糊（源图本身只有几百像素宽，放到一千多像素就是糊的）。
    * 所以干脆顺着封面本来就糊这件事做：原尺寸模糊当背景（不放大，见 .video-veil-art 的注释），中间放加载环，
    * 视觉上就是「镜头正在对上焦」，从解析中一直过渡到真正出画面。
+   *
+   * **画面上一个字都不写**：转环自己说得清「还在等」，多一行「正在解析最高画质…」只是把注意力
+   * 从封面拽到一行灰字上。等得值不值得是封面和转环的事，不是文案的事。
+   * 读屏仍然有话说——`label` 走 sr-only，视觉上不占地方。
    *
    * 两种底图分开对待（`kind`）：
    *   - `poster`：还没出过任何一帧，垫的是平台封面。这一步**可能持续好几秒**（冷启动要跑一次
@@ -22,14 +26,11 @@
     posterFallback?: string | null;
     /** 底图是什么：`poster` 封面，`frame` 播放中抓下来的帧 */
     kind?: 'poster' | 'frame';
-    /** 转环下面那行小字（留空就只有转环） */
-    hint?: string;
-    /** 读屏文案 */
+    /** 读屏文案（视觉上不渲染：画面上只留转环） */
     label?: string;
   }
 
-  let { poster = null, posterFallback = null, kind = 'frame', hint = '', label = '正在加载播放器' }: Props =
-    $props();
+  let { poster = null, posterFallback = null, kind = 'frame', label = '正在加载播放器' }: Props = $props();
 
   /**
    * 当前该用哪张图。后端抓不到封面时发的是一张 1×1 的透明 PNG（不是 4xx），
@@ -82,9 +83,6 @@
   <svg class="video-veil-spinner" viewBox="0 0 24 24" aria-hidden="true">
     <circle cx="12" cy="12" r="9" />
   </svg>
-  {#if hint !== ''}
-    <span class="video-veil-hint">{hint}</span>
-  {/if}
   <span class="sr-only">{label}</span>
 </div>
 
@@ -106,34 +104,9 @@
     pointer-events: none;
   }
 
-  /* 转环和小字叠在同一格里，小字再用 margin 往下推一行 */
-  .video-veil-spinner,
-  .video-veil-hint {
+  .video-veil-spinner {
     position: relative;
     grid-area: 1 / 1;
-  }
-
-  .video-veil-hint {
-    margin-top: 6rem;
-    padding: 0.3rem 0.7rem;
-    border-radius: 999px;
-    font-size: 0.8125rem;
-    line-height: 1.1rem;
-    letter-spacing: 0.01em;
-    color: rgb(245 250 255 / 0.86);
-    /* 底下可能是很亮的封面：一层浅浅的暗底比加粗阴影稳，也不抢画面 */
-    background: rgb(2 4 8 / 0.42);
-    backdrop-filter: blur(4px);
-    text-shadow: 0 1px 2px rgb(2 4 8 / 0.6);
-    /* 一秒内就出画面（缓存命中、本地文件）时不该闪一行字出来，晚 0.4 秒再淡入 */
-    opacity: 0;
-    animation: video-veil-hint-in 260ms ease 400ms forwards;
-  }
-
-  @keyframes video-veil-hint-in {
-    to {
-      opacity: 1;
-    }
   }
 
   /* 不能靠 transform: scale 去盖 blur 的四周——原来那 1.08 会让缓冲时糊的这帧比播放中的画面
@@ -221,10 +194,6 @@
       50% {
         opacity: 0.3;
       }
-    }
-    .video-veil-hint {
-      animation: none;
-      opacity: 1;
     }
   }
 </style>

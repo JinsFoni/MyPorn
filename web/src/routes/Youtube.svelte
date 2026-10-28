@@ -716,7 +716,6 @@
               poster={v.posterUrl || v.thumbUrl}
               posterFallback={v.thumbUrl}
               kind="poster"
-              hint="正在解析最高画质…"
               label="正在解析最高画质"
             />
           {/if}
