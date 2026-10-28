@@ -107,6 +107,9 @@ func videoDTO(v *model.Video) map[string]any {
 			"id":   p.ID,
 			"name": p.Name,
 			"url":  p.URL,
+			// 头像跟着每一行一起给：B 站墙上每张卡左侧那颗圆头像就是 UP 主本人，
+			// 而「订阅艺人头像表」只拉得到非 B 站的那批（见 store/performers.go）。
+			"avatarUrl": imgProxy(p.Platform, p.AvatarURL),
 		})
 	}
 	return map[string]any{

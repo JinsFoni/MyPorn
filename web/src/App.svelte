@@ -50,6 +50,13 @@
     return momentsPage;
   }
 
+  /** B 站视频墙同样是独立一页，一样懒加载 */
+  let bilibiliPage: Promise<{ default: PlainPage }> | null = null;
+  function loadBilibili(): Promise<{ default: PlainPage }> {
+    bilibiliPage ??= import('./routes/Bilibili.svelte') as Promise<{ default: PlainPage }>;
+    return bilibiliPage;
+  }
+
   /** YouTube 视频墙同样懒加载（播放弹窗、下载入口都在里面） */
   let youtubePage: Promise<{ default: PlainPage }> | null = null;
   function loadYoutube(): Promise<{ default: PlainPage }> {
@@ -69,6 +76,7 @@
     downloads: '',
     moments: '动态',
     youtube: 'YouTube',
+    bilibili: 'B 站',
     manage: '管理',
     video: '',
     settings: '',
@@ -161,6 +169,15 @@
       {:then mod}
         {@const YoutubePage = mod.default}
         <YoutubePage />
+      {:catch}
+        <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
+      {/await}
+    {:else if shown.name === 'bilibili'}
+      {#await loadBilibili()}
+        <p class="py-16 text-center text-ui text-dim">正在载入…</p>
+      {:then mod}
+        {@const BilibiliPage = mod.default}
+        <BilibiliPage />
       {:catch}
         <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
       {/await}

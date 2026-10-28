@@ -93,12 +93,36 @@ ALTER TABLE video_streams ADD COLUMN audio_url TEXT NOT NULL DEFAULT '';
 `Variant.AudioURL` 是「这一档音轨在哪儿」，空表示单文件（其它平台全部为空，行为不变）。
 估算体积用「视频带宽 + 音轨带宽」（`download-options` 的 `estimatedBytes` 实测 150,153,388，实际文件 150,109,750，差 0.03%）。
 
-## 6. 界面
+## 6. 界面：独立一页，管理里也独立一格
 
-- 平台图标：`web/src/assets/platform/bilibili.svg`（粉色 `#FB7299` 小电视）；
-- 设置 → 侧边栏新增「B 站」（`bilibili` pane）：Cookie（SESSDATA）输入框 + 画质说明；「网络与代理」里多一行 B 站专用代理；
-- 平台命名：`bilibili`（与 pornhub / xhamster / beeg / youtube / xcom 并列），艺人 = UP 主；
-- 影片墙、详情页、播放器、下载对话框全部复用，没有 B 站专属组件。
+B 站不是「追一个艺人」，是「订阅一个内容源」。所以它和 YouTube（M6）一样**有自己的页面**，
+不混进「艺人」「关注」流，也不在「关注管理」的列表里：
+
+| 入口 | 位置 | 内容 |
+|---|---|---|
+| 视频墙 | 侧边栏「B 站」（`/bilibili`，徽标 = 未看条数） | UP 主胶囊 + 全部/未看 + 封面墙 + 「全部标为已看」「添加 UP 主」 |
+| 管理 | 管理 → 「B 站」页签（`/manage?tab=bilibili`） | 读数、Cookie/ffmpeg 状态、加 UP 主、逐位 UP 主的同步/回填续翻/下载未看/停用/删除 |
+| 设置 | 设置 → 「B 站」 | Cookie（SESSDATA）+ 画质说明；「网络与代理」里多一行 B 站专用代理 |
+| 手机 | 「动态」顶部的分段控件（动态 / YouTube / B 站） | 底部导航仍是 6 格，塞不下第 7 格 |
+
+墙上每张卡直接链到 `/video/{id}`：详情页就是那套现成的「播放 + 画质 + 下载」，
+B 站没有专属播放器组件，只有「每档画质的地址从哪来」这一件事不同（§4）。
+
+页面顶部固定摆两条「正常态说明」，因为它们看起来像故障、其实不是：
+
+- **没填 Cookie** → 「最高只能看 720P」+ 一个去填 SESSDATA 的入口；
+- **没有 ffmpeg** → 「480P 及以上是音画分轨，合流要它」；
+- 有 UP 主上次同步失败时，直接写出原因和「N 小时后再试」，并给一条去管理的路。
+
+「艺人」「关注」流这边做了三处收紧，保证同一件事只有一处入口：
+
+- `/api/videos`、`/api/videos/new`（关注流 / 新片）排除 `platform='bilibili'`；
+- `/api/performers`、`/api/subscriptions`（艺人页 / 关注管理）排除 B 站；
+- 管理页「关注艺人」那个读数也不含 UP 主（影片 / 落盘 / 占用仍是全库口径——那是「库里有什么」）。
+
+一个必须说明的取舍：**不再为 B 站另建表**。UP 主就是 `performers` 的一行、投稿就是 `videos` 的一行，
+这一页只是按平台重新组织取数（`internal/store/bilibili.go` 顶部写了理由），所以播放、下载、
+合流、限流退避全部复用已有实现，不存在「两套真相」。
 
 ## 7. 实测记录（2026-10-28，本机直连，未登录）
 
@@ -179,6 +203,10 @@ job 41 done      已完成 折1万次，会坏吗？iPhone Duo深度评测（143
 5. **首次回填很慢**：951 部投稿 ≈ 48 页，按 1 次 / 20 秒 + 限流退避，正常也要半小时以上，被限流则以「天」计。
    断点续跑，不会白跑；增量不受影响。
 6. **合流的第一下要等**：480P 起播首次 15 秒~2 分钟（取决于源站是 upos 还是 PCDN）。默认档是 durl，所以「点开就能看」不受影响。
+7. **B 站不出现在「艺人」「关注」里**（M7 补）：它有独立页面与管理页签。想把某位 UP 主当艺人追，
+   目前没有这条路——两边入口不同，混着摆只会让「关注」流的语义变模糊。
+8. **墙上没有「收藏」**：YouTube 那页有（`yt_videos.saved`），B 站这边 `videos` 表没有对应字段。
+   要加就得动通用表结构，本期不做。
 
 ## 9. 待验证（填了 Cookie 之后）
 
@@ -201,3 +229,9 @@ job 41 done      已完成 折1万次，会坏吗？iPhone Duo深度评测（143
 | `internal/store/migrations/0009_m7_bilibili.sql` | `video_streams.audio_url` |
 | `web/src/assets/platform/bilibili.svg` | 平台图标 |
 | `web/src/components/SettingsDialog.svelte` | 「B 站」分类（Cookie + 说明）+ 专用代理 |
+| `internal/store/bilibili.go` | UP 主列表 / 未看计数 / 已看 / 未看片单（按平台取数，不另建表） |
+| `internal/store/bilibili_test.go` | 4 个用例（UP 主计数含软删、已看作用域、平台过滤、统计与未看片单） |
+| `internal/httpapi/handlers_bilibili.go` | `/api/bilibili/*` 与 `/api/manage/bilibili` |
+| `internal/store/migrations/0010_m7b_bilibili_page.sql` | 投稿墙与未看角标的两个索引 |
+| `web/src/routes/Bilibili.svelte` | 视频墙（UP 主胶囊 + 筛选 + 添加） |
+| `web/src/components/SocialTabs.svelte` | 手机端「动态 / YouTube / B 站」分段控件 |

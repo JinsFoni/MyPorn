@@ -186,11 +186,15 @@ func (s *Store) FindPerformer(platform, performerID string) (*model.Performer, e
 }
 
 // ListPerformers 返回本地艺人，默认只返回已订阅（soft delete 的不含）。
+//
+// B 站不在这个列表里：UP 主是「订阅一个内容源」，不是「追一个艺人」，
+// 它的入口是独立的 /bilibili 页（见 store/bilibili.go 顶部）。这里排掉，
+// 「艺人」页和影片卡的头像表才不会被 B 站占掉位置。
 func (s *Store) ListPerformers(subscribedOnly bool, offset, limit int) ([]*model.Performer, int, error) {
-	where := "1=1"
+	where := "p.platform <> 'bilibili'"
 	args := []any{}
 	if subscribedOnly {
-		where = `EXISTS (SELECT 1 FROM subscriptions su WHERE su.performer_id = p.id AND su.deleted_at IS NULL)`
+		where += ` AND EXISTS (SELECT 1 FROM subscriptions su WHERE su.performer_id = p.id AND su.deleted_at IS NULL)`
 	}
 	var total int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM performers p WHERE `+where, args...).Scan(&total); err != nil {
@@ -338,10 +342,13 @@ func (s *Store) GetSubscriptionByPerformer(performerID int64) (*model.Subscripti
 }
 
 // ListSubscriptions 返回订阅及其艺人信息（按最近更新倒序）。
+//
+// B 站同样不在里面：「关注」流只管追艺人的片，「关注管理」也不该替 B 站列 UP 主
+// （那是 管理 → B 站 那一页签的事）。
 func (s *Store) ListSubscriptions() ([]*model.Performer, error) {
 	q := `SELECT ` + perfixedCols("p") + `, ` + subCols + `
 		FROM subscriptions su JOIN performers p ON p.id = su.performer_id
-		WHERE su.deleted_at IS NULL
+		WHERE su.deleted_at IS NULL AND p.platform <> 'bilibili'
 		ORDER BY COALESCE(su.last_sync_at, su.created_at) DESC`
 	rows, err := s.db.Query(q)
 	if err != nil {

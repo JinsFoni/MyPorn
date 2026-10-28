@@ -80,6 +80,11 @@ type PerformerRef struct {
 	ID   int64
 	Name string
 	URL  string
+	// AvatarURL 是平台头像原地址（未代理）。卡片左侧那颗圆头像用它：
+	// 「订阅艺人头像表」只覆盖非 B 站的艺人，B 站墙上只能靠随行带上的这一份。
+	AvatarURL string
+	// Platform 决定这张头像该带哪家的 Referer 去取（见 imgProxy）。
+	Platform string
 }
 
 // Variant 是 HLS 的一个清晰度变体。

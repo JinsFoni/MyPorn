@@ -17,6 +17,7 @@
       instagram: '',
       x: '',
       youtube: '',
+      bilibili: '',
     },
     namingTemplate: '{标题}',
     downloadConcurrency: 2,

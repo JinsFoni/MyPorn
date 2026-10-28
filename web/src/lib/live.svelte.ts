@@ -40,6 +40,10 @@ class LiveStore {
   ytUnseen = $state(0);
   /** 有新视频进来就 +1，YouTube 墙据此刷新 */
   ytVersion = $state(0);
+  /** B 站：还有多少条投稿没点开过（侧边栏角标） */
+  biliUnseen = $state(0);
+  /** 有新投稿进来就 +1，B 站墙据此刷新 */
+  biliVersion = $state(0);
   /** performerId -> 头像（影片卡左侧那颗圆头像；只拉一次订阅艺人） */
   performerAvatars = $state<Record<number, string>>({});
   private avatarsRequested = false;
@@ -91,6 +95,24 @@ class LiveStore {
     try {
       const res = await api.ytChannels();
       this.ytUnseen = res.stats.unseen;
+    } catch {
+      /* 忽略 */
+    }
+  }
+
+  bumpBili(): void {
+    this.biliVersion += 1;
+  }
+
+  setBiliUnseen(n: number): void {
+    this.biliUnseen = n;
+  }
+
+  /** 拉一次 B 站的未看计数（启动时与进入页面后用）。失败静默：角标不值得弹错。 */
+  async refreshBiliUnseen(): Promise<void> {
+    try {
+      const res = await api.biliChannels();
+      this.biliUnseen = res.stats.unseen;
     } catch {
       /* 忽略 */
     }

@@ -191,9 +191,12 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 			if !full {
 				autoIDs = append(autoIDs, vid)
 			}
+			// platform 是给前端分流用的：B 站有自己的页面，它的新投稿只能刷 B 站墙，
+			// 不能顺手把「关注」流也重拉一遍（那边根本不含 B 站）。
 			r.hub.Publish("video.new", map[string]any{
 				"videoId":     vid,
 				"performerId": perf.ID,
+				"platform":    item.Platform,
 				"title":       item.Title,
 			})
 		}

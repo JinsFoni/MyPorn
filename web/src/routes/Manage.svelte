@@ -6,13 +6,16 @@
   import StatTile from '../components/StatTile.svelte';
   import SubscriptionRow from '../components/SubscriptionRow.svelte';
   import { api, messageFor } from '../lib/api';
-  import { formatBytes, formatCount, formatDate, relativeTime } from '../lib/format';
+  import { formatBytes, formatCount, formatDate, relativeFuture, relativeTime } from '../lib/format';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
-  import { navigate } from '../lib/router.svelte';
+  import { navigate, router } from '../lib/router.svelte';
   import { ui } from '../lib/ui.svelte';
   import type {
+    BiliChannel,
+    BiliHealth,
+    BiliManageResponse,
     ManageCount,
     ManageResponse,
     ManageSubscription,
@@ -31,7 +34,7 @@
    * 页签不走地址栏：两个页签看的是同一份数据，只是展开方式不同，刷新回到「统计」即可。
    */
 
-  type Tab = 'stats' | 'subs' | 'moments' | 'youtube';
+  type Tab = 'stats' | 'subs' | 'moments' | 'youtube' | 'bilibili';
 
   let tab = $state<Tab>('stats');
   let data = $state<ManageResponse | null>(null);
@@ -51,6 +54,15 @@
   let ytBusyId = $state<number | null>(null);
   let ytAddUrl = $state('');
   let ytAddBusy = $state(false);
+
+  // ---- B 站管理（M7）：和 YouTube 同构，同样是切到页签才拉 ----
+  let bili = $state<BiliManageResponse | null>(null);
+  let biliLoading = $state(false);
+  let biliError = $state('');
+  let biliHealth = $state<BiliHealth | null>(null);
+  let biliBusyId = $state<number | null>(null);
+  let biliAddUrl = $state('');
+  let biliAddBusy = $state(false);
 
   // ---- 动态管理（M5）：单独一个接口，切到这个页签才去拉 ----
   let moments = $state<MomentsManageResponse | null>(null);
@@ -169,6 +181,104 @@
     }
   }
 
+  async function loadBili(): Promise<void> {
+    biliLoading = bili === null;
+    biliError = '';
+    try {
+      bili = await api.manageBili();
+    } catch (err) {
+      biliError = messageFor(err);
+    } finally {
+      biliLoading = false;
+    }
+    if (biliHealth === null) {
+      try {
+        biliHealth = await api.biliHealth();
+      } catch {
+        biliHealth = null;
+      }
+    }
+  }
+
+  /**
+   * 同步一位 UP 主。deep=false 走增量（只拉第 1 页，App 接口那一路）；
+   * deep=true 从断点继续往回翻历史（web 接口那一路，限流最紧）。
+   */
+  async function syncBili(channel: BiliChannel, deep: boolean): Promise<void> {
+    biliBusyId = channel.id;
+    try {
+      const res = await api.syncSubscription(channel.subscriptionId, deep ? 'full' : 'incremental');
+      live.toast(
+        res.jobId > 0
+          ? `已投递「${channel.name}」${deep ? '回填续翻' : '增量同步'}`
+          : `「${channel.name}」已经在队列里了`,
+        'info',
+      );
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      biliBusyId = null;
+    }
+  }
+
+  async function toggleBili(channel: BiliChannel): Promise<void> {
+    biliBusyId = channel.id;
+    try {
+      await api.updateSubscription(channel.subscriptionId, { enabled: !channel.enabled });
+      await loadBili();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      biliBusyId = null;
+    }
+  }
+
+  async function removeBili(channel: BiliChannel): Promise<void> {
+    if (!window.confirm(`取消订阅「${channel.name}」？只删记录，已下载到本地库的视频不会动。`)) return;
+    biliBusyId = channel.id;
+    try {
+      await api.unsubscribe(channel.subscriptionId);
+      live.toast('已取消订阅', 'success');
+      await loadBili();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      biliBusyId = null;
+    }
+  }
+
+  async function downloadBiliUnseen(channel: BiliChannel): Promise<void> {
+    biliBusyId = channel.id;
+    try {
+      const res = await api.biliDownloadUnseen(channel.id);
+      live.toast(
+        res.queued > 0 ? `已排队 ${String(res.queued)} 条投稿（下完进本地库）` : '这位 UP 主没有未看的投稿',
+        'info',
+      );
+      live.refreshDownloads(true);
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      biliBusyId = null;
+    }
+  }
+
+  async function addBiliChannel(): Promise<void> {
+    const raw = biliAddUrl.trim();
+    if (raw === '' || biliAddBusy) return;
+    biliAddBusy = true;
+    try {
+      const res = await api.subscribe({ url: raw });
+      live.toast(`已订阅 ${res.performer.name}，正在回填历史投稿`, 'success');
+      biliAddUrl = '';
+      await loadBili();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      biliAddBusy = false;
+    }
+  }
+
   async function loadMoments(): Promise<void> {
     momentsLoading = moments === null;
     momentsError = '';
@@ -249,6 +359,14 @@
 
   onMount(() => {
     void load();
+    // /manage?tab=bilibili 这样的深链接（B 站墙上的「去管理」按钮就发这个地址）。
+    const want = router.query.get('tab');
+    if (want === 'youtube' || want === 'bilibili' || want === 'moments' || want === 'subs') {
+      tab = want;
+      if (want === 'youtube') void loadYt();
+      else if (want === 'bilibili') void loadBili();
+      else if (want === 'moments') void loadMoments();
+    }
   });
 
   // 切到「动态管理」时按需拉一次
@@ -543,6 +661,21 @@
           YouTube
           {#if yt}
             <span class="ml-1 tabular-nums text-dim">{formatCount(yt.stats.channels)}</span>
+          {/if}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'bilibili'}
+          class={tabClass(tab === 'bilibili')}
+          onclick={() => {
+            tab = 'bilibili';
+            if (bili === null && !biliLoading) void loadBili();
+          }}
+        >
+          B 站
+          {#if bili}
+            <span class="ml-1 tabular-nums text-dim">{formatCount(bili.stats.channels)}</span>
           {/if}
         </button>
       </div>
@@ -918,7 +1051,7 @@
           </p>
         {/if}
       </div>
-    {:else}
+    {:else if tab === 'youtube'}
       <!-- YouTube 管理（M6）：频道列表 + yt-dlp 健康度 -->
       <div class="mt-3 flex flex-col gap-2">
         <div class="flex flex-wrap items-center gap-2">
@@ -1114,6 +1247,212 @@
           </ul>
           <p class="text-meta text-dim">
             下载是手动的：视频墙点「下载」，或这里点「下载未看」。下完就是本地库里一部普通影片（带 nfo，Emby 能刮到）。
+          </p>
+        {/if}
+      </div>
+    {:else}
+      <!-- B 站管理（M7）：UP 主列表 + Cookie / ffmpeg 状态。
+           和 YouTube 那一栏同构，区别是「健康度」换成了 B 站自己的两件事：
+           有没有 SESSDATA（决定能不能超过 720P）、有没有 ffmpeg（分轨档位靠它合流）。 -->
+      <div class="mt-3 flex flex-col gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-meta text-dim">
+            {#if bili}
+              共 {formatCount(bili.stats.channels)} 位 UP 主 · {formatCount(bili.stats.videos)} 条投稿 ·
+              {formatCount(bili.stats.unseen)} 条未看 · {formatCount(bili.stats.downloaded)} 条已落盘
+              {#if bili.stats.errors > 0}
+                · <span class="text-brick">异常 {formatCount(bili.stats.errors)} 位</span>
+              {/if}
+            {:else}
+              正在载入…
+            {/if}
+          </span>
+          <div class="ml-auto flex items-center gap-2">
+            <button type="button" class="btn btn-ghost h-8" onclick={() => void loadBili()}>刷新</button>
+            <button type="button" class="btn h-8" onclick={() => navigate('/bilibili')}>打开视频墙</button>
+          </div>
+        </div>
+
+        {#if biliHealth}
+          <div class="panel px-4 py-3">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta">
+              <span class={biliHealth.hasCookie ? 'text-sage' : 'text-brick'}>
+                {biliHealth.hasCookie ? 'Cookie 已配置（1080P 以上可用）' : '未填 Cookie（最高 720P）'}
+              </span>
+              <span class={biliHealth.ffmpegOk ? 'text-sage' : 'text-brick'}>
+                {biliHealth.ffmpegOk ? 'ffmpeg 可用（分轨档位能合流）' : 'ffmpeg 缺失，480P 及以上放不了'}
+              </span>
+              <span class="text-dim">{biliHealth.hasProxy ? '走代理' : '直连'}</span>
+            </div>
+            <div class="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                class="rounded-full bg-raise px-2.5 py-1 text-meta text-fg transition-colors hover:bg-panel"
+                onclick={() => {
+                  biliHealth = null;
+                  void loadBili();
+                }}
+              >
+                重新检查
+              </button>
+              <button type="button" class="text-meta text-dim hover:text-fg" onclick={() => ui.openSettings('bilibili')}>
+                打开 B 站设置
+              </button>
+            </div>
+          </div>
+        {/if}
+
+        <!-- 管理页是「一次性配好」的地方，加 UP 主不必跳回视频墙 -->
+        <form
+          class="flex flex-wrap items-center gap-2"
+          onsubmit={(event) => {
+            event.preventDefault();
+            void addBiliChannel();
+          }}
+        >
+          <input
+            bind:value={biliAddUrl}
+            class="field h-9 min-w-0 max-w-md flex-1"
+            type="text"
+            placeholder="UP 主主页链接（space.bilibili.com/<mid>）"
+            spellcheck="false"
+            autocomplete="off"
+            disabled={biliAddBusy}
+          />
+          <button type="submit" class="btn h-9" disabled={biliAddBusy || biliAddUrl.trim() === ''}>
+            {biliAddBusy ? '添加中…' : '添加 UP 主'}
+          </button>
+        </form>
+
+        {#if biliError}
+          <p class="panel px-4 py-3 text-ui text-brick" role="alert">{biliError}</p>
+        {:else if biliLoading || bili === null}
+          <div class="panel px-4 py-10 text-center text-ui text-dim">正在载入…</div>
+        {:else if bili.channels.length === 0}
+          <EmptyState
+            title="还没有订阅任何 UP 主"
+            hint="在上面贴一个 UP 主主页链接就能订阅；第一次会回填历史投稿。B 站限流很严，被限流会停在这一页、几小时后接着翻。"
+            icon="film"
+          >
+            {#snippet actions()}
+              <button type="button" class="btn btn-primary" onclick={() => navigate('/bilibili')}>去视频墙添加</button>
+            {/snippet}
+          </EmptyState>
+        {:else}
+          <ul class="panel divide-y divide-line">
+            {#each bili.channels as channel (channel.id)}
+              <li class="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                {#if channel.avatarUrl}
+                  <img
+                    src={imageUrl(channel.avatarUrl, 80) ?? ''}
+                    alt=""
+                    class="h-9 w-9 shrink-0 rounded-full object-cover"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                {:else}
+                  <span class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-raise text-meta text-dim">
+                    {channel.name.slice(0, 1).toUpperCase()}
+                  </span>
+                {/if}
+
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="truncate text-ui text-fg">{channel.name}</span>
+                    {#if !channel.enabled}
+                      <span class="shrink-0 rounded-full bg-raise px-1.5 text-meta text-dim">已停用</span>
+                    {/if}
+                  </div>
+                  <div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-meta text-dim">
+                    <a
+                      class="truncate font-mono text-[0.6875rem] hover:text-fg"
+                      href={channel.url}
+                      target="_blank"
+                      rel="noreferrer">mid {channel.mid}</a
+                    >
+                    <span aria-hidden="true">·</span>
+                    <span class="tabular-nums">
+                      {formatCount(channel.videoCount)} 条
+                      {#if channel.unseenCount > 0}
+                        · <span class="text-fg">{formatCount(channel.unseenCount)} 未看</span>
+                      {/if}
+                      {#if channel.downloaded > 0}
+                        · {formatCount(channel.downloaded)} 已落盘
+                      {/if}
+                    </span>
+                    {#if channel.lastSyncAt}
+                      <span aria-hidden="true">·</span>
+                      <span>{relativeTime(channel.lastSyncAt)}同步</span>
+                    {/if}
+                    <span aria-hidden="true">·</span>
+                    <span class="tabular-nums">
+                      回填 {channel.backfillPage}{#if channel.totalPages}/{channel.totalPages}{/if} 页
+                      {#if channel.backfillDone}（已完）{/if}
+                    </span>
+                  </div>
+                  {#if channel.lastError}
+                    <p class="mt-1 line-clamp-2 text-meta text-brick">
+                      {channel.lastError}
+                      {#if channel.nextSyncAt}
+                        <span class="text-dim">（{relativeFuture(channel.nextSyncAt)}再试）</span>
+                      {/if}
+                    </p>
+                  {/if}
+                </div>
+
+                <div class="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={biliBusyId === channel.id}
+                    title="拉一遍最新一页投稿（走 App 接口，限流最松）"
+                    onclick={() => void syncBili(channel, false)}
+                  >
+                    同步
+                  </button>
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={biliBusyId === channel.id}
+                    title="从断点继续往前翻历史投稿（每页 20 条，限流最紧）"
+                    onclick={() => void syncBili(channel, true)}
+                  >
+                    回填续翻
+                  </button>
+                  {#if channel.unseenCount > 0}
+                    <button
+                      type="button"
+                      class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                      disabled={biliBusyId === channel.id}
+                      title="把这位 UP 主未看的投稿排进下载队列"
+                      onclick={() => void downloadBiliUnseen(channel)}
+                    >
+                      下载未看
+                    </button>
+                  {/if}
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={biliBusyId === channel.id}
+                    onclick={() => void toggleBili(channel)}
+                  >
+                    {channel.enabled ? '停用' : '启用'}
+                  </button>
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-brick/80 transition-colors hover:bg-raise hover:text-brick"
+                    disabled={biliBusyId === channel.id}
+                    onclick={() => void removeBili(channel)}
+                  >
+                    删除
+                  </button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+          <p class="text-meta text-dim">
+            B 站的空间投稿接口是全站风控最严的那个：翻页途中被限流会自动停下，断点保留，3 小时后自动接着翻。
+            被限流时「同步」也会报同样的错，属于正常现象。
           </p>
         {/if}
       </div>

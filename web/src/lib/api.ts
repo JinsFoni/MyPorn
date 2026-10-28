@@ -6,6 +6,9 @@ import { navigate } from './router.svelte';
 import type {
   ApiErrorCode,
   ApiErrorBody,
+  BiliChannelsResponse,
+  BiliHealth,
+  BiliManageResponse,
   DownloadAccepted,
   DownloadOptions,
   DownloadsResponse,
@@ -39,6 +42,7 @@ import type {
   YtStreamInfo,
   YtVideo,
   YtVideosPage,
+  Video,
   VideoDetail,
   VideoPage,
 } from './types';
@@ -401,6 +405,44 @@ export const api = {
   },
   manageMoments(): Promise<MomentsManageResponse> {
     return request<MomentsManageResponse>('/api/manage/moments');
+  },
+
+  // ---- B 站（M7）----
+  /**
+   * UP 主列表（含未看计数）。B 站的投稿同步时就落进 videos，
+   * 所以墙上翻页用的是通用的 /api/videos 那套形状，只是多一个 platform 过滤。
+   */
+  biliChannels(): Promise<BiliChannelsResponse> {
+    return request<BiliChannelsResponse>('/api/bilibili/channels');
+  },
+  biliVideos(
+    params: { cursor?: string | null; channelId?: number | null; unseen?: boolean; limit?: number } = {},
+  ): Promise<{ items: Video[]; nextCursor: string | null }> {
+    return request<{ items: Video[]; nextCursor: string | null }>(
+      `/api/bilibili/videos${qs({
+        cursor: params.cursor,
+        channelId: params.channelId,
+        unseen: params.unseen ? 1 : null,
+        limit: params.limit,
+      })}`,
+    );
+  },
+  /** ids 只标这几条（点开某一条时用）；channelId 只标这位 UP 主的；都不给 = 全站 B 站 */
+  biliSeen(payload: { ids?: number[]; channelId?: number }): Promise<{ unseen: number }> {
+    return request<{ unseen: number }>('/api/bilibili/seen', { method: 'POST', body: payload });
+  },
+  /** 把未看的投稿批量排进下载队列（B 站一条条点太慢：480P 要先合流） */
+  biliDownloadUnseen(channelId: number | string, limit?: number): Promise<{ queued: number; libraryId: number }> {
+    return request<{ queued: number; libraryId: number }>(`/api/bilibili/channels/${id(channelId)}/download-unseen`, {
+      method: 'POST',
+      body: { limit: limit ?? 0 },
+    });
+  },
+  biliHealth(): Promise<BiliHealth> {
+    return request<BiliHealth>('/api/bilibili/health');
+  },
+  manageBili(): Promise<BiliManageResponse> {
+    return request<BiliManageResponse>('/api/manage/bilibili');
   },
 
   // ---- YouTube 订阅（M6）----

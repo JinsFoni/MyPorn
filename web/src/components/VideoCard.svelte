@@ -32,10 +32,15 @@
   const performerLine = $derived(video.performers.map((p) => p.name).join('、'));
   const firstPerformer = $derived(video.performers[0] ?? null);
   // 头像表里存的是后端代理地址，也要过一遍 imageUrl：隐私模式下它得换成小糊图
+  // 优先用这一行自带的头像（videos 接口现在会跟着 performers 一起给，B 站墙离不开它：
+  // 「订阅艺人头像表」只拉得到非 B 站的艺人），没有再退回全局头像表。
   const avatar = $derived(
-    firstPerformer?.id != null && !avatarFailed
-      ? imageUrl(live.performerAvatars[firstPerformer.id], 36)
-      : undefined,
+    avatarFailed
+      ? undefined
+      : imageUrl(
+          firstPerformer?.avatarUrl ?? (firstPerformer?.id != null ? live.performerAvatars[firstPerformer.id] : null),
+          36,
+        ),
   );
   const monogram = $derived(firstPerformer ? firstPerformer.name.trim().charAt(0).toUpperCase() : '');
 

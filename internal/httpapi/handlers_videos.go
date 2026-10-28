@@ -22,11 +22,14 @@ const variantCacheTTL = 5 * time.Minute
 func (s *Server) handleListVideos(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	performerID, _ := strconv.ParseInt(q.Get("performerId"), 10, 64)
+	// B 站有自己的页面（/bilibili），不混进「关注」流：那边的片子是 UP 主投稿，
+	// 和「追艺人的片」不是同一件事。它的接口是 /api/bilibili/videos。
 	items, next, err := s.st.ListFeed(store.FeedQuery{
-		PerformerID: performerID,
-		Cursor:      q.Get("cursor"),
-		Limit:       queryInt(r, "limit", 30),
-		Query:       q.Get("q"),
+		PerformerID:     performerID,
+		Cursor:          q.Get("cursor"),
+		Limit:           queryInt(r, "limit", 30),
+		Query:           q.Get("q"),
+		ExcludePlatform: platformBilibili,
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
@@ -42,10 +45,11 @@ func (s *Server) handleListVideos(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListNewVideos(w http.ResponseWriter, r *http.Request) {
 	performerID, _ := strconv.ParseInt(r.URL.Query().Get("performerId"), 10, 64)
 	items, next, err := s.st.ListFeed(store.FeedQuery{
-		PerformerID: performerID,
-		Cursor:      r.URL.Query().Get("cursor"),
-		Limit:       queryInt(r, "limit", 30),
-		OnlyNew:     true,
+		PerformerID:     performerID,
+		Cursor:          r.URL.Query().Get("cursor"),
+		Limit:           queryInt(r, "limit", 30),
+		OnlyNew:         true,
+		ExcludePlatform: platformBilibili,
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())

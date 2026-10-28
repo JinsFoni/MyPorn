@@ -848,3 +848,98 @@ GET /api/yt/seg/{sid}/{n}
 站内播放页的深链接 `/youtube?v=<videoId>` 用：刷新、从别处贴链接进来时，
 墙上那一页（36 条 + 可能带频道筛选）未必包含这条，所以需要单取。`{videoId}` 是 YouTube 的
 字符串 id，不是 `yt_videos.id`。
+
+## 附：M7 补 —— B 站独立页面（`/bilibili` + 管理 → B 站）
+
+B 站没有自己的表：UP 主是 `performers` 的一行（`platform='bilibili'`，`performer_id` = mid），
+投稿是 `videos` 的一行。所以这一节只有「按平台取数」的读接口，播放/下载/合流仍然走
+[A4·补](#a4补-分轨合流-get-apivideosidremuxvvariantid) 与 §3 那套。
+
+### D1. `GET /api/bilibili/channels`
+
+```
+→ 200 {
+    "items": [{
+      "id": 10,                  // performers.id（不是 mid）；下载未看等接口用它
+      "mid": "946974",
+      "name": "影视飓风",
+      "avatarUrl": "/api/img?p=bilibili&u=…",   // 已代理
+      "url": "https://www.bilibili.com/space/946974",
+      "subscriberCount": 18839524,
+      "videoCount": 19,          // 本地已收录，不是 UP 主的总投稿数
+      "unseenCount": 18,         // 其中 is_new = 1
+      "downloaded": 1,           // 已落盘到任一本地库的条数
+      "subscriptionId": 2,       // /api/subscriptions/{id} 那套接口用这个
+      "enabled": true,
+      "backfillDone": false,
+      "backfillPage": 1,         // 已经翻到第几页（每页 20 条）
+      "totalPages": 47,
+      "lastSyncAt": "2026-10-28T15:27:09Z",
+      "nextSyncAt": "2026-10-28T18:46:48Z",     // 被限流时会被推到 3 小时后
+      "lastError": "抓取第 2 页失败: 上游限流：B 站限流了，等一会儿再同步"
+    }],
+    "stats": { "unseen": 18 }    // 侧边栏徽标用
+  }
+```
+
+只列「还订阅着」的 UP 主（取消订阅是软删，删掉就不出现）。
+
+### D2. `GET /api/bilibili/videos?cursor=&channelId=&unseen=1&limit=36`
+
+```
+→ 200 { "items": [<与 §3 影片结构一致，含 performers[].avatarUrl>], "nextCursor": "…" | null }
+```
+
+`platform='bilibili'` 的影片，按发布时间倒序做 keyset 分页；`channelId` 是 **D1 的 `id`**（performers.id）。
+
+### D3. `POST /api/bilibili/seen`
+
+```
+请求：{ "ids": [61], "channelId": 10 }     // 两者都可省
+→ 200 { "unseen": 0 }
+```
+
+`ids` 只标这几条，`channelId` > 0 只标这位 UP 主的，都不给 = 全站 B 站投稿。
+返回标完之后剩下的未看数（前端直接拿去更新徽标）。
+注意：点开详情页时本来就有一条 `POST /api/videos/{id}/seen`（§3），两者效果一致。
+
+### D4. `POST /api/bilibili/channels/{id}/download-unseen`
+
+```
+请求：{ "limit": 0 }        // 0 = 默认 50，上限 200
+→ 200 { "queued": 12, "libraryId": 1 }
+→ 400 no_library          还没有可用的本地库
+```
+
+把这位 UP 主未看的投稿批量排进 `download` 队列（落到默认库）。{id} 是 D1 的 `id`。
+
+### D5. `GET /api/bilibili/health`
+
+```
+→ 200 {
+    "hasCookie": false,   // 没填 SESSDATA：最高只有 720P
+    "ffmpegOk": true,     // 分轨档位（480P 及以上）要靠它合流
+    "hasProxy": false
+  }
+```
+
+这两项看起来像故障、其实是 B 站的规则，所以界面上要能直接看到（对应 M6 的 `GET /api/yt/health`）。
+
+### D6. `GET /api/manage/bilibili`
+
+```
+→ 200 { "stats": { "channels": 1, "videos": 19, "unseen": 18, "downloaded": 1, "errors": 1 },
+        "channels": [<D1 的 items[]>] }
+```
+
+管理 →「B 站」页签的整页数据，一次给全（与 `GET /api/manage/youtube` 同构）。
+
+### D7. 通用接口的口径变化（M7 补）
+
+| 接口 / 字段 | 变化 |
+|---|---|
+| `GET /api/videos`、`GET /api/videos/new` | 排除 `platform='bilibili'`（B 站有自己的墙） |
+| `GET /api/performers`、`GET /api/subscriptions` | 排除 B 站（UP 主不是「艺人」） |
+| `GET /api/manage` 的 `performers*` | 同样排除；`videos` / `files` / `bytes` / `downloads` 仍是全库口径 |
+| 影片 DTO 的 `performers[]` | 多一个 `avatarUrl`（已代理）。B 站墙上每张卡的圆头像靠它：「订阅艺人头像表」不含 B 站 |
+| SSE `video.new` | 多一个 `platform` 字段；前端据此只刷 B 站墙，不动「关注」流 |

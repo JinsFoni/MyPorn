@@ -86,10 +86,15 @@ func (s *Store) Stats() (*Stats, error) {
 	out := &Stats{}
 
 	// ---- 关注 ----
+	//
+	// B 站不计入「关注艺人」：它的 UP 主不在「艺人 / 关注管理」里（M7 起各自一页，
+	// 见 store/bilibili.go 顶部），这边的读数必须和那两个列表对得上。
+	// 下面影片/落盘/下载那几组仍是全库口径——那些说的是「库里有什么」，与平台无关。
 	if err := s.db.QueryRow(`SELECT COUNT(*),
-			COALESCE(SUM(enabled),0),
-			COALESCE(SUM(CASE WHEN last_error <> '' THEN 1 ELSE 0 END),0)
-		FROM subscriptions WHERE deleted_at IS NULL`).
+			COALESCE(SUM(su.enabled),0),
+			COALESCE(SUM(CASE WHEN su.last_error <> '' THEN 1 ELSE 0 END),0)
+		FROM subscriptions su JOIN performers p ON p.id = su.performer_id
+		WHERE su.deleted_at IS NULL AND p.platform <> 'bilibili'`).
 		Scan(&out.Performers, &out.PerformersEnabled, &out.PerformersFailed); err != nil {
 		return nil, err
 	}

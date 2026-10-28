@@ -219,6 +219,16 @@ func (s *Server) Routes() http.Handler {
 			pr.Get("/yt/videos/lookup", s.handleYtVideoLookup)
 			pr.Get("/manage/youtube", s.handleManageYt)
 
+			// B 站（M7）：UP 主订阅 + 投稿墙，独立一页。
+			// 数据就在 videos / performers 里（platform='bilibili'），所以这里只有读接口：
+			// 播放、下载、合流复用 /api/videos/{id}/*（见 handlers_bilibili.go 顶部）。
+			pr.Get("/bilibili/channels", s.handleListBiliChannels)
+			pr.Get("/bilibili/videos", s.handleListBiliVideos)
+			pr.Post("/bilibili/seen", s.handleBiliSeen)
+			pr.Post("/bilibili/channels/{id}/download-unseen", s.handleBiliDownloadUnseen)
+			pr.Get("/bilibili/health", s.handleBiliHealth)
+			pr.Get("/manage/bilibili", s.handleManageBili)
+
 			pr.Get("/settings", s.handleGetSettings)
 			pr.Put("/settings", s.handlePutSettings)
 

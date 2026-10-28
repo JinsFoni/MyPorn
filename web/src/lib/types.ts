@@ -3,8 +3,11 @@
  * 改这里之前先看契约文档；不要凭空加字段。
  */
 
-/** M1 只打通 Pornhub；adapter 化后这里扩展 */
-export type PlatformKey = 'pornhub';
+/**
+ * 已注册的平台。M1 只有 Pornhub，之后逐个加：xHamster / beeg / x.com（M4）、
+ * bilibili（M7）。列表里没有的新平台仍会照原样显示代号，不至于露出空白。
+ */
+export type PlatformKey = 'pornhub' | 'xhamster' | 'beeg' | 'xcom' | 'bilibili' | 'youtube';
 
 export type SyncMode = 'incremental' | 'full';
 
@@ -99,6 +102,8 @@ export interface ResolvedPerformer {
   avatarUrl: string | null;
   url: string;
   videoCount: number | null;
+  /** B 站给的是粉丝数；别的平台不一定有，所以可选 */
+  subscriberCount?: number | null;
 }
 
 /** GET /api/search/performers 的条目 */
@@ -130,6 +135,8 @@ export interface VideoPerformerRef {
   id: number | null;
   name: string;
   url: string | null;
+  /** 已代理；B 站墙上每张卡左侧那颗圆头像就是它（UP 主本人） */
+  avatarUrl?: string | null;
 }
 
 export interface Video {
@@ -157,6 +164,63 @@ export interface Video {
   hasLocalFile: boolean;
   /** 已落盘的库 id 列表（M2） */
   localLibraryIds: number[];
+}
+
+// ---- B 站（M7）----
+/**
+ * 一位 UP 主。没有单独的 bili_channels 表：它就是 performers 的一行 + 订阅行 +
+ * 本地计数（详见 internal/store/bilibili.go 顶部）。
+ */
+export interface BiliChannel {
+  id: number;
+  /** space.bilibili.com/<mid> */
+  mid: string;
+  name: string;
+  avatarUrl: string | null;
+  url: string;
+  subscriberCount: number | null;
+  /** 本地已收录（不是 UP 主的总投稿数） */
+  videoCount: number;
+  unseenCount: number;
+  /** 已落盘到本地库的条数 */
+  downloaded: number;
+  subscriptionId: number;
+  enabled: boolean;
+  backfillDone: boolean;
+  /** 已经翻到第几页（B 站列表接口每页 20 条） */
+  backfillPage: number;
+  totalPages: number | null;
+  lastSyncAt: string | null;
+  /** 被限流时会被推到几小时之后 */
+  nextSyncAt: string | null;
+  lastError: string;
+}
+
+export interface BiliChannelsResponse {
+  items: BiliChannel[];
+  stats: { unseen: number };
+}
+
+/** B 站「为什么画质只有 720P / 为什么这档放不了」的答案 */
+export interface BiliHealth {
+  /** 填了 SESSDATA 才有 1080P 以上 */
+  hasCookie: boolean;
+  /** 分轨档位要靠 ffmpeg 合流 */
+  ffmpegOk: boolean;
+  hasProxy: boolean;
+}
+
+export interface BiliStats {
+  channels: number;
+  videos: number;
+  unseen: number;
+  downloaded: number;
+  errors: number;
+}
+
+export interface BiliManageResponse {
+  stats: BiliStats;
+  channels: BiliChannel[];
 }
 
 export interface VideoDetail extends Video {
@@ -377,6 +441,8 @@ export interface SocialProgressEvent {
 export interface VideoNewEvent {
   videoId: number;
   performerId: number;
+  /** 哪个平台的投稿：B 站要刷自己的墙，「关注」流则不该动 */
+  platform?: PlatformKey;
   title: string;
 }
 

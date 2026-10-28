@@ -6,13 +6,15 @@
    * （见 AppShell 的注释），第 7 个会把每格挤到 45px。这两个页面都是「订阅的内容流」，
    * 属于同一件事的两种形态，用同一个入口 + 顶部切换比塞进底部导航更清楚。
    *
-   * 现在只有 `/moments` 用它（`active="moments"`）：`/youtube` 那边去掉了。
+   * B 站（M7）也挂在这条控件上：底部导航只有 6 格，再加一格就挤不下了。
+   *
+   * 现在只有 `/moments` 用它（`active="moments"`）：`/youtube`、`/bilibili` 那边都去掉了。
    * 切换只留在入口这一侧，进了 YouTube 就不必再把「动态」摆出来跟它并排。
    */
   import { live } from '../lib/live.svelte';
 
   interface Props {
-    active: 'moments' | 'youtube';
+    active: 'moments' | 'youtube' | 'bilibili';
   }
 
   let { active }: Props = $props();
@@ -20,10 +22,12 @@
   const ITEMS = [
     { key: 'moments', label: '动态', href: '/moments' },
     { key: 'youtube', label: 'YouTube', href: '/youtube' },
+    { key: 'bilibili', label: 'B 站', href: '/bilibili' },
   ] as const;
 
-  function badgeFor(key: 'moments' | 'youtube'): number {
-    return key === 'moments' ? live.momentsUnseen : live.ytUnseen;
+  function badgeFor(key: 'moments' | 'youtube' | 'bilibili'): number {
+    if (key === 'moments') return live.momentsUnseen;
+    return key === 'youtube' ? live.ytUnseen : live.biliUnseen;
   }
 </script>
 

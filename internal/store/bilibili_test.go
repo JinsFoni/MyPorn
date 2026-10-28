@@ -1,0 +1,218 @@
+package store
+
+import (
+	"testing"
+
+	"github.com/mario/myporn/internal/model"
+)
+
+// B 站独立页面的取数：UP 主列表要带本地收录数 / 未看数 / 已落盘数，
+// 而且「取消订阅」后必须从墙上和管理页一起消失（软删）。
+func TestListBiliChannels(t *testing.T) {
+	st := newTestStore(t)
+	biliID := mustPerformer(t, st, "bilibili", "946974", "影视飓风")
+	pornID := mustPerformer(t, st, "pornhub", "mini-diva", "Mini Diva")
+	if _, err := st.CreateSubscription(biliID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateSubscription(pornID, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// 三条投稿：两条没看过、一条看过且已落盘。
+	seen := mustVideo(t, st, "bilibili", "BV1seen", biliID)
+	newA := mustVideo(t, st, "bilibili", "BV1newa", biliID)
+	newB := mustVideo(t, st, "bilibili", "BV1newb", biliID)
+	if err := st.MarkVideoSeen(seen); err != nil {
+		t.Fatal(err)
+	}
+	libID := mustLibrary(t, st)
+	if err := st.SaveLibraryFile(&model.LibraryFile{
+		VideoID: seen, LibraryID: libID, RelDir: "bilibili", VideoName: "a.mp4", VideoPath: "/tmp/a.mp4",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 别人的片子不该被算进这位 UP 主
+	mustVideo(t, st, "pornhub", "ph-1", pornID)
+
+	channels, err := st.ListBiliChannels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(channels) != 1 {
+		t.Fatalf("只该列出 B 站那一位，实际 %d 位", len(channels))
+	}
+	c := channels[0]
+	if c.MID != "946974" || c.Name != "影视飓风" {
+		t.Fatalf("UP 主认错了：%+v", c)
+	}
+	if c.VideoCount != 3 || c.UnseenCount != 2 || c.Downloaded != 1 {
+		t.Fatalf("计数不对：收录 %d 未看 %d 已落盘 %d（期望 3/2/1）", c.VideoCount, c.UnseenCount, c.Downloaded)
+	}
+
+	// 软删订阅之后，墙上不该再出现这位 UP 主。
+	sub, err := st.GetSubscriptionByPerformer(biliID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SoftDeleteSubscription(sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := st.ListBiliChannels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("取消订阅后还列出来 %d 位", len(after))
+	}
+	_ = newA
+	_ = newB
+}
+
+// 未看计数与「标已看」的作用域：按 UP 主标只影响他自己。
+func TestMarkBiliSeenScoped(t *testing.T) {
+	st := newTestStore(t)
+	a := mustPerformer(t, st, "bilibili", "1", "甲")
+	b := mustPerformer(t, st, "bilibili", "2", "乙")
+	mustVideo(t, st, "bilibili", "BV1", a)
+	mustVideo(t, st, "bilibili", "BV2", b)
+	mustVideo(t, st, "bilibili", "BV3", b)
+
+	if n, err := st.CountBiliUnseen(); err != nil || n != 3 {
+		t.Fatalf("未看应为 3，实际 %d（err=%v）", n, err)
+	}
+	left, err := st.MarkBiliSeen(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left != 2 {
+		t.Fatalf("只标甲之后应剩 2 条未看，实际 %d", left)
+	}
+	left, err = st.MarkBiliSeen(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Fatalf("全站标已看之后应剩 0，实际 %d", left)
+	}
+}
+
+// 「关注」流要把 B 站摘掉，B 站墙上则只看得到 B 站。
+func TestFeedPlatformFilter(t *testing.T) {
+	st := newTestStore(t)
+	bili := mustPerformer(t, st, "bilibili", "946974", "影视飓风")
+	ph := mustPerformer(t, st, "pornhub", "mini-diva", "Mini Diva")
+	mustVideo(t, st, "bilibili", "BV1", bili)
+	mustVideo(t, st, "pornhub", "ph-1", ph)
+
+	feed, _, err := st.ListFeed(FeedQuery{ExcludePlatform: "bilibili", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(feed) != 1 || feed[0].Platform != "pornhub" {
+		t.Fatalf("关注流里不该有 B 站：%+v", feed)
+	}
+
+	wall, _, err := st.ListFeed(FeedQuery{Platform: "bilibili", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wall) != 1 || wall[0].Platform != "bilibili" {
+		t.Fatalf("B 站墙上只该有 B 站：%+v", wall)
+	}
+
+	// 通用列表（艺人页 / 关注管理）同样不含 B 站
+	if performers, _, err := st.ListPerformers(false, 0, 50); err != nil {
+		t.Fatal(err)
+	} else {
+		for _, p := range performers {
+			if p.Platform == "bilibili" {
+				t.Fatalf("艺人列表里混进了 B 站：%s", p.Name)
+			}
+		}
+	}
+	if subs, err := st.ListSubscriptions(); err != nil {
+		t.Fatal(err)
+	} else if len(subs) != 0 {
+		t.Fatalf("关注管理里不该有 B 站（当前没订阅任何人），实际 %d 条", len(subs))
+	}
+}
+
+// BiliStats 是管理页顶部读数：UP 主数、收录数、未看数、已落盘数、出错数。
+func TestBiliStats(t *testing.T) {
+	st := newTestStore(t)
+	a := mustPerformer(t, st, "bilibili", "1", "甲")
+	b := mustPerformer(t, st, "bilibili", "2", "乙")
+	mustPerformer(t, st, "bilibili", "3", "丙") // 没订阅，不该进统计
+	subA, err := st.CreateSubscription(a, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateSubscription(b, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`UPDATE subscriptions SET last_error = '上游限流：B 站限流了，等一会儿再同步' WHERE id = ?`, subA); err != nil {
+		t.Fatal(err)
+	}
+	v := mustVideo(t, st, "bilibili", "BV1", a)
+	libID := mustLibrary(t, st)
+	if err := st.SaveLibraryFile(&model.LibraryFile{
+		VideoID: v, LibraryID: libID, VideoPath: "/tmp/x.mp4", VideoName: "x.mp4",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := st.BiliStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Channels != 2 || stats.Videos != 1 || stats.Unseen != 1 || stats.Downloaded != 1 || stats.Errors != 1 {
+		t.Fatalf("统计不对：%+v", stats)
+	}
+
+	// 未看片单供「下载未看」批量排队
+	ids, err := st.ListUnseenVideoIDs("bilibili", a, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != v {
+		t.Fatalf("未看片单不对：%v", ids)
+	}
+}
+
+// ---- 小工具 ----
+
+func mustPerformer(t *testing.T, st *Store, platform, pid, name string) int64 {
+	t.Helper()
+	id, err := st.UpsertPerformer(&model.Performer{
+		Platform: platform, PerformerID: pid, Name: name,
+		URL: "https://example.invalid/" + pid,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func mustLibrary(t *testing.T, st *Store) int64 {
+	t.Helper()
+	id, err := st.CreateLibrary(&model.Library{Name: "主库", RootPath: t.TempDir(), Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func mustVideo(t *testing.T, st *Store, platform, pid string, performerID int64) int64 {
+	t.Helper()
+	v, _, err := st.UpsertVideo(&model.Video{
+		Platform: platform, PlatformVideoID: pid, Title: pid,
+		URL: "https://example.invalid/" + pid,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkVideoPerformer(v, performerID); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}

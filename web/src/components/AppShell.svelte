@@ -22,7 +22,16 @@
   interface NavItem {
     href: string;
     label: string;
-    icon: 'feed' | 'moments' | 'youtube' | 'performers' | 'discover' | 'downloads' | 'manage' | 'settings';
+    icon:
+      | 'feed'
+      | 'moments'
+      | 'youtube'
+      | 'bilibili'
+      | 'performers'
+      | 'discover'
+      | 'downloads'
+      | 'manage'
+      | 'settings';
     isActive: (path: string) => boolean;
   }
 
@@ -30,6 +39,8 @@
     { href: '/', label: '关注', icon: 'feed', isActive: (p) => p === '/' || p.startsWith('/video') },
     { href: '/moments', label: '动态', icon: 'moments', isActive: (p) => p.startsWith('/moments') },
     { href: '/youtube', label: 'YouTube', icon: 'youtube', isActive: (p) => p.startsWith('/youtube') },
+    // B 站和 YouTube 是同一件事的两种形态：各自一页，管理里也各有一个页签。
+    { href: '/bilibili', label: 'B 站', icon: 'bilibili', isActive: (p) => p.startsWith('/bilibili') },
     { href: '/performers', label: '艺人', icon: 'performers', isActive: (p) => p.startsWith('/performer') },
     { href: '/discover', label: '发现', icon: 'discover', isActive: (p) => p.startsWith('/discover') },
     { href: '/downloads', label: '下载', icon: 'downloads', isActive: (p) => p.startsWith('/downloads') },
@@ -54,8 +65,11 @@
   const SIDE_NAV = NAV.filter((item) => item.icon !== 'settings');
   // 移动端底部只有 6 格：加「动态」之后把「发现」收进艺人页（那里本来就有搜索和推荐位），
   // 否则 7 格在 320px 屏上每格只剩 45px，字都要挤掉。
-  // YouTube 也不进底部：它和「动态」是同一件事的两种形态，用页面顶部的分段控件切换。
-  const MOBILE_NAV = NAV.filter((item) => item.icon !== 'discover' && item.icon !== 'youtube');
+  // YouTube / B 站也不进底部：它们和「动态」是同一类「订阅内容流」，
+  // 用 /moments 顶部的分段控件切换（见 SocialTabs）。
+  const MOBILE_NAV = NAV.filter(
+    (item) => item.icon !== 'discover' && item.icon !== 'youtube' && item.icon !== 'bilibili',
+  );
   const settingsActive = $derived(ui.settingsOpen);
 
   /** 移动端底部 tab 的共用样式 */
@@ -92,7 +106,13 @@
         'sync.progress': (progress) => {
           live.applySync(progress);
         },
-        'video.new': () => {
+        'video.new': (data) => {
+          // B 站的新投稿只刷 B 站墙：「关注」流里根本没有它的片子（见 ListFeed 的平台过滤）。
+          if (data?.platform === 'bilibili') {
+            live.bumpBili();
+            live.setBiliUnseen(live.biliUnseen + 1);
+            return;
+          }
           scheduleBump();
         },
         'photo.new': () => {
@@ -118,6 +138,7 @@
     void live.ensurePerformerAvatars();
     void live.refreshMomentsUnseen();
     void live.refreshYtUnseen();
+    void live.refreshBiliUnseen();
 
     const onOffline = (): void => live.toast('网络已断开，实时更新暂停', 'error');
     const onOnline = (): void => live.toast('网络已恢复', 'info');
@@ -159,6 +180,12 @@
       <!-- YouTube：一块屏幕 + 播放三角（与「关注」的方框区分：这里圆角更大、三角更突出） -->
       <rect x="2.5" y="5.5" width="19" height="13" rx="4" />
       <path d="M10.4 9.4v5.2l4.4-2.6z" fill="currentColor" stroke="none" />
+    {:else if name === 'bilibili'}
+      <!-- B 站：一台带两根天线的电视（B 站自己的标志形状），里面一个播放三角。
+           天线短而粗、电视圆角大，和 YouTube 那块「屏幕」在 24px 下也分得开。 -->
+      <path d="M7 3.2 9.6 6M17 3.2 14.4 6" />
+      <rect x="3" y="6" width="18" height="13.5" rx="4" />
+      <path d="M10.6 10.4v5l4.3-2.5z" fill="currentColor" stroke="none" />
     {:else if name === 'performers'}
       <circle cx="9" cy="9" r="3" />
       <path d="M3.5 19a5.5 5.5 0 0 1 11 0" />
@@ -345,6 +372,13 @@
               aria-label={`${String(live.ytUnseen)} 个未看新视频`}
             >
               {live.ytUnseen > 99 ? '99+' : live.ytUnseen}
+            </span>
+          {:else if item.href === '/bilibili' && live.biliUnseen > 0}
+            <span
+              class="rounded-full bg-hi px-[0.3rem] text-[0.6875rem] font-medium leading-4 tabular-nums text-ink"
+              aria-label={`${String(live.biliUnseen)} 条未看的 B 站投稿`}
+            >
+              {live.biliUnseen > 99 ? '99+' : live.biliUnseen}
             </span>
           {:else if item.href === '/moments' && live.momentsUnseen > 0}
             <span

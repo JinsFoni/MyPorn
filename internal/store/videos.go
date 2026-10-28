@@ -185,6 +185,11 @@ type FeedQuery struct {
 	Limit       int
 	OnlyNew     bool
 	Query       string
+	// Platform 只要这一个平台的影片；ExcludePlatform 反过来，把某个平台整体摘掉。
+	// B 站用两者：自己的页面只取 platform='bilibili'，「关注」流则把它排除掉——
+	// 它有自己的页面（/bilibili），不该在追艺人的流里混着。
+	Platform        string
+	ExcludePlatform string
 }
 
 // ListFeed 按发布时间倒序做 keyset 分页。
@@ -204,6 +209,14 @@ func (s *Store) ListFeed(q FeedQuery) ([]*model.Video, string, error) {
 	if q.Query != "" {
 		where = append(where, "v.title LIKE ?")
 		args = append(args, "%"+q.Query+"%")
+	}
+	if q.Platform != "" {
+		where = append(where, "v.platform = ?")
+		args = append(args, q.Platform)
+	}
+	if q.ExcludePlatform != "" {
+		where = append(where, "v.platform <> ?")
+		args = append(args, q.ExcludePlatform)
 	}
 	if ts, id, ok := decodeCursor(q.Cursor); ok {
 		if ts == "" {
@@ -301,7 +314,7 @@ func (s *Store) attachPerformers(videos []*model.Video) error {
 		ids = append(ids, v.ID)
 		idx[v.ID] = v
 	}
-	q := `SELECT vp.video_id, p.id, p.name, p.url FROM video_performers vp
+	q := `SELECT vp.video_id, p.id, p.name, p.url, p.avatar_url, p.platform FROM video_performers vp
 		JOIN performers p ON p.id = vp.performer_id WHERE vp.video_id IN (` + placeholders(len(ids)) + `)`
 	rows, err := s.db.Query(q, ids...)
 	if err != nil {
@@ -311,7 +324,7 @@ func (s *Store) attachPerformers(videos []*model.Video) error {
 	for rows.Next() {
 		var vid int64
 		var ref model.PerformerRef
-		if err := rows.Scan(&vid, &ref.ID, &ref.Name, &ref.URL); err != nil {
+		if err := rows.Scan(&vid, &ref.ID, &ref.Name, &ref.URL, &ref.AvatarURL, &ref.Platform); err != nil {
 			return err
 		}
 		if v, ok := idx[vid]; ok {
@@ -365,9 +378,10 @@ func (s *Store) MarkVideoSeen(id int64) error {
 	return err
 }
 
+// CountNewVideos 数「关注」流里的新片；B 站不算在内（它有自己那条未看计数）。
 func (s *Store) CountNewVideos() (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE is_new = 1`).Scan(&n)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE is_new = 1 AND platform <> 'bilibili'`).Scan(&n)
 	return n, err
 }
 

@@ -592,3 +592,24 @@ handler → muxcache.Ensure(key="<videoID>-<variantID>")
 durl 只到 720P——**以实际返回为准**。1080P 以上要填 `SESSDATA`（设置 → B 站），
 和 YouTube 的 `yt_cookies` 同一个位置、同一套「加密存、只在用的时候读」的处理。
 `normalizeBiliCookie` 认三种输入：整段 Cookie 头、裸的 SESSDATA 值、换行/制表符分隔的键值对，但必须含 SESSDATA。
+
+### 13.5 独立一页，但不另建表
+
+bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源」，不是「追一个艺人」。所以两者
+都有自己的页面（`/bilibili`、`/youtube`）和管理页签，并且在 `/api/videos`（关注流）、
+`/api/videos/new`、`/api/performers`（艺人页）、`/api/subscriptions`（关注管理）里被排除，
+保证同一件事只有一处入口。
+
+但**没有为它另建 `bili_*` 表**。UP 主就是 `performers` 的一行（`platform='bilibili'`、
+`performer_id` = mid），投稿就是 `videos` 的一行；`internal/store/bilibili.go` 只是在
+这两张表上按平台做视图（列表、未看计数、已看、未看片单）。理由：
+
+- 一旦有 `bili_videos` 和 `videos` 两份记录，播放（`/api/videos/{id}/playback`）、合流
+  （`/remux`）、下载入库（`library_files` / nfo / strm）、统计就都要分叉成两套，同一个 bug 修两遍；
+- 现有 `videos` 表已经容得下它：`platform` + `platform_video_id` + `published_at` 就是全部差异，
+  连 `is_new` 都正好对应「未看」（B 站是抓到时入库，YouTube 是下载时入库，两条时间轴天然不同）；
+- 反过来，YouTube 当年那套 `yt_*` 表是**因为它先有了「频道」这个独立概念**（一个频道 = 多个视频、
+  且视频要在入库前筛一遍要不要下）。B 站不需要：UP 主有 `performers` 行，投稿直接是 `videos`。
+
+代价是取数多一层「按平台过滤」，所以每个通用列表接口都显式带着这个条件，并各自有测试
+（`internal/store/bilibili_test.go` 里 `TestFeedPlatformFilter` 就是这个约束的看门人）。
