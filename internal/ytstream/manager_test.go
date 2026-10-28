@@ -3,6 +3,8 @@ package ytstream
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -114,4 +116,53 @@ func TestManagerEvictsOldSessions(t *testing.T) {
 	if _, ok := m.Session(first.ID); ok {
 		t.Fatal("超过上限后最老的会话应该被淘汰")
 	}
+}
+
+// 悬停预热、弹窗信息、播放器清单会挤在一两秒内发出：
+// 没有去重就会并发起多个 yt-dlp，谁都慢。
+func TestManagerResolveSingleFlight(t *testing.T) {
+	var calls atomic.Int32
+	release := make(chan struct{})
+	m := NewManager(func(context.Context, string) (Upstream, error) {
+		calls.Add(1)
+		<-release
+		return Upstream{VideoID: "vid1", MasterURL: "https://x/m.m3u8", ExpiresAt: time.Now().Add(time.Hour)}, nil
+	}, nil)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := m.Upstream(context.Background(), "vid1"); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	time.Sleep(50 * time.Millisecond) // 让五个都进到等待里
+	close(release)
+	wg.Wait()
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("解析跑了 %d 次，想要 1", got)
+	}
+}
+
+// 调用方等不及了（关掉页面）也不能把别人拖住：自己的 ctx 取消只影响自己。
+func TestManagerResolveWaiterCancel(t *testing.T) {
+	release := make(chan struct{})
+	m := NewManager(func(context.Context, string) (Upstream, error) {
+		<-release
+		return Upstream{VideoID: "vid1", MasterURL: "https://x/m.m3u8", ExpiresAt: time.Now().Add(time.Hour)}, nil
+	}, nil)
+
+	go func() { _, _ = m.Upstream(context.Background(), "vid1") }()
+	time.Sleep(30 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := m.Upstream(ctx, "vid1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消的调用方应该立刻返回 context.Canceled，得到 %v", err)
+	}
+	close(release)
+	time.Sleep(30 * time.Millisecond)
 }

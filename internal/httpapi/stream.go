@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -110,6 +112,41 @@ func (s *Server) proxyMedia(w http.ResponseWriter, r *http.Request, raw, platfor
 	w.Header().Set("Cache-Control", "private, max-age=600")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// maxWarmObject 是单个预热对象的大小上限：HLS 分片几百 KB 到几 MB，
+// 超了说明这不是一段分片（或者是个超大文件），不值得先拉进内存。
+const maxWarmObject = 16 << 20
+
+// fetchRawMedia 取一个媒体对象的原文（清单也不改写）：给「起播预热」用。
+//
+// 为什么存原文而不是存改写后的清单：预热发生在拿到播放会话之前（点开弹窗那一刻），
+// 那时还没有发号器；原文与地址无关，之后谁拿到号都能现场改写。
+func (s *Server) fetchRawMedia(ctx context.Context, raw, platformKey string) (string, []byte, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !streamHostAllowed(u.Hostname()) {
+		return "", nil, fmt.Errorf("非法的播放地址")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, matchOriginalURL(u), nil)
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("User-Agent", mediaUserAgent)
+	req.Header.Set("Referer", platformReferer(s, platformKey, u))
+	req.Header.Set("Accept", "*/*")
+	resp, err := s.streamClientFor(platformKey).Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return "", nil, fmt.Errorf("上游返回 %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxWarmObject))
+	if err != nil {
+		return "", nil, err
+	}
+	return resp.Header.Get("Content-Type"), data, nil
 }
 
 // serveRewrittenPlaylist 把 m3u8 里的分片/子清单地址改写成代理地址。

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -56,6 +57,8 @@ func (s *Server) handleYtStreamInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	qualities := ytQualities(src.variants)
 	best, _ := hls.PickVariant(src.variants, 0)
+	// 这里比播放器开口早一秒多（前端要等这个响应才渲染播放器），正好用来预热。
+	go s.warmYtVideo(context.WithoutCancel(r.Context()), row.VideoID, best, src.renditions)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"videoId":     row.VideoID,
 		"title":       row.Title,
@@ -100,6 +103,9 @@ func (s *Server) handleYtStreamMaster(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, max-age=10")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(body))
+
+	// 换画质 / 直接拉清单时也预热一遍（已经取过的地址在预热缓存里不会重复取）。
+	go s.warmYtVideo(context.WithoutCancel(r.Context()), row.VideoID, variant, src.renditions)
 }
 
 // handleYtStreamSeg 是播放会话的取物口：子清单与分片都从这里出去。
@@ -128,7 +134,128 @@ func (s *Server) handleYtStreamSeg(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "没有这个地址")
 		return
 	}
+	s.serveYtSeg(w, r, sess, abs)
+}
+
+// serveYtSeg 出一段地址：预热缓存里有就直接给，没有才去 YouTube 取。
+//
+// 子清单在缓存里存的是原文，这里现改写成会话地址——发号是会话的事，预热只负责字节。
+func (s *Server) serveYtSeg(w http.ResponseWriter, r *http.Request, sess *ytstream.Session, abs string) {
+	if warm, ok := s.ytStream.WarmFor(sess.VideoID); ok {
+		if p, hit := warm.Get(abs); hit {
+			if u, err := url.Parse(abs); err == nil && isHLSPlaylist(u, p.ContentType) {
+				out := rewritePlaylist(p.Body, u, "youtube", sess.Ref)
+				w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+				w.Header().Set("Cache-Control", "private, max-age=30")
+				_, _ = w.Write(out)
+				return
+			}
+			s.log.Debug("预热命中", "url", abs, "bytes", len(p.Body))
+			w.Header().Set("Content-Type", p.ContentType)
+			w.Header().Set("Cache-Control", "private, max-age=600")
+			w.Header().Set("Content-Length", strconv.Itoa(len(p.Body)))
+			_, _ = w.Write(p.Body)
+			return
+		}
+	}
+	s.log.Debug("预热未命中，回源", "url", abs)
 	s.proxyMedia(w, r, abs, "youtube", sess.Ref)
+}
+
+// warmYtVideo 是「起播预热」：把两条子清单和头两个分片先取回本地。
+//
+// 本机实测：解析已缓存时点开到出第一帧约 1.6 秒，其中子清单 0.35s、第一个分片 0.9s，
+// 都是「浏览器问一句、我们再替它去 YouTube 问一句」的往返。这两步不依赖浏览器，
+// 所以提前到「点开弹窗」那一步（比播放器早一秒多）跑，等播放器开口时已经是本地回环。
+//
+// 取不到就当没预热过（签名过期之类）：不影响播放，只是退回原来的慢路径。
+func (s *Server) warmYtVideo(ctx context.Context, videoID string, v hls.StreamVariant, renditions []hls.Rendition) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	warm := s.ytStream.Warm(videoID)
+
+	playlists := []string{v.URL}
+	if audio, ok := hls.AudioFor(renditions, v.AudioGroup); ok {
+		playlists = append(playlists, audio.URI)
+	}
+
+	// 两条子清单并行取（音轨那边小得多，一起发就行）。
+	segs := make([][]string, len(playlists))
+	var wg sync.WaitGroup
+	for i, raw := range playlists {
+		wg.Add(1)
+		go func(i int, raw string) {
+			defer wg.Done()
+			ct, body, err := s.fetchRawMedia(ctx, raw, "youtube")
+			if err != nil {
+				s.log.Debug("预热失败", "url", raw, "err", err)
+				return
+			}
+			s.log.Debug("预热子清单", "bytes", len(body), "url", raw)
+			warm.Put(raw, ct, body)
+			segs[i] = firstMediaURLs(raw, body, 2)
+		}(i, raw)
+	}
+	wg.Wait()
+
+	// 每份清单的头两个（init 段 + 首个分片）：没有它们 hls.js 出不了画面。
+	var segWg sync.WaitGroup
+	for _, list := range segs {
+		for _, u := range list {
+			segWg.Add(1)
+			go func(u string) {
+				defer segWg.Done()
+				ct, body, err := s.fetchRawMedia(ctx, u, "youtube")
+				if err != nil {
+					return
+				}
+				warm.Put(u, ct, body)
+			}(u)
+		}
+	}
+	segWg.Wait()
+}
+
+// firstMediaURLs 从子清单原文里取前 n 个媒体地址（相对地址按清单地址展开）。
+// 只认分片行和 #EXT-X-MAP 的 URI，别的属性行一律不看。
+func firstMediaURLs(playlistURL string, body []byte, n int) []string {
+	base, err := url.Parse(playlistURL)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(body), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		var ref string
+		if strings.HasPrefix(trimmed, "#") {
+			if !strings.HasPrefix(trimmed, "#EXT-X-MAP") {
+				continue
+			}
+			if i := strings.Index(trimmed, `URI="`); i >= 0 {
+				rest := trimmed[i+len(`URI="`):]
+				if j := strings.Index(rest, `"`); j >= 0 {
+					ref = rest[:j]
+				}
+			}
+		} else {
+			ref = trimmed
+		}
+		if ref == "" {
+			continue
+		}
+		abs, err := base.Parse(ref)
+		if err != nil {
+			continue
+		}
+		out = append(out, abs.String())
+		if len(out) >= n {
+			break
+		}
+	}
+	return out
 }
 
 // ytStreamSource 是「视频行 + 上游清单解析结果」。
@@ -139,7 +266,20 @@ type ytStreamSource struct {
 	renditions []hls.Rendition
 }
 
-// ytStreamSource 解析一条视频的上游清单并解析出变体/音轨。
+// cachedYtSource 是一条已解析的 master 清单（变体 + 音轨），按视频 id 缓存到签名到期。
+//
+// 为什么非要缓存这一层：manifest.googlevideo.com 每被请求一次就会重新签一遍子清单地址
+// （sig/lsig 每次都不一样）。之前每次请求都重新拉 master，结果「预热取回来的子清单地址」
+// 和「播放器手里那份 master 里的地址」是两个不同的字符串，缓存永远命不中，
+// 白白多跑一趟——而且看起来就像预热根本没生效。
+type cachedYtSource struct {
+	masterURL  string
+	variants   []hls.StreamVariant
+	renditions []hls.Rendition
+	expiresAt  time.Time
+}
+
+// ytStreamSource 解析一条视频的上游清单并解析出变体/音轨（同一份解析结果复用）。
 func (s *Server) ytStreamSource(ctx context.Context, row *store.YtVideoRow) (ytStreamSource, error) {
 	out := ytStreamSource{row: row}
 	if s.ytStream == nil {
@@ -150,6 +290,15 @@ func (s *Server) ytStreamSource(ctx context.Context, row *store.YtVideoRow) (ytS
 		return out, err
 	}
 	out.up = up
+
+	s.ytMasterMu.Lock()
+	cached, hit := s.ytMaster[row.VideoID]
+	s.ytMasterMu.Unlock()
+	if hit && cached.masterURL == up.MasterURL && time.Now().Before(cached.expiresAt) {
+		out.variants, out.renditions = cached.variants, cached.renditions
+		return out, nil
+	}
+
 	body, base, err := s.fetchPlaylist(ctx, up.MasterURL)
 	if err != nil {
 		return out, err
@@ -158,6 +307,14 @@ func (s *Server) ytStreamSource(ctx context.Context, row *store.YtVideoRow) (ytS
 	if len(out.variants) == 0 {
 		return out, social.Upstream("YouTube 返回的清单里没有可用的画质", nil)
 	}
+	s.ytMasterMu.Lock()
+	s.ytMaster[row.VideoID] = cachedYtSource{
+		masterURL:  up.MasterURL,
+		variants:   out.variants,
+		renditions: out.renditions,
+		expiresAt:  up.ExpiresAt.Add(-time.Minute),
+	}
+	s.ytMasterMu.Unlock()
 	return out, nil
 }
 

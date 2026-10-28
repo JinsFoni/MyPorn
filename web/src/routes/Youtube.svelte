@@ -72,6 +72,12 @@
   let useEmbed = $state(false);
   /** 重试用：变一下就重建播放器 */
   let streamAttempt = $state(0);
+  /**
+   * 已经拿到的解析结果（悬停预热的那份）。一次点击原来要等 yt-dlp 4~5 秒，
+   * 悬停/聚焦时就先要过来，点下去时通常已经是热缓存。
+   */
+  const streamCache = new Map<string, { info: YtStreamInfo; at: number }>();
+  const warming = new Set<number>();
 
   // ---- 正在下载的条目（按钮转圈） ----
   let downloading = $state<Set<number>>(new Set());
@@ -254,7 +260,24 @@
     }
   }
 
-  /** 解析播放地址（后端跑一次 yt-dlp，结果缓存半小时，切画质不会再解析）。 */
+  /** 十秒内预热到的结果可直接用；过期就当作没预热过。 */
+  function cachedStream(video: YtVideo): YtStreamInfo | null {
+    const hit = streamCache.get(video.videoId);
+    return hit && Date.now() - hit.at < 10 * 60_000 ? hit.info : null;
+  }
+
+  /** 悬停/聚焦预热：只是把请求提前发出去，失败就忘掉，不打扰用户。 */
+  function warmStream(video: YtVideo): void {
+    if (cachedStream(video) || warming.has(video.id)) return;
+    warming.add(video.id);
+    void api
+      .ytStream(video.id)
+      .then((info) => streamCache.set(video.videoId, { info, at: Date.now() }))
+      .catch(() => {})
+      .finally(() => warming.delete(video.id));
+  }
+
+  /** 解析播放地址（后端跑一次 yt-dlp，结果在服务端缓存到签名过期，切画质不会再解析）。 */
   async function loadStream(video: YtVideo): Promise<void> {
     streamLoading = true;
     streamError = '';
@@ -262,7 +285,7 @@
     try {
       // hls.js 是单独一个 chunk：只有真要放视频时才下载
       await import('@videojs/html/media/hlsjs-video');
-      stream = await api.ytStream(video.id);
+      stream = cachedStream(video) ?? (await api.ytStream(video.id));
       selectedQualityId = qualityIdFor(stream, null);
     } catch (err) {
       streamError = messageFor(err);
@@ -575,6 +598,9 @@
       gridClass="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
       onItems={(items: YtVideo[]) => {
         videos = items;
+        // 列表一到位就把头三条的解析提前跑起来：用户挪鼠标、看标题这两秒里，
+        // 那 4 秒的 yt-dlp 已经在跑了（重复调用会被 cachedStream/warming 挡掉）。
+        for (const v of items.slice(0, 3)) warmStream(v);
       }}
     >
       {#snippet placeholder()}
@@ -601,6 +627,7 @@
         <YtCard
           {video}
           onOpen={(v) => openDetail(v)}
+          onWarm={(v) => warmStream(v)}
           onDownload={(v) => void download(v)}
           downloading={downloading.has(video.id)}
         />

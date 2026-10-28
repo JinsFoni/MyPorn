@@ -41,10 +41,14 @@ type Server struct {
 	images *imgcache.Service // 图片缓存（与同步任务共用同一份磁盘缓存）
 	// ytStream 是 YouTube「站内播放」的地址簿与解析缓存（M6 补的那条线）。
 	ytStream *ytstream.Manager
-	limiter  *loginLimiter
-	started  time.Time
-	clients  map[string]*http.Client // 平台出网客户端（图片代理 / 串流共用）
-	mu       sync.Mutex
+	// ytMaster 缓存「解析过的 master 清单」。googlevideo 每拉一次 master 都会重新签名
+	// 子清单地址，所以预热和播放器必须用同一份原文，否则两边拿到的 URL 根本不一样。
+	ytMasterMu sync.Mutex
+	ytMaster   map[string]cachedYtSource
+	limiter    *loginLimiter
+	started    time.Time
+	clients    map[string]*http.Client // 平台出网客户端（图片代理 / 串流共用）
+	mu         sync.Mutex
 }
 
 func New(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg *social.Registry,
@@ -54,7 +58,8 @@ func New(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg 
 		cfg: cfg, st: st, reg: reg, social: socialReg, hub: hub, runner: runner, box: box, log: log,
 		px:     proxying.New(st, cfg),
 		static: static, images: images, limiter: newLoginLimiter(), started: time.Now(),
-		clients: map[string]*http.Client{},
+		clients:  map[string]*http.Client{},
+		ytMaster: map[string]cachedYtSource{},
 	}
 	// 解析器现取 yt-dlp：设置页换完路径，下一个请求就用新的。
 	s.ytStream = ytstream.NewManager(func(ctx context.Context, videoID string) (ytstream.Upstream, error) {

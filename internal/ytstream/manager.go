@@ -31,10 +31,12 @@ type Upstream struct {
 // ResolveFunc 解析一条视频的上游地址（真实现是 ytsub.YtDlp.ResolveStream）。
 type ResolveFunc func(ctx context.Context, videoID string) (Upstream, error)
 
-// resolveTTL 是解析结果的缓存时长：yt-dlp 解析一条要 2~4 秒，
-// 打开弹窗、拉清单、切画质都会用到同一个地址，不能每次都去问一遍 YouTube。
-// 上限还要跟着 expire= 走——取两者中更早的那个。
-const resolveTTL = 30 * time.Minute
+// resolveTTL 是解析结果的缓存上限：yt-dlp 解析一条要 4~5 秒，是站内播放里最大的一笔开销，
+// 而签名寿命（expire=）通常有 6 小时。实际取「这个上限」和「expire − 1 分钟」里更早的那个。
+//
+// 原来是 30 分钟，结果「看几条、过半小时回头再看」又得重新等一遍 4 秒；
+// 期间签名其实一直有效，缓存到过期为止没有任何额外风险。
+const resolveTTL = 6 * time.Hour
 
 // grace 是会话过期后的宽限期：播放器手里可能还攥着上一版清单，
 // 太早把地址簿删掉，正在看的人会在下一片 404。
@@ -57,7 +59,9 @@ type Manager struct {
 
 	mu       sync.Mutex
 	ups      map[string]cachedUp
+	inflight map[string]*inflightCall
 	sessions map[string]*Session
+	warm     map[string]*Warm
 	order    []string // 会话创建顺序，超上限时从头淘汰
 }
 
@@ -71,29 +75,61 @@ func NewManager(resolve ResolveFunc, log *slog.Logger) *Manager {
 		log:      log,
 		now:      time.Now,
 		ups:      map[string]cachedUp{},
+		inflight: map[string]*inflightCall{},
 		sessions: map[string]*Session{},
+		warm:     map[string]*Warm{},
 	}
 }
 
+// inflightCall 是一次正在进行的解析：并发的调用方等同一个结果。
+type inflightCall struct {
+	done chan struct{}
+	up   Upstream
+	err  error
+}
+
 // Upstream 返回一条视频的上游地址，命中缓存就不碰 yt-dlp。
+//
+// 同一条视频同时只跑一次解析。这不是锦上添花：悬停预热、弹窗里的信息请求、
+// 播放器拉的清单会挤在同一两秒里发出，没有去重就会并发起三四个 yt-dlp 子进程，
+// 每个 4 秒，互相抢 CPU 和 YouTube 的连接，最后谁都慢。
 func (m *Manager) Upstream(ctx context.Context, videoID string) (Upstream, error) {
 	m.mu.Lock()
 	if c, ok := m.ups[videoID]; ok && m.now().Sub(c.at) < resolveTTL && m.now().Before(c.up.ExpiresAt.Add(-time.Minute)) {
 		m.mu.Unlock()
 		return c.up, nil
 	}
-	m.mu.Unlock()
-
+	if c, ok := m.inflight[videoID]; ok {
+		m.mu.Unlock()
+		select {
+		case <-c.done:
+			return c.up, c.err
+		case <-ctx.Done():
+			return Upstream{}, ctx.Err()
+		}
+	}
 	if m.resolve == nil {
+		m.mu.Unlock()
 		return Upstream{}, ErrNoResolver
 	}
+	call := &inflightCall{done: make(chan struct{})}
+	m.inflight[videoID] = call
+	m.mu.Unlock()
+
 	up, err := m.resolve(ctx, videoID)
+
+	m.mu.Lock()
+	call.up, call.err = up, err
+	if err == nil {
+		m.ups[videoID] = cachedUp{up: up, at: m.now()}
+	}
+	delete(m.inflight, videoID)
+	m.mu.Unlock()
+	close(call.done)
+
 	if err != nil {
 		return Upstream{}, err
 	}
-	m.mu.Lock()
-	m.ups[videoID] = cachedUp{up: up, at: m.now()}
-	m.mu.Unlock()
 	return up, nil
 }
 
@@ -162,6 +198,97 @@ func (m *Manager) gcLocked() {
 			delete(m.ups, k)
 		}
 	}
+	for k, w := range m.warm {
+		if now.Sub(w.at) >= warmTTL {
+			delete(m.warm, k)
+		}
+	}
+}
+
+// warmTTL 是预热的存活时间。预热只是「把先后顺序调一下」，
+// 超过这个时间的字节很可能对应的是一次早就结束的播放，留着没意义。
+const warmTTL = 15 * time.Minute
+
+// maxWarmVideos / maxWarmBytes 兜住内存：一条视频预热 ≤ 两份子清单 + 几个分片，
+// 十几条在跑也就几十 MB，再多就按最旧淘汰。
+const (
+	maxWarmVideos = 8
+	maxWarmBytes  = 32 << 20
+)
+
+// Warm 是一条视频的起播预热：上游地址 → 已经取回来的字节。
+//
+// 和 Session 分开是有原因的：会话是「给浏览器发号」的，每次拉 master 都是新会话；
+// 而预热要在浏览器开口之前就开始（点开弹窗的那一刻），那时还没有会话。
+// 所以这里按上游地址存原文，谁拿到号都能用。
+type Warm struct {
+	mu    sync.Mutex
+	at    time.Time
+	items map[string]Prefetched
+	bytes int
+}
+
+// Warm 取（没有就建）一条视频的预热缓存。
+func (m *Manager) Warm(videoID string) *Warm {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	if w, ok := m.warm[videoID]; ok && now.Sub(w.at) < warmTTL {
+		return w
+	}
+	w := &Warm{at: now, items: map[string]Prefetched{}}
+	m.warm[videoID] = w
+	// 超上限时把最旧的几条扔掉（地图里顺序不定，按时间戳挑）。
+	for len(m.warm) > maxWarmVideos {
+		var oldestKey string
+		var oldest time.Time
+		for k, v := range m.warm {
+			if k == videoID {
+				continue
+			}
+			if oldestKey == "" || v.at.Before(oldest) {
+				oldestKey, oldest = k, v.at
+			}
+		}
+		if oldestKey == "" {
+			break
+		}
+		delete(m.warm, oldestKey)
+	}
+	return w
+}
+
+// WarmFor 只取已有预热（不新建），给分片请求用。
+func (m *Manager) WarmFor(videoID string) (*Warm, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w, ok := m.warm[videoID]
+	if !ok || m.now().Sub(w.at) >= warmTTL {
+		return nil, false
+	}
+	return w, true
+}
+
+// Put 存一份字节（同一地址只存一次，超额度就不存）。
+func (w *Warm) Put(abs, contentType string, body []byte) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, ok := w.items[abs]; ok {
+		return
+	}
+	if w.bytes+len(body) > maxWarmBytes {
+		return
+	}
+	w.items[abs] = Prefetched{ContentType: contentType, Body: body}
+	w.bytes += len(body)
+}
+
+// Get 取一份字节。
+func (w *Warm) Get(abs string) (Prefetched, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	p, ok := w.items[abs]
+	return p, ok
 }
 
 // Session 是一次播放的地址簿：分片/子清单的真实地址在这里领号。
@@ -174,6 +301,12 @@ type Session struct {
 	mu    sync.Mutex
 	urls  []string
 	index map[string]int
+}
+
+// Prefetched 是一份已经取回来的字节（子清单原文或分片），带着它的 Content-Type。
+type Prefetched struct {
+	ContentType string
+	Body        []byte
 }
 
 // Ref 把上游地址换成站内地址（同一地址重复登记会拿到同一个号）。

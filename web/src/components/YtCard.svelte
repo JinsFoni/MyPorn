@@ -16,11 +16,13 @@
     onOpen?: (video: YtVideo) => void;
     /** 悬停/聚焦时才出现的下载按钮被点了 */
     onDownload?: (video: YtVideo) => void;
+    /** 悬停即预热：把解析（yt-dlp 4~5 秒）挪到用户真正点下之前 */
+    onWarm?: (video: YtVideo) => void;
     /** 正在下载/刚刚排上队 */
     downloading?: boolean;
   }
 
-  let { video, onOpen, onDownload, downloading = false }: Props = $props();
+  let { video, onOpen, onDownload, onWarm, downloading = false }: Props = $props();
 
   let thumbFailed = $state(false);
   const thumb = $derived(imageUrl(video.thumbUrl, 480));
@@ -41,6 +43,8 @@
     class="relative block w-full cursor-pointer overflow-hidden rounded-xl bg-panel text-left"
     aria-label={`播放 ${video.title}`}
     onclick={() => onOpen?.(video)}
+    onpointerenter={() => onWarm?.(video)}
+    onfocus={() => onWarm?.(video)}
   >
     <div class="aspect-video w-full">
       {#if thumb && !thumbFailed}
