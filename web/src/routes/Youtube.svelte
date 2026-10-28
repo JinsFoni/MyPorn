@@ -598,9 +598,13 @@
       gridClass="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
       onItems={(items: YtVideo[]) => {
         videos = items;
-        // 列表一到位就把头三条的解析提前跑起来：用户挪鼠标、看标题这两秒里，
-        // 那 4 秒的 yt-dlp 已经在跑了（重复调用会被 cachedStream/warming 挡掉）。
-        for (const v of items.slice(0, 3)) warmStream(v);
+        // 列表一到位就把头几条的解析提前跑起来（重复调用会被 cachedStream/warming 挡掉）。
+        // 错开 1.5 秒再发下一个：yt-dlp 解析是网络 + 一次 JS 解释，三个一起发会互相抢，
+        // 反而把「刚进页面就点第一条」那个场景拖慢——那恰好是最常见的点法。
+        items.slice(0, 3).forEach((v, i) => {
+          if (i === 0) warmStream(v);
+          else setTimeout(() => warmStream(v), i * 1500);
+        });
       }}
     >
       {#snippet placeholder()}
