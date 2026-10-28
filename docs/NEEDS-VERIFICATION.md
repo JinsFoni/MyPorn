@@ -128,6 +128,8 @@ make backend           # 先编译
 | 主页路径 | `/pornstars/<slug>` 现在 **301** 到 `/creators/<slug>`（客户端自动跟随，两种粘贴都能用） | 抓资料 404 → 先看是不是又被换了路径 |
 | 列表排序（**必须带 `/newest`**） | 默认的 `/pornstars/<slug>` 是 `sort:"rated"`（按评分/默认序），第 1 页最上面是几年前的老片，最新的那几部甚至**不在同一个分区里**（`newestVideoSectionComponent` 只有 4 条，我们用的大分区 `trendingVideoSectionComponent` 是 38 条按评分排的）。带 `/newest` 才是 `sort:"added"`、按 `created` 严格倒序、条数也齐（2026-10 实测 `mysaaat`：默认 38 条 + 漏掉最新 4 条 → `/newest` 42 条 = 页面自称的 `videoCount`）。增量同步是「遇到已入库影片即停」，排序不对就等于老片一挡、**新片永远发现不了** | 订阅之后再也看不到新片、日志里「新增 0 部」→ 先 curl 一下 `/pornstars/<slug>/newest` 看 `sort` 字段是不是 `added` |
 | 列表分页 | 路径跟着排序走：`/pornstars/<slug>/newest`、第 N 页 `/pornstars/<slug>/newest/<n>`，都只到末页为止，**翻过头回 404 而不是空页**；单页创作者（如 `mysaaat`）的 `paginationComponent` 干脆是空的 | 回填卡在「未完成」且日志有「分页抓取中断 page=2」→ 看是不是末页 404 没被当成「到头了」 |
+| HLS 分片主机 | 清单里**不止一个主机**：开头的 init 段 + 前两个分片在 `video7.xhcdn.com`，之后整条片子（实测 1080p AV1：319 段里 317 段）改由 `ip<数字>.ahcdn.com` 分发。`streamHostSuffixes` 两个后缀都得有 | 播放在第 8 秒（两段 4 秒）之后每段都 400「非法的播放地址」，控制台里分片请求全是 4xx |
+| 默认档 | 同片同时给 AV1 与 H.264，按 §7.4.1 排序后默认档通常是 `1080p.av1`（3.5 Mbps） | 播不动/黑屏 → 先用 `canDecodeCodec` 看浏览器能不能解 AV1 |
 | 别拿 `/full-length` 当过滤器 | 它不是「完整视频」而是站点的「长片」分类：riley-reid 上只剩 34 条、且 `/full-length/newest/2` 直接 **404**（不可翻页）。竖版短视频另有 `/shorts` 页；默认列表与 `/newest` 本来就是横版长片（缩略图 526×298、时长 2 分钟起） | 影片数突然只剩几十条、翻页 404 → 看路径里是不是混进了 `full-length` |
 
 ## 二、beeg（`internal/platform/beeg`）

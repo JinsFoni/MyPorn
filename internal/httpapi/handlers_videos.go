@@ -212,8 +212,11 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("本地有文件，线上解析失败就先播本地", "video", v.ID, "err", rerr)
 	}
 
-	if len(out) == 0 {
-		// 既没有本地文件，也没有能解析的平台：只有 YouTube 会走到这里。
+	// 既没有本地文件、也没有线上档位，才是真的没得播：只有不注册 adapter 的平台（YouTube）
+	// 会走到这里。判断必须带上 len(variants)：线上档位是在下面那个循环里才追加进 out 的，
+	// 只看 out 会把「有线上地址、只是还没进 out」错判成「没得播」——
+	// M6 之后每条 xHamster 影片都 400 unsupported_platform，就是这么来的。
+	if len(out) == 0 && len(variants) == 0 {
 		writeErr(w, http.StatusBadRequest, "unsupported_platform", "这个平台没有在线播放通道，先下载到本地")
 		return
 	}

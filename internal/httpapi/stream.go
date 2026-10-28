@@ -21,6 +21,10 @@ const mediaUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWeb
 var streamHostSuffixes = []string{
 	"pornhub.com", "phncdn.com",
 	"xhcdn.com", "xhamster.com", "xhamster.desi", "xhwebsite.com",
+	// xHamster 的 HLS 清单里只有开头的 init 段和前两个分片在 xhcdn.com 上，
+	// 之后整条片子（实测 1080p AV1：319 段里有 317 段）改由 ip<数字>.ahcdn.com 分发。
+	// 漏掉这个后缀，播放就在第 8 秒（两段 4 秒）之后每个分片都 400「非法的播放地址」。
+	"ahcdn.com",
 	"beeg.com", "beeg.porn",
 	// YouTube 的 HLS（清单 + 分片）都在 googlevideo 上。地址是签名且绑定出口 IP 的，
 	// 只有本进程能取——浏览器拿到的永远是 /api/yt/seg/... 这种站内地址。
