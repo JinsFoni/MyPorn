@@ -308,6 +308,12 @@ func (s *Server) ytStreamSource(ctx context.Context, row *store.YtVideoRow) (ytS
 		return out, social.Upstream("YouTube 返回的清单里没有可用的画质", nil)
 	}
 	s.ytMasterMu.Lock()
+	// 顺手清掉已经过期的（每条几百字节，但看过的视频会一直累积）。
+	for id, c := range s.ytMaster {
+		if time.Now().After(c.expiresAt) {
+			delete(s.ytMaster, id)
+		}
+	}
 	s.ytMaster[row.VideoID] = cachedYtSource{
 		masterURL:  up.MasterURL,
 		variants:   out.variants,
