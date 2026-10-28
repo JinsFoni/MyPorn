@@ -673,10 +673,13 @@
     <button type="button" class="absolute inset-0 bg-ink/85 backdrop-blur-sm" aria-label="关闭" onclick={closeDetail}
     ></button>
     <div
-      class="relative z-10 max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-sheet p-4 sm:max-w-4xl sm:rounded-2xl md:max-w-5xl lg:max-w-[min(92vw,84rem)]"
+      class="yt-sheet relative z-10 max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-sheet p-4 sm:max-w-4xl sm:rounded-2xl md:max-w-5xl"
+      role="dialog"
+      aria-modal="true"
+      aria-label={v.title}
     >
-      <div class="flex items-start justify-between gap-3">
-        <h2 class="text-title font-medium leading-snug text-fg">{v.title}</h2>
+      <!-- 顶栏只剩一个关闭键：标题挪到画面下面，先看片再读标题 -->
+      <div class="flex items-center justify-end gap-3">
         <button
           type="button"
           class="shrink-0 rounded-full p-1.5 text-dim transition-colors hover:bg-panel hover:text-fg"
@@ -763,7 +766,10 @@
         </div>
       {/if}
 
-      <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">
+      <!-- 标题在播放器之后：弹窗一眼先看到画面，标题紧挨着频道/播放量这一行 -->
+      <h2 class="mt-3 text-title font-medium leading-snug text-fg">{v.title}</h2>
+
+      <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">
         {#if v.channel.avatarUrl}
           <img src={imageUrl(v.channel.avatarUrl, 32) ?? ''} alt="" class="h-5 w-5 rounded-full object-cover" />
         {/if}
@@ -912,3 +918,15 @@
     </div>
   </div>
 {/if}
+
+<style>
+  /* 弹窗宽度不再只看视口宽：标题挪到播放器下面之后，视频顶到弹窗底下就把标题挤出了可视区
+     （1440×900 实测：视频 745 高、标题落在 y=831，弹窗底 864，标题只露半行）。
+     这里再叠一条「按高度反算宽度」的上限，让「顶栏 + 视频 + 标题 + 频道行」在不滚动时正好放得下：
+     92dvh 减去 7.5rem（上下内距 2rem + 关闭键 28px + 间距 + 标题 + 频道行）。 */
+  @media (min-width: 64rem) {
+    .yt-sheet {
+      max-width: min(92vw, 84rem, calc((92dvh - 7.5rem) * 16 / 9 + 2rem));
+    }
+  }
+</style>
