@@ -151,7 +151,9 @@ func readLimited(r io.Reader, limit int64) ([]byte, error) {
 	return buf, nil
 }
 
-var errNotFound = errors.New("上游没有这个页面（404）")
+// errNotFound 包着公共的 platform.ErrNotFound：私有哨兵给本包判断用，
+// 外面的任务（比如分页翻到末页）也能用 errors.Is 认出来。
+var errNotFound = fmt.Errorf("%w（xHamster 页面不存在）", platform.ErrNotFound)
 
 var rePerformerPath = regexp.MustCompile(`/(?:pornstars|creators)/([A-Za-z0-9_\-]+)`)
 

@@ -136,7 +136,9 @@ var ErrRateLimited = errors.New("上游限流")
 
 // ErrNotFound 表示上游明确回 404（艺人/搜索页不存在）。
 // 搜索页在没有结果时就是 404，调用方要能把它和「网络出错」区分开。
-var ErrNotFound = errors.New("上游 404")
+// 外面包一层公共哨兵：本包按 ErrNotFound 判断「没搜到」，
+// 任务层也能用 platform.ErrNotFound 统一认出 404。
+var ErrNotFound = fmt.Errorf("%w（PornHub 页面不存在）", platform.ErrNotFound)
 
 var rePerformerPath = regexp.MustCompile(`/(?:model|pornstar)/([A-Za-z0-9_\-]+)`)
 

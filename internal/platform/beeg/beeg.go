@@ -90,7 +90,7 @@ func (a *Adapter) BaseURL() string { return a.base }
 // HTTPClient 暴露客户端（代理配置与播放请求共用）。
 func (a *Adapter) HTTPClient() *http.Client { return a.client }
 
-var errNotFound = errors.New("beeg 上没有这个条目（404）")
+var errNotFound = fmt.Errorf("%w（beeg 上没有这个条目）", platform.ErrNotFound)
 
 // pace 做礼貌限速。
 func (a *Adapter) pace(ctx context.Context) error {

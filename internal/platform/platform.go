@@ -3,6 +3,7 @@ package platform
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -13,6 +14,16 @@ import (
 
 	"github.com/mario/myporn/internal/model"
 )
+
+// ErrNotFound 表示上游明确回了 404：页面不存在。
+//
+// 各家适配器本来各有一个私有哨兵（pornhub.ErrNotFound / xhamster.errNotFound /
+// beeg.errNotFound），调用方没法跨站判断。这里给一个公共的，各家把私有哨兵包在它外面
+// （errors.Is(err, platform.ErrNotFound) 就能统一认出「404」）。
+//
+// 用得上它的地方是分页：艺人影片列表翻到末页之后，xHamster 回的是 404 而不是空页，
+// 判断不出 404 就分不清「翻完了」和「抓取出错」，回填会一直卡在「未完成」。
+var ErrNotFound = errors.New("上游 404：页面不存在")
 
 // Page 是艺人影片列表的一页。
 type Page struct {

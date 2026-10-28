@@ -1,9 +1,11 @@
 package xhamster
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
@@ -67,10 +69,87 @@ type aboutMeComponent struct {
 	AppearanceInfoList []infoField `json:"appearanceInfoList"`
 }
 
-// infoField 是「我 是」「来自」「身高」这样一行资料。
+// infoField 是「I am」「From」「Height」这样一行资料。
+//
+// Value 故意用 json.RawMessage 原样收下，不在解码时定类型：这一列的形态会随站点改版变脸。
+// 2026-10 之前全是字符串（"From": "Russian Federation"），之后新增的
+// 「Interests and fetishes」一行是对象数组：
+//
+//	{"label": "Interests and fetishes", "value": [{"id":1119,"slug":"gentle-sex","name":"Gentle sex",…}, …]}
+//
+// 直接写 Value string 的后果不是「少显示一行」，而是整个 json.Unmarshal 报
+// `cannot unmarshal array into Go struct field … of type string` —— 整页解析失败，
+// 于是这类资料更「丰富」的艺人一个都加不进来（mysaaat 就是这样挂的）。
+// 现在取值时再宽松地挑文本（见 text），认不出来的形态最多是这一行空着。
 type infoField struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
+	Label string          `json:"label"`
+	Value json.RawMessage `json:"value"`
+}
+
+// text 把一行的 value 压成给人看的一串字。
+func (f infoField) text() string { return looseText(f.Value) }
+
+// looseText 把任意形态的 JSON 值压成一行文本：
+//   - 字符串原样；数字/布尔转字符串
+//   - 对象取 name（退而求其次 title / label / text）
+//   - 数组逐项压平后用「、」连起来，太多项就截断（兴趣标签能有十几二十个，
+//     全塞进资料区那一行会把版式撑爆）
+func looseText(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	switch raw[0] {
+	case '"':
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			return strings.TrimSpace(s)
+		}
+	case '{':
+		var obj map[string]json.RawMessage
+		if json.Unmarshal(raw, &obj) == nil {
+			for _, key := range []string{"name", "title", "label", "text"} {
+				if v, ok := obj[key]; ok {
+					if s := looseText(v); s != "" {
+						return s
+					}
+				}
+			}
+		}
+	case '[':
+		var items []json.RawMessage
+		if json.Unmarshal(raw, &items) != nil {
+			return ""
+		}
+		out := make([]string, 0, len(items))
+		for _, it := range items {
+			if s := looseText(it); s != "" {
+				out = append(out, s)
+			}
+		}
+		return joinCapped(out, maxInfoItems)
+	default:
+		// 数字 / true / false
+		var v any
+		if json.Unmarshal(raw, &v) == nil {
+			return strings.TrimSpace(fmt.Sprint(v))
+		}
+	}
+	return ""
+}
+
+// maxInfoItems 是一行资料里最多列几项（兴趣标签这种长列表只留前几项 + 计数）。
+const maxInfoItems = 6
+
+// joinCapped 用「、」连接，超过 n 项时截断并补上总数，如「A、B、C 等 14 项」。
+func joinCapped(items []string, n int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	if len(items) <= n {
+		return strings.Join(items, "、")
+	}
+	return fmt.Sprintf("%s 等 %d 项", strings.Join(items[:n], "、"), len(items))
 }
 
 type channelInfo struct {
@@ -272,11 +351,12 @@ func performerFrom(v *initials, slug string) *model.Performer {
 		}
 	}
 	if cm := v.AboutMeComponent; cm != nil {
-		p.Bio = strings.TrimSpace(cm.Text)
+		// 简介里带 HTML 实体（个人自述里 "I&#039;m Alice" 这种），原样显示会露馅。
+		p.Bio = strings.TrimSpace(html.UnescapeString(cm.Text))
 		rows := make([]model.ProfileField, 0, len(cm.PersonalInfoList)+len(cm.AppearanceInfoList))
 		for _, f := range append(append([]infoField{}, cm.PersonalInfoList...), cm.AppearanceInfoList...) {
 			label := strings.TrimSpace(f.Label)
-			value := strings.TrimSpace(f.Value)
+			value := f.text()
 			if label == "" || value == "" {
 				continue
 			}

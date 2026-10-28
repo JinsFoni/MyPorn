@@ -3,9 +3,11 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/mario/myporn/internal/model"
+	"github.com/mario/myporn/internal/platform"
 	"github.com/mario/myporn/internal/store"
 )
 
@@ -93,6 +95,9 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 	var autoIDs []int64
 	finished := false
 	videosSeen := 0
+	// lastPage 是最后一个真正抓成功的页；回填完成时按它记断点，
+	// 免得「翻过头的那一页」把续跑点一直往后推（每次同步都白跑两次请求）。
+	lastPage := startPage - 1
 	totalPages := 0
 	if sub.BackfillTotalPages != nil {
 		totalPages = *sub.BackfillTotalPages
@@ -104,6 +109,18 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 		}
 		res, err := ad.ListPerformerVideos(ctx, perf.PerformerID, page)
 		if err != nil {
+			// 翻过末页时 xHamster 回的是 404，不是空页。这是「到头了」，不是出错：
+			// 早先一律按「中断」处理，而且续跑点落在第 2 页时更糟——第 1 页之后的
+			// 失败原本一律当硬错误，于是回填永远停在「未完成」，每次扫到这位艺人
+			// 都从断点重来一遍、再在同一个 404 上停住（单页创作者上是死循环，mysaaat 就是）。
+			//
+			// 注意这条要排在第 1 页判断之前：续跑点本身就可能落在已经翻完的那一页上。
+			// 第 1 页 404 另当别论：那是艺人页本身没了，仍然算失败。
+			if page > 1 && errors.Is(err, platform.ErrNotFound) {
+				r.log.Info("影片列表翻到末页", "performer", perf.PerformerID, "page", page)
+				finished = true
+				break
+			}
 			if page == startPage {
 				return fmt.Errorf("抓取第 %d 页失败: %w", page, err)
 			}
@@ -198,6 +215,8 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 			break
 		}
 
+		lastPage = page
+
 		// 回填过程记录断点，进程中断后可续跑。
 		if full {
 			var tp *int
@@ -216,7 +235,7 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 		if totalPages > 0 {
 			tp = &totalPages
 		}
-		if err := r.st.MarkBackfillProgress(sub.ID, page, tp, true); err != nil {
+		if err := r.st.MarkBackfillProgress(sub.ID, lastPage, tp, true); err != nil {
 			return err
 		}
 	}

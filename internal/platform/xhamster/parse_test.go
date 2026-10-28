@@ -138,3 +138,60 @@ func TestParsePerformerURL(t *testing.T) {
 		}
 	}
 }
+
+// 2026-10 起 xHamster 给「Interests and fetishes」这一行的 value 换成了对象数组
+// （[{id,slug,name,type,popular,url}, …]），而老代码把 value 定成 string：
+// 一行的形态变了，json.Unmarshal 直接报错，整页解析失败 ——
+// 表现是「这类资料更丰富的艺人一个都加不进来」（mysaaat 就是这么挂的）。
+// 这条测试盯的是「一行的形态变了，不该把整页拖下水」。
+func TestParseInitialsToleratesListInfoValues(t *testing.T) {
+	const fixture = `<script>window.initials={"aboutMeComponent":{"text":"Hi","personalInfoList":[` +
+		`{"label":"From","value":"Russian Federation"},` +
+		`{"label":"Interests and fetishes","value":[` +
+		`{"id":1119,"slug":"gentle-sex","name":"Gentle sex"},` +
+		`{"id":527,"slug":"blowjob","name":"Blowjob"},` +
+		`{"id":956,"slug":"porn","name":"Porn"},` +
+		`{"id":1120,"slug":"role-playing","name":"Role playing"},` +
+		`{"id":1130,"slug":"video-games","name":"Video games"},` +
+		`{"id":7,"slug":"anime","name":"Anime"},` +
+		`{"id":8,"slug":"cosplay","name":"Cosplay"},` +
+		`{"id":9,"slug":"massage","name":"Massage"}]},` +
+		`{"label":"Age","value":27},` +
+		`{"label":"Nothing","value":null}` +
+		`],"appearanceInfoList":[{"label":"Height","value":"167 cm (5 ft 65 in)"}]},` +
+		`"channelInfo":{"id":1,"type":"creator","slug":"mysaaat"}};</script>`
+
+	iv, err := parseInitials([]byte(fixture))
+	if err != nil {
+		t.Fatalf("一行的 value 是对象数组时不该让整页解析失败: %v", err)
+	}
+	p := performerFrom(iv, "mysaaat")
+	got := map[string]string{}
+	for _, f := range p.Profile {
+		got[f.Label] = f.Value
+	}
+	// 字符串形态照旧
+	if got["From"] != "Russian Federation" {
+		t.Fatalf("From=%q", got["From"])
+	}
+	// 对象数组：取 name、用「、」连、超过 6 项截断并带总数
+	const wantInterests = "Gentle sex、Blowjob、Porn、Role playing、Video games、Anime 等 8 项"
+	if got["Interests and fetishes"] != wantInterests {
+		t.Fatalf("Interests and fetishes=%q，期望 %q", got["Interests and fetishes"], wantInterests)
+	}
+	// 数字
+	if got["Age"] != "27" {
+		t.Fatalf("Age=%q", got["Age"])
+	}
+	// null：跳过这一行，不留空行
+	if _, ok := got["Nothing"]; ok {
+		t.Fatalf("null 值不该出现在资料行里: %v", p.Profile)
+	}
+	// 剩下的解析照旧（身高仍被 ParseBody 抽走）
+	if p.Body.HeightCm != 167 {
+		t.Fatalf("身高=%d", p.Body.HeightCm)
+	}
+	if p.Name != "mysaaat" {
+		t.Fatalf("名字=%q", p.Name)
+	}
+}
