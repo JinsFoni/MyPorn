@@ -1276,8 +1276,12 @@
         {#if biliHealth}
           <div class="panel px-4 py-3">
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta">
-              <span class={biliHealth.hasCookie ? 'text-sage' : 'text-brick'}>
-                {biliHealth.hasCookie ? 'Cookie 已配置（1080P 以上可用）' : '未填 Cookie（最高 720P）'}
+              <span class={biliHealth.loggedIn ? 'text-sage' : 'text-brick'}>
+                {biliHealth.loggedIn
+                  ? `已登录 ${biliHealth.uname}（1080P 可用）`
+                  : biliHealth.hasCookie
+                    ? 'Cookie 存了但没登录成功（最高 720P）'
+                    : '未填 Cookie（最高 720P）'}
               </span>
               <span class={biliHealth.ffmpegOk ? 'text-sage' : 'text-brick'}>
                 {biliHealth.ffmpegOk ? 'ffmpeg 可用（分轨档位能合流）' : 'ffmpeg 缺失，480P 及以上放不了'}

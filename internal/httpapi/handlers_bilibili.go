@@ -131,8 +131,12 @@ func (s *Server) handleBiliSeen(w http.ResponseWriter, r *http.Request) {
 //   - 480P 这类档位音画分轨，浏览器放不了，服务端要靠 ffmpeg 合成 mp4。
 type biliHealthDTO struct {
 	HasCookie bool `json:"hasCookie"`
-	FFmpegOK  bool `json:"ffmpegOk"`
-	HasProxy  bool `json:"hasProxy"`
+	// LoggedIn / Uname 是真去打一次 nav 问出来的：只回答「存着的那条 Cookie 能不能用」。
+	// 2026-10-29 踩过：hasCookie=true 但存的是被拆坏的 cookies.txt 片段，界面装没事。
+	LoggedIn bool   `json:"loggedIn"`
+	Uname    string `json:"uname"`
+	FFmpegOK bool   `json:"ffmpegOk"`
+	HasProxy bool   `json:"hasProxy"`
 }
 
 func (s *Server) handleBiliHealth(w http.ResponseWriter, _ *http.Request) {
@@ -142,11 +146,24 @@ func (s *Server) handleBiliHealth(w http.ResponseWriter, _ *http.Request) {
 	if s.runner != nil {
 		ffmpegOK = s.runner.Encoder().Check(ctx) == nil
 	}
-	writeJSON(w, http.StatusOK, biliHealthDTO{
+	dto := biliHealthDTO{
 		HasCookie: s.hasBiliCookie(),
 		FFmpegOK:  ffmpegOK,
 		HasProxy:  s.px.For(platformBilibili) != "",
-	})
+	}
+	// 只有真的存了 Cookie 才去问 nav：没存就没得问，省一次请求。
+	if dto.HasCookie {
+		if ad, ok := s.reg.Get(platformBilibili); ok {
+			if login, ok2 := ad.(interface {
+				LoginName(context.Context) (string, error)
+			}); ok2 {
+				if name, err := login.LoginName(ctx); err == nil {
+					dto.Uname, dto.LoggedIn = name, name != ""
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, dto)
 }
 
 // handleManageBili 是 管理 → B 站 页签的整页数据（一次请求给全，和 /api/manage/youtube 同构）。

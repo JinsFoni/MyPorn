@@ -28,16 +28,16 @@
 |---|---|---|
 | 唯一键 | `bvid`（`BV1…`）。av 号在列表里本来就不给，只用 bvid | 三处接口一致 |
 | 增量列表 | **App 接口** `/x/v2/space/archive/cursor`（appkey 签名，固定 20 条） | §7-2：同一 IP 被 web 列表接口封着时，它照样正常返回 |
-| 回填列表 | **web 接口** `/x/space/arc/search`（`ps=20&pn=N&order=pubdate`），1 次 / 20 秒 + 退避重试 | §7-2：能过，但节奏稍快就 -799 / HTTP 412 |
+| 回填列表 | **wbi 签名接口** `/x/space/wbi/arc/search`（`ps=20&pn=N&order=pubdate`，带 `wts`/`w_rid`），3 次 / 秒 | §7-2：签名版连打 15 页 3.3 秒零失败；未签名版一页就 -799（所以未签名只剩兜底） |
 | 两个来源的页大小 | 都取 **20**（App 接口只肯给 20，传 `ps=30/50` 还是一页 20；web 接口迁就它） | 页大小不一致的话，「第 1 页 20 条 + 第 2 页从第 21 条起」会错位，中间那 30 条永远补不上 |
 | 画质取舍 | durl（单文件）保底，DASH 里**只跳过与 durl 同分辨率的那一档**，更低/更高的照留 | §7-3：未登录时 durl 有 720P、DASH 只有 360P/480P。同档两条 `720p` 会在下拉框里重复，其余档留着手动可选 |
 | 分轨播放 | 服务端 ffmpeg 合流成 mp4 缓存，浏览器只吃单文件 mp4 | B 站 DASH 的音视频是两条独立流，浏览器 `<video>` 播不了分轨 m4s |
 | 合流的时机 | 点播到那一档时才合，合完落盘缓存 7 天；同一个 key 只跑一次 | §7-4：25 分钟 480P 一次 15.3 秒；44 分钟 PCDN 源 1 分 52 秒。默认档是 durl，起播不等合流 |
-| 登录态 | 设置里填 `SESSDATA`（自动从整段 Cookie 头 / 裸值里抠），只影响画质与限额，不影响功能 | §7-6：未登录 1080P+ 拿不到 |
+| 登录态 | 设置里填 Cookie（整段 Cookie 头 / 裸 SESSDATA / 浏览器导出的 `cookies.txt` 都认），**只影响画质**，不影响列表额度 | §7-7：带 Cookie 才有 1080P；限流是签名问题，与登录无关 |
 | 媒体代理 | `/api/stream` 放行 `bilivideo.com` / `bilivideo.cn`，补 `Referer: https://www.bilibili.com/` | 不带 Referer 403 |
-| 限流的语义 | `platform.ErrRateLimited`：已抓到的页照常入库、断点照留、退避 3 小时，**不当失败**（第 1 页就没抓到才失败） | §7-5：这不是偶发错误，是 B 站列表接口的常态 |
+| 限流的语义 | `platform.ErrRateLimited`：已抓到的页照常入库、断点照留、退避 3 小时，**不当失败**（第 1 页就没抓到才失败） | §7-5：签名版下基本不会再触发，但兜底通道还要它 |
 
-## 3. 抓取：两条通道
+## 3. 抓取：两条通道（外加一条兜底）
 
 ```
 增量（每 6h 一次，只抓第 1 页）
@@ -45,12 +45,26 @@
         无风控；只给 20 条；offset/pn/page 传什么都忽略（访客拿不到第 2 页）
 
 回填（首次 / 手动完整同步，按断点续翻）
-   └─ web  /x/space/arc/search?mid=&ps=20&pn=N&order=pubdate&order_avoided=true
-        1 次 / 20 秒；连打就 -799「请求过于频繁」→ HTTP 412；恢复要几十分钟
+   └─ wbi  /x/space/wbi/arc/search?mid=&ps=20&pn=N&order=pubdate&order_avoided=true
+            &platform=web&web_location=1550101&wts=<秒>&w_rid=<md5(排序查询串 + mixin key)>
+        签名材料取 /x/web-interface/nav 的 wbi_img.img_url / sub_url，缓存 30 分钟
+        实测连打 15 页、3.3 秒、零失败（§7-2）；-352 时换 key 重试一次
+
+兜底（nav 取不到图片名、或签名连换两把 key 都被拒）
+   └─ 未签名 /x/space/arc/search  →  1 次 / 20 秒 + 退避重试（30s、60s）
 ```
 
+**关键发现（2026-10-29）：卡人的不是 Cookie，是签名。** 同一个 IP、同一份 Cookie、
+同一时刻，只是「查询串末尾多一个 `w_rid`」，结果就是「一页 -799」和「十五页零失败」的差别。
+这也是浏览器为什么能随便翻：它每次都带签名。参考实现是
+[bili-sync](https://github.com/amtoaer/bili-sync)（Rust）的
+`crates/bili_sync/src/bilibili/{submission,credential}.rs`——它也没有 `dm_*` 指纹参数，
+只做两件事：nav 取图片名拼 mixin key、`md5(排序后的查询串 + key)` 得 `w_rid`。
+
+为什么还留着 App 通道：它**完全不设防**（web 列表被封时它照样返回），
+是签名机制万一改版时的最后一条活路；代价是只给第 1 页，正好够增量用。
+
 为什么不是「一律用 App 接口」：访客只能拿第 1 页（`next_cursor` 只对登录用户有意义，实测传了也没用）。
-为什么不是「一律用 web 接口」：它被封的时候整个订阅就停摆，而增量才是天天要跑的那条。
 
 失败语义（`internal/jobs/sync.go`）：
 
@@ -124,7 +138,7 @@ B 站没有专属播放器组件，只有「每档画质的地址从哪来」这
 这一页只是按平台重新组织取数（`internal/store/bilibili.go` 顶部写了理由），所以播放、下载、
 合流、限流退避全部复用已有实现，不存在「两套真相」。
 
-## 7. 实测记录（2026-10-28，本机直连，未登录）
+## 7. 实测记录（2026-10-28 未登录 / 2026-10-29 配好登录 Cookie 后补测）
 
 ### 7.1 解析与订阅
 
@@ -146,7 +160,19 @@ POST /api/performers/resolve {"url":"https://space.bilibili.com/946974/video?spm
 | 期间 | `/x/web-interface/view`、`/x/player/playurl`、`/x/web-interface/card` | 一直正常 |
 
 结论：**web 列表接口的封禁是滚动的**（每探一次都像给它续期），而 App 接口不受影响。
-所以增量必须走 App，回填只能慢工出细活，且限流要退 3 小时而不是 30 分钟。
+所以增量走 App，回填只能慢工出细活，且限流要退 3 小时而不是 30 分钟。
+
+**2026-10-29 补测：上面这一整段只对「未签名」成立。** 同样的 IP、同样的 Cookie，带上
+wbi 签名之后完全是另一个接口的脾气：
+
+| 时刻 | 请求 | 结果 |
+|---|---|---|
+| 00:29 | `/x/space/wbi/arc/search?ps=20&pn=1..3`（签名） | 3 页全 `code 0`，各 30/30/30 条 |
+| 00:30 | 同上，`pn=1..15` 连打（无间隔） | **15 页全过，共 3.3 秒**，`count 939` 每页都对 |
+| 00:30 | 同参数不带 `w_rid` | 1 页后 `-799 请求过于频繁` |
+
+也就是说：之前「1 次 / 20 秒 + 退避 30s/60s」是在给「没签名」还债。
+现在回填 939 部（47 页）是**秒级**，不是小时级。
 
 ### 7.3 播放地址
 
@@ -192,36 +218,110 @@ job 41 done      已完成 折1万次，会坏吗？iPhone Duo深度评测（143
 单文件档走 `ffmpeg -c copy` 直下；分轨档（登录后才有 1080P+）走 `RemuxFromURLs`：
 两路输入、`-map 0:v:0 -map 1:a:0?`、`-c copy -movflags +faststart`，实测 286 秒 480P 素材 2.0 秒封完。
 
+### 7.7 「配了 Cookie 还被限流」的两个真原因（2026-10-29 00:21–00:35 实测）
+
+现象：设置里已经配好 Cookie（`/api/bilibili/health` 的 `hasCookie=true`），
+空间投稿接口照样一页之后 `-799`：
+
+| 时刻 | 请求 | 结果 |
+|---|---|---|
+| 00:21–00:23 | dprprince（新订阅）第 1 页（App cursor 通道） | 通过，20 条 |
+| 00:23:27 | dprprince 第 2 页（web `arc/search`，**未签名**） | `-799 请求过于频繁` → 这一轮软停 |
+| 00:22:5x | 影视飓风 第 2 页（同上，未签名） | 通过，20 条（片数 19 → 39） |
+| 00:24:47 | 影视飓风 第 3 页（同上） | `-799` → 软停，断点留在第 2 页 |
+
+拆开看，是两件独立的事叠在一起：
+
+**原因一：没带 wbi 签名。** 名单额度跟登录态基本无关，跟「是不是浏览器那种带签名的请求」关系极大。
+补上签名后同一 IP 连打 15 页零失败（§7-2）。→ 已修：`/x/space/wbi/arc/search` 为主，
+未签名版只作兜底（`internal/platform/bilibili/wbi.go`）。
+
+**原因二：存进去的那条 Cookie 根本不是合法 Cookie 头。** 用户当时粘的是浏览器导出的
+`cookies.txt`（Netscape 格式，7 列制表符分隔），而 v1 的 `normalizeBiliCookie` 会把每一段
+没有 `=` 的碎片都当成「裸 SESSDATA 值」补上 `SESSDATA=`。解密库里那条记录：
+
+```
+长度 4,639 字节 / 213 段 / 全部形如 SESSDATA=…
+真实内容：SESSDATA=# Netscape HTTP Cookie File; SESSDATA=.bilibili.com;
+          SESSDATA=TRUE; SESSDATA=1795708705; SESSDATA=buvid3; …
+```
+
+`hasCookie=true` 只是「库里非空」，B 站看到的是两百多个同名假字段，等于没登录。
+（顺带解释了「配了 Cookie 还是 720P」：画质确实靠 Cookie，但这条 Cookie 从没生效过。）
+→ 已修：`normalizeBiliCookie` 认三种输入（整段 Cookie 头 / 裸 SESSDATA / cookies.txt），
+跳过 `#` 注释、认 `#HttpOnly_` 数据行、同名只留最后一个；用例见
+`internal/httpapi/cookies_test.go`。
+
+修好之后按同样的 Cookie 实测：
+
+| 检查 | 结果 |
+|---|---|
+| `GET /x/web-interface/nav`（带 Cookie） | `isLogin=true`，`uname=月白喵丶`，6 级，`vipStatus=0` |
+| 影视飓风「完整同步」（`backfill_limit=200`） | 39 → 239 部（10 页），**45 秒内跑完**，`last_error` 空 |
+| dprprince「完整同步」（3 页） | 20 → 44 部，`backfill_total_pages=3`，`backfill_done=1`，无错误 |
+
+两条收尾路径也因此不同：**翻到中途被限**按正常同步间隔（默认 6 小时）排队；
+**第 1 页就被限**才算失败，退避 3 小时。签名版上线后这条路径基本只剩兜底意义。
+
+### 7.8 画质实测：Cookie 到底买到了什么（2026-10-29，BV1F7nF6WE1a）
+
+`/x/player/playurl?qn=127&fourk=1`，同一个 cid，只切换 Cookie：
+
+| 通道 | 不带 Cookie | 带 Cookie（6 级、无大会员） |
+|---|---|---|
+| `fnval=0`（durl 单文件） | `quality=64` → **720P** | `quality=64` → 720P（没变） |
+| `fnval=4048`（DASH） | `dash.video` 只有 **32（480P）/ 16（360P）** | `dash.video` 有 **80（1920×1080）**、64、32、16 |
+| `accept_quality` | `[120,116,80,64,32,16]`（**骗人的**，4K 也列出来） | 同上 |
+
+所以三件事要分开记：
+
+1. **1080P 只能走 DASH**，durl 那一档永远是 720P——Cookie 不会让 durl 变高；
+2. `accept_quality` 不能当依据，要看 `dash.video` 里实际出现的 `id`；
+3. 4K（120）/ HDR（116）在 `accept_quality` 里，但 DASH 不返回——**要大会员**，本期不做绕过。
+
+改完之后本机 `/api/videos/80/playback` 的实际档位（默认档自动变成了 1080p）：
+
+```
+1080p.av1 / 1080p.hevc / 1080p / 720p / 480p.av1 / 480p.hevc / 480p / 360p.av1 / 360p.hevc / 360p
+default: 1080p.av1
+```
+
 ## 8. 已知限制 / 取舍
 
 1. **多 P 投稿只取第 1 个 `cid`**。合集型投稿（一部视频挂几十个分 P）在墙上只出现一条，点开播的是第 1 P。
    要做的话是把 `pages[]` 展开成多条影片，键得改成 `bvid@cid`——那是另一个数据模型决定，本期不做。
-2. **未登录上限 720P**。1080P/4K 必须填 SESSDATA；填了之后 `qn=127` 会拿到更高档位（本期**未实测**，见 §9）。
+2. **未登录上限 720P**。1080P 必须填 Cookie（实测见 §7.8：带 Cookie 后 DASH 出现 `id=80`=1920×1080，
+   默认档自动变成 1080p）。**4K/HDR 要大会员**，`accept_quality` 里列着但 DASH 不返回，本期不做绕过。
 3. **番剧 / 直播回放 / 课程不在范围**：App 列表里 `goto != "av"` 的条目直接丢（`pgc` 是番剧），
    否则会在墙上出现点开播不了的东西。
 4. **充电专属 / 会员专享**：拿不到播放地址就报解析失败，不做任何绕过。
-5. **首次回填很慢**：951 部投稿 ≈ 48 页，按 1 次 / 20 秒 + 限流退避，正常也要半小时以上，被限流则以「天」计。
-   断点续跑，不会白跑；增量不受影响。
+5. ~~首次回填很慢~~ → **已解决**（M7 补）：改用 wbi 签名后 939 部 / 47 页是秒级
+   （实测 200 部 10 页 45 秒内跑完，§7-7）。未签名那条兜底路径仍按 1 次 / 20 秒，
+   所以「签名彻底用不了」的极端情况下才会退回「半小时以上」。
 6. **合流的第一下要等**：480P 起播首次 15 秒~2 分钟（取决于源站是 upos 还是 PCDN）。默认档是 durl，所以「点开就能看」不受影响。
 7. **B 站不出现在「艺人」「关注」里**（M7 补）：它有独立页面与管理页签。想把某位 UP 主当艺人追，
    目前没有这条路——两边入口不同，混着摆只会让「关注」流的语义变模糊。
 8. **墙上没有「收藏」**：YouTube 那页有（`yt_videos.saved`），B 站这边 `videos` 表没有对应字段。
    要加就得动通用表结构，本期不做。
 
-## 9. 待验证（填了 Cookie 之后）
+## 9. 待验证
 
-- 1080P / 4K 的 `dash.video` 实际给到哪些 `id`，以及 `qn=127` 是否一次到位；
-- 登录后 `arc/search` 的限额是否变宽（如果变宽，回填可以把节奏调快）；
-- 登录后 App cursor 接口的 `next_cursor` 是否真的能翻页（能翻的话，回填就完全不用碰风控接口了）；
-- 大会员 4K + HDR：`dash.dolby` / `dash.flac` 是否需要单独处理（本期只认 `dash.video` / `dash.audio`）。
+- ~~登录后 `arc/search` 的限额是否变宽~~ → **问错了**：额度取决于 wbi 签名，不取决于登录（§7-7）；
+- ~~1080P 的 `dash.video` 是否给到 `id=80`~~ → **已实测给到**（§7.8）；4K/HDR 需要大会员，未验证；
+- 签名版下 `-799` 的冷却窗口还有多长（现在基本撞不到，缺样本）；
+- 登录后 App cursor 的 `next_cursor` 是否真能翻页（能的话 App 通道也能回填，多一层保险）；
+- 大会员 4K + HDR：`dash.dolby` / `dash.flac` 是否需要单独处理（本期只认 `dash.video` / `dash.audio`）；
+- wbi 图片名的轮换周期：现在按 30 分钟 TTL 缓存 + `-352` 换 key 重试一次兜着，但没刻意等过一次轮换。
 
 ## 10. 文件一览
 
 | 文件 | 内容 |
 |---|---|
-| `internal/platform/bilibili/bilibili.go` | 适配器主体：两条列表通道、资料、详情、风控错误映射 |
+| `internal/platform/bilibili/bilibili.go` | 适配器主体：两条列表通道 + 兜底、资料、详情、风控错误映射 |
+| `internal/platform/bilibili/wbi.go` | wbi 签名：mixin key（nav 图片名 + 重排表）、`wts`/`w_rid`、key 缓存与 `-352` 换 key |
 | `internal/platform/bilibili/playurl.go` | `playurl` 解析 + durl/DASH 合并规则 |
 | `internal/platform/bilibili/bilibili_test.go` | 17 个用例（含 App 通道、限流映射、合并规则） |
+| `internal/platform/bilibili/wbi_test.go` | 4 个用例：mixin key 官方向量、签名向量、`-352` 回落、签名正常时不碰兜底 |
 | `internal/muxcache/` | 分轨合流的单飞缓存（含 8 个用例） |
 | `internal/httpapi/handlers_remux.go` | `GET /api/videos/{id}/remux?v=` |
 | `internal/library/media.go` | `RemuxFromURLs` / `RemuxTo`（两路输入 + 头信息） |

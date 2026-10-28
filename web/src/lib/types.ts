@@ -203,8 +203,12 @@ export interface BiliChannelsResponse {
 
 /** B 站「为什么画质只有 720P / 为什么这档放不了」的答案 */
 export interface BiliHealth {
-  /** 填了 SESSDATA 才有 1080P 以上 */
+  /** 库里存了 Cookie（不等于登录成功，见 loggedIn） */
   hasCookie: boolean;
+  /** 真拿这条 Cookie 问过 nav：能不能用。配了 Cookie 却是 false，多半是粘错了格式 */
+  loggedIn: boolean;
+  /** nav 回的昵称（登录成功才有） */
+  uname: string;
   /** 分轨档位要靠 ffmpeg 合流 */
   ffmpegOk: boolean;
   hasProxy: boolean;

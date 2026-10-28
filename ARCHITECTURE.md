@@ -527,22 +527,28 @@ type ProfileProvider interface {
 （`store.pruneProfileLabels`，幂等）。要改这个口径只需改 `model` 里那一张表，不用重扫艺人。
 
 
-## 13. bilibili：风控下的两条列表通道 + 分轨合流
+## 13. bilibili：WBI 签名 + 分轨合流
 
 站点形态与另外三家完全不同：没有页面可解析，数据全在 JSON 接口里；而接口分两种脾气——
 资料 / 详情 / 播放地址（`/x/web-interface/card`、`/x/web-interface/view`、`/x/player/playurl`）
-随便调，空间投稿列表 `/x/space/arc/search` 却是全站风控最严的一个。浏览器能过是因为它带
-WBI 签名 + 一整套 `dm_*` 指纹 + 真实 TLS 指纹，服务端调 wbi 版一律 `-352 风控校验失败`，
-非 wbi 版能过但连打几次就 `-799`，再打变成 HTTP 412 封禁（实测一封一小时以上，且**每探一次像在续期**）。
+随便调；空间投稿列表则是全站风控最严的一个，但它怕的不是服务端，而是**没签名**：
+同一 IP、同一份 Cookie、同一时刻，未签名的 `/x/space/arc/search` 一页之后 `-799`（再探变 412，
+且每探一次像在续期），签名的 `/x/space/wbi/arc/search` 连打 15 页 3.3 秒零失败。
+所以列表分「签名主路 / 未签名兜底」，签名细节见 `internal/platform/bilibili/wbi.go`（含官方向量与实测数据）。
 
-### 13.1 列表：增量走 App，回填走 web
+### 13.1 列表：增量走 App，回填走 wbi 签名
 
 ```
 增量（每 6h，第 1 页）  App  /x/v2/space/archive/cursor?appkey=…&sign=md5(q+appsec)
                           无风控；固定 20 条；offset/pn/page 一律忽略（访客拿不到第 2 页）
-回填（断点续翻）        web  /x/space/arc/search?ps=20&pn=N
-                          1 次 / 20 秒 + 30s/60s 退避；被封就等，断点在库里
+回填（断点续翻）        wbi  /x/space/wbi/arc/search?ps=20&pn=N&wts=&w_rid=
+                          mixin key 取自 nav 的 wbi_img 图片名，缓存 30 分钟；-352 换 key 重试一次
+兜底                    web  /x/space/arc/search?ps=20&pn=N  → 1 次 / 20 秒 + 30s/60s 退避
 ```
+
+签名是 `md5(按键排序的查询串 + mixin key)`，mixin key 是把 nav 给的两张图片名（各 32 位）
+拼起来按 64 项固定表重排后取前 32 位。参考实现：[bili-sync](https://github.com/amtoaer/bili-sync)。
+它没有 `dm_*` 指纹参数，也不需要真实浏览器 TLS 指纹——之前「服务端调 wbi 一律 -352」的判断是错的。
 
 - 两个来源的页大小都取 **20**：App 接口只肯给 20（传 `ps=30/50` 还是 20），web 侧迁就它。
   页大小不一致会让「第 1 页 20 条 + 第 2 页从第 21 条起」错位，中间那 30 条永远补不上。

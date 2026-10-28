@@ -89,47 +89,126 @@ func (s *Server) hasBiliCookie() bool {
 	return err == nil && strings.TrimSpace(v) != ""
 }
 
-// normalizeBiliCookie 把用户粘进来的东西整理成一行 Cookie 头。
+// normalizeBiliCookie 把用户粘进来的各种形状整理成一条 Cookie 头。
 //
-// 三种常见粘贴方式都接住：整串 `SESSDATA=xxx; bili_jct=yyy`、只有 SESSDATA 的值、
-// 以及从浏览器「复制为 Cookie」带换行/制表符的那种（Chrome 复制出来是按行分隔的）。
+// 认三种输入（2026-10 实测都被用户拿来用过）：
+//
+//  1. 请求头里的整段 Cookie：`SESSDATA=xxx; bili_jct=yyy; DedeUserID=1`
+//  2. 只贴 SESSDATA 的值（一长串 %2C 分隔的 base64）
+//  3. **浏览器/curl 导出的 cookies.txt（Netscape 格式）**——每行 7 列、制表符分隔：
+//     域  子域 路径 安全  过期时间  名  值
+//
+// 第 3 种以前会被逐段当成「裸 SESSDATA 值」，粘一份 30 条 cookie 的文件就会拼出
+// 两百多个 `SESSDATA=<莫名其妙>` 的假字段（实测：4,639 字节、213 段）。B 站当然不认，
+// 于是「配了 Cookie 还是 720P、还是被限流」。所以这里按行分类处理，注释行（# 开头，
+// 但 HttpOnly 的 `#HttpOnly_` 行是数据行）跳过，同名 cookie 只留最后一个。
 func normalizeBiliCookie(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", nil
 	}
-	// 换行/制表符当分隔符，逐段整理成 k=v; k=v。
 	var parts []string
-	for _, line := range strings.FieldsFunc(raw, func(r rune) bool {
-		return r == '\n' || r == '\r' || r == '\t'
-	}) {
-		for _, seg := range strings.Split(line, ";") {
+	idx := map[string]int{}
+	add := func(k, v string) {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k == "" || v == "" {
+			return
+		}
+		if i, ok := idx[k]; ok {
+			parts[i] = k + "=" + v
+			return
+		}
+		idx[k] = len(parts)
+		parts = append(parts, k+"="+v)
+	}
+
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#HttpOnly_") {
+			line = strings.TrimPrefix(line, "#HttpOnly_")
+		} else if strings.HasPrefix(line, "#") {
+			continue // 真注释：cookies.txt 的头几行就是这些
+		}
+		if name, value, ok := parseNetscapeLine(line); ok {
+			add(name, value)
+			continue
+		}
+		// Cookie 头那种 k=v; k=v（也兼容换行/制表符分隔的键值对）。
+		for _, seg := range strings.FieldsFunc(line, func(r rune) bool {
+			return r == ';' || r == '\t'
+		}) {
 			seg = strings.TrimSpace(seg)
 			if seg == "" {
 				continue
 			}
-			// 只贴了 SESSDATA 的值（常见：一长串 %2C 分隔的 base64）。
-			if !strings.Contains(seg, "=") {
-				seg = "SESSDATA=" + seg
+			k, v, ok := strings.Cut(seg, "=")
+			if !ok {
+				// 只贴了值：SESSDATA 是唯一能这么认的。
+				if looksLikeBareSessdata(seg) {
+					add("SESSDATA", seg)
+				}
+				continue
 			}
-			parts = append(parts, seg)
+			add(k, v)
 		}
 	}
 	if len(parts) == 0 {
 		return "", fmt.Errorf("Cookie 里没认出任何字段")
 	}
 	has := false
-	for _, p := range parts {
-		if strings.HasPrefix(strings.ToLower(p), "sessdata=") {
-			if v := strings.TrimSpace(p[len("sessdata="):]); v != "" {
-				has = true
-			}
+	for k := range idx {
+		if strings.EqualFold(k, "SESSDATA") {
+			has = true
 		}
 	}
 	if !has {
 		return "", fmt.Errorf("Cookie 里没有 SESSDATA：B 站登录态靠它，请从已登录的浏览器里复制整串")
 	}
 	return strings.Join(parts, "; "), nil
+}
+
+// parseNetscapeLine 认 Netscape cookies.txt 的一行：域 子域 路径 安全 过期 名 值。
+// 制表符分隔是标准写法，某些导出会用空格对齐，所以空格分隔也认（过期列必须全是数字）。
+func parseNetscapeLine(line string) (name, value string, ok bool) {
+	fields := strings.Split(line, "\t")
+	if len(fields) < 7 {
+		fields = strings.Fields(line)
+		if len(fields) != 7 || !isAllDigits(fields[4]) {
+			return "", "", false
+		}
+	}
+	// 末尾可能还有空字段（值里带制表符的极端情况），只取第 6、7 列。
+	name, value = strings.TrimSpace(fields[5]), strings.TrimSpace(fields[6])
+	if name == "" || value == "" {
+		return "", "", false
+	}
+	return name, value, true
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// looksLikeBareSessdata 判断这一段是不是「只贴了 SESSDATA 的值」：
+// 没有空格、没有 =（否则就是 k=v 的键值对）、长度像样。
+func looksLikeBareSessdata(seg string) bool {
+	if len(seg) < 16 || strings.ContainsAny(seg, " =") {
+		return false
+	}
+	// SESSDATA 是 URL 编码过的 base64 加上两个 %2C 分隔的时间戳。
+	return strings.Contains(seg, "%2C") || len(seg) >= 32
 }
 
 // youtubeDTO 是 M6 YouTube 订阅的设置。

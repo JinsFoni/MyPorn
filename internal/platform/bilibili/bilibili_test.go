@@ -133,8 +133,20 @@ func TestGetPerformer(t *testing.T) {
 func TestListPerformerVideos(t *testing.T) {
 	a, _ := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if r.URL.Path != "/x/space/arc/search" {
+		if r.URL.Path == "/x/web-interface/nav" {
+			fmt.Fprint(w, `{"code":0,"data":{"wbi_img":{
+				"img_url":"https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",
+				"sub_url":"https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"}}}`)
+			return
+		}
+		// 翻页走的是 wbi 签名那条（见 wbi.go）：路径和签名都要对。
+		if r.URL.Path != "/x/space/wbi/arc/search" {
 			t.Errorf("路径不对: %s", r.URL.Path)
+		}
+		if q.Get("wts") == "" || len(q.Get("w_rid")) != 32 {
+			t.Errorf("签名参数缺失: %s", r.URL.RawQuery)
+		} else if want := wbiSignatureOf(q, testMixinKey); q.Get("w_rid") != want {
+			t.Errorf("w_rid 校验不通过: got %s want %s（query=%s）", q.Get("w_rid"), want, r.URL.RawQuery)
 		}
 		if q.Get("mid") != "946974" || q.Get("pn") != "2" || q.Get("order") != "pubdate" {
 			t.Errorf("分页参数不对: %s", r.URL.RawQuery)

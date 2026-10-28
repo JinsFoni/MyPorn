@@ -917,13 +917,19 @@ B 站没有自己的表：UP 主是 `performers` 的一行（`platform='bilibili
 
 ```
 → 200 {
-    "hasCookie": false,   // 没填 SESSDATA：最高只有 720P
+    "hasCookie": true,    // 库里存了 Cookie（**不等于能用**，见 loggedIn）
+    "loggedIn": true,     // 真拿这条 Cookie 打了一次 nav：能登录上吗
+    "uname": "月白喵丶",    // nav 回的昵称（未登录是空串）
     "ffmpegOk": true,     // 分轨档位（480P 及以上）要靠它合流
     "hasProxy": false
   }
 ```
 
-这两项看起来像故障、其实是 B 站的规则，所以界面上要能直接看到（对应 M6 的 `GET /api/yt/health`）。
+这三项看起来像故障、其实是 B 站的规则，所以界面上要能直接看到（对应 M6 的 `GET /api/yt/health`）。
+
+`hasCookie` 与 `loggedIn` 要分开看：Cookie 存进去了但格式不对（实例：浏览器导出的
+`cookies.txt` 被整理成两百多个假 `SESSDATA`）时，`hasCookie=true` 而 `loggedIn=false`，
+表现就是「配了 Cookie 还是 720P」。`loggedIn` 只在 `hasCookie=true` 时才会真去打 nav。
 
 ### D6. `GET /api/manage/bilibili`
 

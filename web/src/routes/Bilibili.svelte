@@ -229,9 +229,25 @@
       <p>
         没填 B 站 Cookie：最高只能看 720P、下载也只有 720P/480P。
         <button type="button" class="underline underline-offset-2" onclick={() => ui.openSettings('bilibili')}>
-          填一个 SESSDATA
+          填一个 Cookie
         </button>
         就能拿到 1080P 以上。
+      </p>
+    </div>
+  {/if}
+
+  <!-- 配了 Cookie 却没登录上：不是 B 站的问题，是存进去的那串不对（实测踩过：
+       浏览器导出的 cookies.txt 被整理成两百多个假 SESSDATA，hasCookie 照样 true）。 -->
+  {#if health && health.hasCookie && !health.loggedIn}
+    <div class="flex items-start gap-2 rounded-xl bg-panel px-3 py-2 text-meta text-muted">
+      <span class="mt-0.5 text-brick">●</span>
+      <p>
+        Cookie 存了但没登录成功（B 站说未登录），所以画质仍是 720P。
+        整段 Cookie 头、只贴 SESSDATA 的值、浏览器导出的 cookies.txt 都能认，重新
+        <button type="button" class="underline underline-offset-2" onclick={() => ui.openSettings('bilibili')}>
+          填一次
+        </button>
+        试试。
       </p>
     </div>
   {/if}

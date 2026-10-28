@@ -1,39 +1,46 @@
 // Package bilibili 实现 B 站（bilibili）站点适配器。
 //
 // 这里说的「艺人」是 UP 主（mid），「影片」是 UP 主的投稿（bv 号）。
-// 与另外三家（Pornhub / xHamster / beeg）最大的不同：B 站的数据全在 JSON 接口里，
+// 与另外三家（Pornhub / xHamster / beeg）不同，B 站的数据全在 JSON 接口里，
 // 没有页面可解析，但接口分两种脾气完全不同的：
 //
 //   - 资料、详情、播放地址（/x/web-interface/card、/x/web-interface/view、
 //     /x/player/playurl）——随便调，几十次连发也没被拦过；
-//   - 空间投稿列表（/x/space/arc/search）——**全站风控最严的一个**。浏览器能过是因为
-//     它带 WBI 签名 + 一整套 dm_* 指纹参数 + 真实浏览器 TLS 指纹；服务端调 wbi 版本
-//     一律 -352「风控校验失败」，非 wbi 版本能过但限流极紧。
+//   - 空间投稿列表——**全站风控最严的一个**，但它怕的不是「服务端」而是「没签名」：
+//     同一时刻、同一个 IP、同一份 Cookie，不带 wbi 签名的 /x/space/arc/search
+//     一页之后就被 -799/412 挡了，带上签名的 /x/space/wbi/arc/search 连打十几页没事。
 //
-// 2026-10 实测（无 Cookie，从大陆家宽直连）：
+// 2026-10 实测（登录 Cookie 已配，从大陆家宽直连；mid=946974 影视飓风，939 部投稿）：
 //
-//	mid=946974（影视飓风，939 部投稿）
-//	  - 第 1 次 /x/space/arc/search?ps=50&pn=1    → 0，正常返回
-//	  - 隔 10s 再打 pn=2 / pn=3 / pn=1             → -799「请求过于频繁」→ HTTP 412「request was banned」
-//	  - 停 55s 后单打 pn=2                        → 0，正常返回
-//	  - 期间 /x/web-interface/view 与 /x/player/playurl 一直正常
+//	未签名 /x/space/arc/search?ps=20&pn=1        → 0，正常返回
+//	  隔 10s 再打 pn=2 / pn=3 / pn=1             → -799「请求过于频繁」→ HTTP 412「request was banned」
+//	  停 55s 后单打 pn=2                        → 0，正常返回
+//	签名   /x/space/wbi/arc/search?ps=20&pn=1..15 → 15 页全 0，共 3.3 秒，零失败
 //
-// 补充一条更糟的：封禁是会滚动的。同一天里反复试探之后，space 接口对这个 IP 连续
-// 封了一小时以上（每探一次都像在给它续期，间隔 35s/60s 一律 412 空响应），
-// 而 App 接口全程正常。所以「探一下通不通」不能当健康检查用，日常增量就走 App 那条。
+// 更早还踩过一个更糟的：反复试探未签名接口会让封禁滚动续期，space 接口对这个 IP
+// 连封过一小时以上（间隔 35s/60s 一律 412 空响应）。所以「探一下通不通」不能当健康检查用。
 //
-// 所以列表接口单独限速（1 次 / 20 秒），撞限流再退避重试两次
-// （30s、60s），仍然不行就把 ErrRateLimited 抛给任务层——同步任务会记 LastError，
-// 回填断点存在 subscriptions.backfill_page 里，下一轮从断点接着翻，不会白跑。
+// 结论（2026-10 改版）：**签名是主路，未签名是兜底**。翻页默认走 wbi 签名版，
+// 只有拿不到签名材料（nav 挂了、图片名残缺）或签名连续被拒时才退回未签名版，
+// 而未签名版仍按 1 次 / 20 秒走并带退避重试（30s、60s），仍然不行就把
+// ErrRateLimited 抛给任务层——同步任务会记 LastError，回填断点存在
+// subscriptions.backfill_page 里，下一轮从断点接着翻，不会白跑。
+// 签名细节与实测数据见 wbi.go 顶部。
 //
-// 另一条路是 App 的 /x/v2/space/archive/cursor（带 appkey 签名）：它**完全不设防**
-// （同一个 IP 在被 arc/search 封着的时候照样正常返回），但作为访客只能拿到第 1 页的 20 条
-// ——offset / pn / page 传什么都忽略，next_cursor 只对登录用户有意义。
-// 因此：第 1 页（增量同步天天走的就是这一页）优先用 App 接口，翻页回填才动 arc/search。
+// App 的 /x/v2/space/archive/cursor（带 appkey 签名）仍然是第 1 页的首选：它完全不设防
+// （同一个 IP 在被 arc/search 封着的时候照样正常返回），作为访客只肯给第 1 页的 20 条
+// ——offset / pn / page 传什么都忽略。它的签名一旦改版就自动回落到 wbi 版，正文见 ListPerformerVideos。
 //
-// 画质：未登录时 accept_quality/support_formats 照样把 4K、1080P 列出来，但
-// dash.video 里只有 360P/480P、durl 只给到 720P——**能拿到什么以实际返回为准**，
-// 接口声明的那份不能信。要 1080P 以上必须在设置里填 SESSDATA（见 cookie 相关注释）。
+// 画质：接口声明的 accept_quality 不能信（未登录也照样列出 4K/1080P），要看 dash.video 里
+// 实际返回的 id。2026-10 实测 BV1F7nF6WE1a（未开大会员、账号 6 级）：
+//
+//	不带 Cookie：dash.video 只有 32(480P)/16(360P)，durl 只给 720P(64)
+//	带 Cookie  ：dash.video 有 80(1920×1080)、64、32、16 → 1080P 能看
+//	4K/8K/HDR   ：accept_quality 里有 120/116，但 dash 不返回，需要大会员
+//
+// 所以「配了 Cookie 还是 720P」先别怀疑 B 站：检查存下来的 Cookie 到底是不是一条合法的
+// Cookie 头（v1 的整理逻辑会把浏览器导出的 cookies.txt 拆成两百多个假字段，见
+// internal/httpapi 的 normalizeBiliCookie）。
 package bilibili
 
 import (
@@ -50,6 +57,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -83,6 +91,10 @@ var ErrRateLimited = fmt.Errorf("%w：B 站限流了，等一会儿再同步", p
 // 抽成变量是为了测试能把它清零，不然一个用例要真睡 90 秒。
 var retryBackoff = []time.Duration{30 * time.Second, 60 * time.Second}
 
+// errWbiRejected 是 -352「风控校验失败」：多数情况是 wbi 的图片名轮换了、旧签名失效。
+// 它同样属于「过一会儿再试」，所以包着 ErrRateLimited，但中间层要认出它去换 key。
+var errWbiRejected = fmt.Errorf("B 站拒绝了请求签名（-352）: %w", ErrRateLimited)
+
 // errNotFound 包着公共的 platform.ErrNotFound，外面用 errors.Is 能认出 404。
 var errNotFound = fmt.Errorf("%w（B 站说没有这条）", platform.ErrNotFound)
 
@@ -96,8 +108,16 @@ type Adapter struct {
 	cookieFor func() string
 	// lim 给资料/详情/播放地址这类不设防的接口用。
 	lim *rate.Limiter
-	// listLim 只给空间投稿列表用，见包注释里的实测数据。
+	// listLim 只给「未签名」的空间投稿列表用（那条实测 1 页就 -799），
+	// 签名版走 wbiLim，见 wbi.go。
 	listLim *rate.Limiter
+	// wbiLim 是 wbi 签名接口的限速：实测连打 15 页零失败，
+	// 留 3 次 / 秒已经比浏览器保守得多。
+	wbiLim *rate.Limiter
+	// wbiKey / wbiAt 缓存 nav 给的 mixin key（也见 wbi.go）。
+	wbiMu  sync.Mutex
+	wbiKey string
+	wbiAt  time.Time
 }
 
 // New 创建适配器。proxyFor / cookieFor 都允许为 nil（空 = 直连 / 不带 Cookie）。
@@ -122,7 +142,36 @@ func New(baseURL string, proxyFor func() string, cookieFor func() string) (*Adap
 		// 空间投稿列表：实测撞限流的阈值在「隔 10 秒打三次」附近，
 		// 2 次 / 12 秒（允许 1 个突发）留了足够余量，回填一部千条投稿的 UP 主约 10 分钟。
 		listLim: rate.NewLimiter(rate.Every(20*time.Second), 1),
+		wbiLim:  rate.NewLimiter(rate.Every(1500*time.Millisecond), 3),
 	}, nil
+}
+
+// LoginName 用当前配置的 Cookie 打一次 nav，回答「这条 Cookie 到底登录上没有」。
+//
+// 存在的理由：settings 里的 hasCookie 只能说明「库里非空」。用户粘错格式时
+// （实测：浏览器导出的 cookies.txt 被上一版整理逻辑拆成两百多个假 SESSDATA）
+// 它照样是 true，界面就会装作一切正常——而 B 站那边其实没登录，照样只给 720P。
+// nav 未登录时回 -101，所以这里不走 a.call（那个会把 -101 当错误抛），自己看 code。
+func (a *Adapter) LoginName(ctx context.Context) (string, error) {
+	body, err := a.rawGet(ctx, a.api+"/x/web-interface/nav", a.lim, a.base+"/")
+	if err != nil {
+		return "", err
+	}
+	var r struct {
+		Code int    `json:"code"`
+		Msg  string `json:"message"`
+		Data struct {
+			IsLogin bool   `json:"isLogin"`
+			Uname   string `json:"uname"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return "", fmt.Errorf("B 站接口返回的不是 JSON: %w", err)
+	}
+	if r.Code != 0 || !r.Data.IsLogin {
+		return "", nil // 没登录不是错误，只是「没登录」
+	}
+	return r.Data.Uname, nil
 }
 
 // HTTPClient 暴露带 cookie jar 的客户端（媒体地址与页面同源校验时要用）。
@@ -198,7 +247,9 @@ func (a *Adapter) fetch(ctx context.Context, endpoint string, q url.Values, lim 
 		if err == nil {
 			return body, nil
 		}
-		if !errors.Is(err, ErrRateLimited) {
+		// -352（签名被拒）不在这里重试：换 key 是 callWBI 的事，同一条请求重打三遍
+		// 只会把「签名过期」变成三次白撞。
+		if !errors.Is(err, ErrRateLimited) || errors.Is(err, errWbiRejected) {
 			return nil, err
 		}
 		lastErr = err
@@ -206,8 +257,37 @@ func (a *Adapter) fetch(ctx context.Context, endpoint string, q url.Values, lim 
 	return nil, lastErr
 }
 
-// fetchURL 是真正落到网络上的那一层，负责限速、请求头、以及把 B 站的错误码翻成我们的哨兵。
+// fetchURL 在 rawGet 之上再把 B 站的业务错误码翻成我们的哨兵。
 func (a *Adapter) fetchURL(ctx context.Context, u string, lim *rate.Limiter, referer string) ([]byte, error) {
+	body, err := a.rawGet(ctx, u, lim, referer)
+	if err != nil {
+		return nil, err
+	}
+	// 业务错误码：-799 频繁、-412 封禁、-352 风控校验（wbi 签名过期或被判非浏览器）、
+	// -509 超频。这几个都当「等一会儿」处理；其余照原样报出来。
+	// -352 单独包一层：中间层要能认出它去换 key 重试（见 wbi.go 的 callWBI）。
+	var r apiResp
+	if err := json.Unmarshal(body, &r); err == nil {
+		switch r.Code {
+		case 0:
+		case -352:
+			return nil, fmt.Errorf("%w（B 站回 %d：%s）", errWbiRejected, r.Code, r.Message)
+		case -799, -412, -509:
+			return nil, fmt.Errorf("%w（B 站回 %d：%s）", ErrRateLimited, r.Code, r.Message)
+		case -404:
+			return nil, errNotFound
+		case -101: // 账号未登录：某些接口（如空间列表的第 2 页起）需要登录
+			return nil, fmt.Errorf("B 站要求登录后才能取这份数据（%s）：到设置里填 Cookie", r.Message)
+		default:
+			return nil, fmt.Errorf("B 站接口返回 %d：%s", r.Code, r.Message)
+		}
+	}
+	return body, nil
+}
+
+// rawGet 是真正落到网络上的那一层：限速、请求头、HTTP 状态码。
+// 业务错误码留给 fetchURL，因为个别调用方（LoginName）要自己看 code。
+func (a *Adapter) rawGet(ctx context.Context, u string, lim *rate.Limiter, referer string) ([]byte, error) {
 	if lim != nil {
 		if err := lim.Wait(ctx); err != nil {
 			return nil, err
@@ -252,27 +332,7 @@ func (a *Adapter) fetchURL(ctx context.Context, u string, lim *rate.Limiter, ref
 	case resp.StatusCode >= 400:
 		return nil, fmt.Errorf("上游返回 %d（%s）", resp.StatusCode, u)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
-	// 业务错误码：-799 频繁、-412 封禁、-352 风控校验（服务端指纹过不了 wbi）、
-	// -509 超频。这几个都当「等一会儿」处理；其余照原样报出来。
-	var r apiResp
-	if err := json.Unmarshal(body, &r); err == nil {
-		switch r.Code {
-		case 0:
-		case -799, -412, -509, -352:
-			return nil, fmt.Errorf("%w（B 站回 %d：%s）", ErrRateLimited, r.Code, r.Message)
-		case -404:
-			return nil, errNotFound
-		case -101: // 账号未登录：某些接口（如空间列表的第 2 页起）需要登录
-			return nil, fmt.Errorf("B 站要求登录后才能取这份数据（%s）：到设置里填 SESSDATA", r.Message)
-		default:
-			return nil, fmt.Errorf("B 站接口返回 %d：%s", r.Code, r.Message)
-		}
-	}
-	return body, nil
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 }
 
 // ---- URL 解析 ----
@@ -508,7 +568,11 @@ func (a *Adapter) ListPerformerVideos(ctx context.Context, performerID string, p
 	return a.spacePage(ctx, performerID, page)
 }
 
-// spacePage 是 web 版投稿列表（/x/space/arc/search），翻页回填走这条。
+// spacePage 是 web 版投稿列表（/x/space/wbi/arc/search），翻页回填走这条。
+//
+// 默认走 **wbi 签名**版：浏览器打的就是它，实测连打 15 页零失败；不带签名的那条
+// 一页之后就是 -799（实测数据见 wbi.go 顶部）。签名版本身用不了时（nav 取不到图片名、
+// 接口改名、签名连换两把 key 都被拒）才退回未签名版，那条仍按 1 次 / 20 秒走。
 func (a *Adapter) spacePage(ctx context.Context, performerID string, page int) (*platform.Page, error) {
 	q := url.Values{
 		"mid":           {performerID},
@@ -518,15 +582,18 @@ func (a *Adapter) spacePage(ctx context.Context, performerID string, page int) (
 		"platform":      {"web"},
 		"web_location":  {"1550101"},
 		"order_avoided": {"true"},
-		"keyword":       {""},
-		"tid":           {"0"},
-		"special_type":  {""},
-		"index":         {"0"},
 	}
 	var d spaceList
 	referer := a.base + "/space/" + performerID + "/video"
-	if err := a.call(ctx, "/x/space/arc/search", q, a.listLim, referer, &d); err != nil {
-		return nil, err
+	if err := a.callWBI(ctx, "/x/space/wbi/arc/search", q, referer, &d); err != nil {
+		// -799/-412 这类「就是现在别来」不必再打一趟；其余情况都试一次未签名版。
+		if errors.Is(err, ErrRateLimited) && !errors.Is(err, errWbiRejected) {
+			return nil, err
+		}
+		d = spaceList{}
+		if err2 := a.call(ctx, "/x/space/arc/search", q, a.listLim, referer, &d); err2 != nil {
+			return nil, err2
+		}
 	}
 	out := &platform.Page{Page: page}
 	for _, it := range d.List.Vlist {

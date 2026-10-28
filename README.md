@@ -74,16 +74,18 @@ M4 的 xHamster / beeg 适配器、M6 的 YouTube 频道订阅、M7 的 bilibili
 
 - **bilibili**：数据全在 JSON 接口里（没有页面可解析），但接口分两种脾气：资料/详情/播放地址
   （`/x/web-interface/card`、`/x/web-interface/view`、`/x/player/playurl`）随便调；空间投稿列表
-  （`/x/space/arc/search`）是全站风控最严的一个，服务端连打几次就 `-799` 甚至 HTTP 412 封禁，
-  一封几十分钟到几小时。所以列表走了**两条通道**：日常增量用安卓客户端的
-  `/x/v2/space/archive/cursor`（appkey 签名，同一 IP 被封着也照样给 20 条），
-  翻页回填才动 web 接口（1 次 / 20 秒 + 退避）。被限流不算同步失败——已抓的照常入库、
+  （`/x/space/arc/search`）是全站风控最严的一个——**它认签名，不认你是谁**：不带 wbi 签名连打
+  两次就 `-799`、再探变 HTTP 412 且越探越久；带上签名（`wts` + `w_rid`，材料来自 nav 的两张
+  wbi 图片名）连打 15 页、3.3 秒、零失败。所以列表走了**两条通道**：日常增量用安卓客户端的
+  `/x/v2/space/archive/cursor`（appkey 签名，同一 IP 被封着也照样给 20 条），翻页回填走
+  `/x/space/wbi/arc/search`（未签名那条只作兜底）。被限流不算同步失败——已抓的照常入库、
   断点照留、退避 3 小时。详见 `docs/M7-BILIBILI.md`。
 - **bilibili 是独立一页**（侧边栏「B 站」，另有 管理 → B 站 页签）：订阅的是内容源，不是艺人，
   所以它不出现在「艺人」和「关注」流里。墙上点开就是通用的 `/video/{id}` 详情页（播放、画质、下载全复用），
   没有 B 站专属播放器。手机从「动态」顶部的分段控件进（底栏仍是 6 格）。
 - **bilibili 的画质**：未登录时 web 只给到 720P 的单文件（durl）+ 360/480P 的分轨（DASH）；
-  1080P 以上要在设置里填 `SESSDATA`。分轨的音视频是两条独立 m4s，浏览器播不了，
+  1080P 要在设置里填 Cookie（整段 Cookie 头 / 裸 `SESSDATA` / 浏览器导出的 `cookies.txt` 都认），
+  4K/HDR 要大会员。分轨的音视频是两条独立 m4s，浏览器播不了，
   所以点播到那一档时服务端用 ffmpeg 合成一份 mp4 缓存起来（`/api/videos/{id}/remux?v=…`，
   单飞 + 7 天 TTL，实测 25 分钟 480P 约 15 秒、44 分钟 PCDN 源约 2 分钟），下载走同一条路。
 
@@ -162,7 +164,7 @@ internal/platform/     适配器接口与注册表
 internal/platform/pornhub/  Pornhub 解析（随站点改版维护的地方）
 internal/platform/xhamster/  xHamster 解析（window.initials JSON + 播放地址解密）
 internal/platform/beeg/      beeg 解析（store.externulls.com 公开接口）
-internal/platform/bilibili/  bilibili 解析（App cursor + web arc/search 两条列表通道、playurl 合并）
+internal/platform/bilibili/  bilibili 解析（App cursor + wbi 签名 arc/search 列表、playurl 合并）
 internal/store/bilibili.go   B 站页面取数（UP 主 / 未看 / 已看；复用 performers + videos，不另建表）
 internal/muxcache/          DASH 分轨合流的单飞缓存（ffmpeg 出一份 mp4 给浏览器播）
 internal/hls/                HLS master 清单解析（三个站共用，保证编码偏好一致）

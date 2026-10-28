@@ -782,15 +782,17 @@
 
                     <div class="mt-5">
                       <div class="flex items-center justify-between">
-                        <label for="bili-cookie" class="label-meta">Cookie（SESSDATA）</label>
+                        <label for="bili-cookie" class="label-meta">Cookie</label>
                         <span class="text-meta {settings.bilibili.hasCookie ? 'text-sage' : 'text-dim'}">
                           {settings.bilibili.hasCookie ? '已配置' : '未配置'}
                         </span>
                       </div>
                       <p class="mt-1 text-meta text-dim">
                         不填也能看，但最高只有 720P（未登录时 B 站只给 480P 的 DASH 和 720P 的单文件）。
-                        1080P / 4K 必须登录：从已登录的浏览器里复制整串 Cookie（至少含
-                        <span class="text-muted">SESSDATA</span>）粘进来即可。Cookie 加密存库，保存后不再回显。
+                        1080P 必须登录：整段 Cookie 头（至少含 <span class="text-muted">SESSDATA</span>）、
+                        只贴 <span class="text-muted">SESSDATA</span> 的值、或者浏览器导出的
+                        <span class="text-muted">cookies.txt</span> 原件都能用，粘进来即可。
+                        4K / HDR 要大会员。Cookie 加密存库，保存后不再回显。
                       </p>
                       <textarea
                         id="bili-cookie"
