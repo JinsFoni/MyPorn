@@ -283,7 +283,7 @@
     {:else}
       <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-black">
         {#if loadingPlayback}
-          <VideoLoading {poster} label="正在解析播放地址" />
+          <VideoLoading {poster} kind="poster" hint="正在解析播放地址…" label="正在解析播放地址" />
         {:else if playError}
           <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
             <p class="max-w-md text-ui text-fg/90">{playError}</p>

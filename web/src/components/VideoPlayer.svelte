@@ -11,7 +11,8 @@
    *      和自带的音量/设置/画中画/全屏排在同一行、一起显隐；
    *   2. **氛围模式**本身：把当前画面缩到 32×18 的画布上再放大模糊，给播放器四周蒙一层同色光；
    *   3. **音量记忆**（`localStorage`，等媒体就绪才套用，否则会被播放器默认的满音量盖掉）；
-   *   4. **加载态**（见 VideoLoading.svelte）：糊掉的封面垫底 + 中间转环，出画面就淡出。
+   *   4. **加载态**（见 VideoLoading.svelte）：封面（还没出过帧）或刚才那一帧（缓冲中）垫底 + 中间转环，
+   *      出画面就淡出。两种底图的糊/暗程度不同——起播要等好几秒，封面必须一眼认得出。
    *
    * 片源策略（见 lib/player.ts）：每个清晰度是**一条独立的清单/直链**，由后端解析后交给这里，
    * 所以播放器一次只放一条，切档＝换 source 并保留进度；不用 hls.js 的自适应 ABR。
@@ -39,6 +40,8 @@
     /** 'hls' 用 `<hlsjs-video>`（也能放 mp4），'native' 用原生 `<video>` */
     engine: 'hls' | 'native';
     poster?: string | null;
+    /** 封面取不到时退而求其次的那张（见 VideoLoading 的 posterFallback） */
+    posterFallback?: string | null;
     title: string;
     /** 影片标识（变了就把抓帧缓存清掉，别拿上一部片子的画面垫底） */
     videoKey?: string | number;
@@ -59,6 +62,7 @@
     type,
     engine,
     poster = null,
+    posterFallback = null,
     title,
     videoKey = '',
     qualities = [],
@@ -836,8 +840,14 @@
 
           <!-- 加载态：糊掉的封面 / 刚才那一帧垫底 + 中间转环（皮肤的大播放键在它上面，照样能点） -->
           {#if buffering}
-            <div class="video-veil-host" transition:fade={{ duration: 200 }}>
-              <VideoLoading poster={veilArt ?? poster} />
+            <!-- 只淡出、不淡入：淡入会让底下的黑盒先露一帧（起播时那一下黑闪就是它） -->
+            <div class="video-veil-host" out:fade={{ duration: 200 }}>
+              <VideoLoading
+                poster={veilArt ?? poster}
+                {posterFallback}
+                kind={veilArt ? 'frame' : 'poster'}
+                hint={veilArt ? '' : '正在载入画面…'}
+              />
             </div>
           {/if}
 

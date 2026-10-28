@@ -166,3 +166,108 @@ func TestManagerResolveWaiterCancel(t *testing.T) {
 	close(release)
 	time.Sleep(30 * time.Millisecond)
 }
+
+// 预热和播放器会要同一段分片：认领过的地址不该被第二个人再认领一次。
+func TestWarmClaimIsExclusive(t *testing.T) {
+	w := NewManager(nil, nil).Warm("vid1")
+	abs := "https://rr1.googlevideo.com/seg/init"
+
+	if !w.Claim(abs) {
+		t.Fatal("第一次认领应该成功")
+	}
+	if w.Claim(abs) {
+		t.Fatal("已经有人在取，第二次认领不该成功")
+	}
+	w.Settle(abs, "video/mp4", []byte("init"))
+
+	// 取回来以后同样不再认领：调用方该走缓存（Wait 会立刻命中），别再去上游下一遍。
+	if w.Claim(abs) {
+		t.Fatal("已经取回来的地址不该再认领")
+	}
+}
+
+// 等的人拿到的是认领方取回来的那份字节，而不是自己去上游再要一份。
+func TestWarmWaitGetsOwnerBytes(t *testing.T) {
+	w := NewManager(nil, nil).Warm("vid1")
+	abs := "https://rr1.googlevideo.com/seg/0"
+	if !w.Claim(abs) {
+		t.Fatal("认领失败")
+	}
+
+	got := make(chan Prefetched, 1)
+	go func() {
+		p, ok := w.Wait(context.Background(), abs)
+		if !ok {
+			t.Error("等待方应当拿到字节")
+		}
+		got <- p
+	}()
+	time.Sleep(30 * time.Millisecond) // 让等待方进到 select 里
+	w.Settle(abs, "video/mp4", []byte("bytes"))
+
+	select {
+	case p := <-got:
+		if string(p.Body) != "bytes" {
+			t.Fatalf("拿到 %q，想要 bytes", p.Body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Settle 之后等待方没有醒过来")
+	}
+}
+
+// 认领方失败（签名过期之类）也要放行：等待方退回自己回源，绝不能一直挂着。
+func TestWarmWaitReleasedOnFailure(t *testing.T) {
+	w := NewManager(nil, nil).Warm("vid1")
+	abs := "https://rr1.googlevideo.com/seg/1"
+	if !w.Claim(abs) {
+		t.Fatal("认领失败")
+	}
+
+	done := make(chan bool, 1)
+	go func() {
+		_, ok := w.Wait(context.Background(), abs)
+		done <- ok
+	}()
+	time.Sleep(30 * time.Millisecond)
+	w.Settle(abs, "", nil)
+
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("没取到字节却报告命中")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("失败之后等待方没有被放行")
+	}
+}
+
+// 等待方自己的 ctx 取消（关掉页面）只影响自己，不能把在途的预热也弄坏。
+func TestWarmWaitHonoursCancel(t *testing.T) {
+	w := NewManager(nil, nil).Warm("vid1")
+	abs := "https://rr1.googlevideo.com/seg/2"
+	if !w.Claim(abs) {
+		t.Fatal("认领失败")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := w.Wait(ctx, abs); ok {
+		t.Fatal("取消的等待方不该报告命中")
+	}
+	w.Settle(abs, "video/mp4", []byte("late"))
+	if p, ok := w.Get(abs); !ok || string(p.Body) != "late" {
+		t.Fatal("等待方取消不该影响预热结果")
+	}
+}
+
+// 没有在途取数的地址，Wait 就是一次普通的缓存读。
+func TestWarmWaitFallsBackToGet(t *testing.T) {
+	w := NewManager(nil, nil).Warm("vid1")
+	if _, ok := w.Wait(context.Background(), "https://x/none"); ok {
+		t.Fatal("空缓存不该命中")
+	}
+	w.Settle("https://x/one", "video/mp4", []byte("x"))
+	if p, ok := w.Wait(context.Background(), "https://x/one"); !ok || string(p.Body) != "x" {
+		t.Fatal("已取回的地址该命中")
+	}
+}

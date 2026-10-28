@@ -225,7 +225,10 @@ type Warm struct {
 	mu    sync.Mutex
 	at    time.Time
 	items map[string]Prefetched
-	bytes int
+	// pending 是「这条地址已经有人在取了」的登记：一个空 channel，取完就关。
+	// 没有它的话，预热和浏览器自己来要会各发一次上游请求，同一条分片下两遍、抢同一根出口带宽。
+	pending map[string]chan struct{}
+	bytes   int
 }
 
 // Warm 取（没有就建）一条视频的预热缓存。
@@ -236,7 +239,7 @@ func (m *Manager) Warm(videoID string) *Warm {
 	if w, ok := m.warm[videoID]; ok && now.Sub(w.at) < warmTTL {
 		return w
 	}
-	w := &Warm{at: now, items: map[string]Prefetched{}}
+	w := &Warm{at: now, items: map[string]Prefetched{}, pending: map[string]chan struct{}{}}
 	m.warm[videoID] = w
 	// 超上限时把最旧的几条扔掉（地图里顺序不定，按时间戳挑）。
 	for len(m.warm) > maxWarmVideos {
@@ -289,6 +292,61 @@ func (w *Warm) Get(abs string) (Prefetched, bool) {
 	defer w.mu.Unlock()
 	p, ok := w.items[abs]
 	return p, ok
+}
+
+// Claim 认领「这条地址由我去上游取」。已经取回来、或者已经有人在取，都返回 false。
+//
+// 认领成功的调用方取完（成功或失败）必须 Settle 一次，否则等在这条地址上的
+// 请求会一直等到 context 过期。只给预热 goroutine 用：浏览器那条路只做 Wait，
+// 不认领——它认领了却不往缓存里放字节，等于白占一个坑。
+func (w *Warm) Claim(abs string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, ok := w.items[abs]; ok {
+		return false
+	}
+	if w.pending == nil {
+		w.pending = map[string]chan struct{}{}
+	}
+	if _, ok := w.pending[abs]; ok {
+		return false
+	}
+	w.pending[abs] = make(chan struct{})
+	return true
+}
+
+// Wait 等这条地址的在途取数结束（没有在途的就直接看缓存），返回取回来的字节。
+//
+// 起播时最贵的一步是「第一段分片」。预热早就把它排在路上了，播放器一开口却
+// 又自己发一次，两条请求平分同一根 20 Mbps 的出口——本机实测第一次打开要 4.4 秒
+// 才出画面，其中大半就是这么重复掉的。等一次比自己再要一次快。
+func (w *Warm) Wait(ctx context.Context, abs string) (Prefetched, bool) {
+	w.mu.Lock()
+	ch, ok := w.pending[abs]
+	w.mu.Unlock()
+	if ok {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return Prefetched{}, false
+		}
+	}
+	return w.Get(abs)
+}
+
+// Settle 收尾一次认领：body 非空就存进缓存，然后叫醒所有在等的请求。
+// body 为 nil 表示这次取失败了——不存，但照样要放行（等待方会退回自己回源）。
+func (w *Warm) Settle(abs, contentType string, body []byte) {
+	if body != nil {
+		w.Put(abs, contentType, body)
+	}
+	w.mu.Lock()
+	ch, ok := w.pending[abs]
+	delete(w.pending, abs)
+	w.mu.Unlock()
+	if ok {
+		close(ch)
+	}
 }
 
 // Session 是一次播放的地址簿：分片/子清单的真实地址在这里领号。

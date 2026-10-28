@@ -1,33 +1,90 @@
 <script lang="ts">
   /**
-   * 播放器加载态：把一张图糊成一片环境光垫底，中间转一个细环。
+   * 播放器加载态：一张垫底的图（封面，或者播放中缓冲时抓下来的那一帧）+ 中间转环 + 一行小字。
    *
    * 为什么不用黑底 + 一行「正在解析播放地址…」：那片黑跟加载完的封面差得太远，一闪一换很晃眼；
    * 而等片源解析完、直接把封面原样铺满又很糊（源图本身只有几百像素宽，放到一千多像素就是糊的）。
    * 所以干脆顺着封面本来就糊这件事做：原尺寸模糊当背景（不放大，见 .video-veil-art 的注释），中间放加载环，
    * 视觉上就是「镜头正在对上焦」，从解析中一直过渡到真正出画面。
    *
-   * 底图交给调用方决定：还没出画面时是封面，播放中缓冲（拖动进度条、卡网络）时是播放器自己
-   * 抓下来的最后一帧——所以缓冲时糊的是你刚才看的画面，不会突然跳回封面，更不会黑一下。
+   * 两种底图分开对待（`kind`）：
+   *   - `poster`：还没出过任何一帧，垫的是平台封面。这一步**可能持续好几秒**（冷启动要跑一次
+   *     yt-dlp、再下第一段分片），所以只轻轻糊一点、几乎不压暗。曾经这里跟下面一样糊 6px、
+   *     再盖 40% 黑，深色封面糊完就是一块近乎全黑的方块，只剩中间一个小转环——用户报的
+   *     「起播黑屏」就是它（本机量到播放器区域平均亮度只剩 40/255，而这些封面自己有 60/255）。
+   *   - `frame`：播放中缓冲（拖进度条、网络卡住），垫的是刚才那一帧。糊得重一点，
+   *     免得把「正在等数据」看成「画面暂停了」。
    */
   interface Props {
     /** 底图地址（封面 / 播放器抓下来的最后一帧）；没有就只留一层暗底，加载环照转 */
     poster?: string | null;
-    /** 读屏文案：画面上不显示字 */
+    /** 底图取不到时退而求其次的那张（大封面挂了可以退到 hqdefault 这类小图） */
+    posterFallback?: string | null;
+    /** 底图是什么：`poster` 封面，`frame` 播放中抓下来的帧 */
+    kind?: 'poster' | 'frame';
+    /** 转环下面那行小字（留空就只有转环） */
+    hint?: string;
+    /** 读屏文案 */
     label?: string;
   }
 
-  let { poster = null, label = '正在加载播放器' }: Props = $props();
+  let { poster = null, posterFallback = null, kind = 'frame', hint = '', label = '正在加载播放器' }: Props =
+    $props();
+
+  /**
+   * 当前该用哪张图。后端抓不到封面时发的是一张 1×1 的透明 PNG（不是 4xx），
+   * 所以「没图」不能只看 error 事件——naturalWidth ≤ 1 也要算，否则底图就是一片黑。
+   */
+  const first = poster ?? posterFallback ?? null;
+  /** 来自 props 的那张（换底图时用它判断要不要重置失败状态） */
+  let source = $state<string | null>(first);
+  let art = $state<string | null>(first);
+  let tried = $state<string | null>(first);
+
+  // 缓冲态换成「抓下来的那一帧」、或者换影片换了封面时，重新从 props 那张开始试
+  $effect(() => {
+    const next = poster ?? posterFallback ?? null;
+    if (next === source) return;
+    source = next;
+    art = next;
+    tried = next;
+  });
+
+  function onArtLoaded(event: Event): void {
+    if ((event.currentTarget as HTMLImageElement).naturalWidth > 1) return;
+    onArtBroken();
+  }
+
+  function onArtBroken(): void {
+    const fallback = posterFallback !== null && posterFallback !== '' ? posterFallback : null;
+    if (fallback === null || fallback === tried) {
+      art = null;
+      return;
+    }
+    art = fallback;
+    tried = fallback;
+  }
 </script>
 
-<div class="video-veil" role="status" aria-live="polite">
-  {#if poster}
-    <img class="video-veil-art" src={poster} alt="" aria-hidden="true" decoding="async" />
+<div class="video-veil" role="status" aria-live="polite" data-kind={kind}>
+  {#if art}
+    <img
+      class="video-veil-art"
+      src={art}
+      alt=""
+      aria-hidden="true"
+      decoding="async"
+      onload={onArtLoaded}
+      onerror={onArtBroken}
+    />
   {/if}
   <span class="video-veil-scrim" aria-hidden="true"></span>
   <svg class="video-veil-spinner" viewBox="0 0 24 24" aria-hidden="true">
     <circle cx="12" cy="12" r="9" />
   </svg>
+  {#if hint !== ''}
+    <span class="video-veil-hint">{hint}</span>
+  {/if}
   <span class="sr-only">{label}</span>
 </div>
 
@@ -42,11 +99,41 @@
     display: grid;
     place-items: center;
     overflow: hidden;
-    /* 底图由调用方给（封面，或播放时抓下来的最后一帧），这里只是它缺席时的兜底：
-       同理不能是不透明的，否则会把底图整个盖掉，拖动进度条时就是「一整块黑」 */
-    background: rgb(2 4 8 / 0.85);
+    /* 底图缺席时的兜底：不是纯黑，而是一层比页面更深的冷调渐变——
+       「一块黑」和「一张还没出来的图」在观感上是两件事，后者不该像故障 */
+    background: radial-gradient(circle at 50% 42%, rgb(26 33 43), rgb(4 6 10) 72%);
     /* 盖住的只是画面，播放/暂停/全屏这些照旧能点 */
     pointer-events: none;
+  }
+
+  /* 转环和小字叠在同一格里，小字再用 margin 往下推一行 */
+  .video-veil-spinner,
+  .video-veil-hint {
+    position: relative;
+    grid-area: 1 / 1;
+  }
+
+  .video-veil-hint {
+    margin-top: 6rem;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.8125rem;
+    line-height: 1.1rem;
+    letter-spacing: 0.01em;
+    color: rgb(245 250 255 / 0.86);
+    /* 底下可能是很亮的封面：一层浅浅的暗底比加粗阴影稳，也不抢画面 */
+    background: rgb(2 4 8 / 0.42);
+    backdrop-filter: blur(4px);
+    text-shadow: 0 1px 2px rgb(2 4 8 / 0.6);
+    /* 一秒内就出画面（缓存命中、本地文件）时不该闪一行字出来，晚 0.4 秒再淡入 */
+    opacity: 0;
+    animation: video-veil-hint-in 260ms ease 400ms forwards;
+  }
+
+  @keyframes video-veil-hint-in {
+    to {
+      opacity: 1;
+    }
   }
 
   /* 不能靠 transform: scale 去盖 blur 的四周——原来那 1.08 会让缓冲时糊的这帧比播放中的画面
@@ -70,6 +157,13 @@
     filter: blur(6px) saturate(1.15);
   }
 
+  /* 封面那一版：这一步要等好几秒，画面必须一眼看出「这是那部片子的封面」。
+     本机量的：这批封面自身的平均亮度只有 60/255（室内、夜戏居多），按上面那套糊 6px
+     再压 40% 黑，实测播放器区域只剩 40/255——那就是用户嘴里的「黑屏」。 */
+  .video-veil[data-kind='poster'] .video-veil-art {
+    filter: blur(3px) saturate(1.1) brightness(1.12);
+  }
+
   /* 手机上播放器只有 200 出头高，6px 的糊按画面比例算是桌面的三倍，而且那圈外扩占的份额也翻倍
      （6px 外扩在 206 高的小画面上就是 6% 的放大）。所以按屏宽折一半，两边保持同一种观感 */
   @media (max-width: 639px) {
@@ -79,6 +173,10 @@
       height: calc(100% + 6px);
       filter: blur(3px) saturate(1.15);
     }
+
+    .video-veil[data-kind='poster'] .video-veil-art {
+      filter: blur(1.5px) saturate(1.1) brightness(1.12);
+    }
   }
 
   .video-veil-scrim {
@@ -87,8 +185,12 @@
     background: radial-gradient(circle at 50% 50%, rgb(2 4 8 / 0.04), rgb(2 4 8 / 0.4));
   }
 
+  /* 封面态只留一点点暗角给转环垫底：再压暗就是把封面重新变回黑屏 */
+  .video-veil[data-kind='poster'] .video-veil-scrim {
+    background: radial-gradient(circle at 50% 50%, rgb(2 4 8 / 0) 32%, rgb(2 4 8 / 0.22));
+  }
+
   .video-veil-spinner {
-    position: relative;
     width: 2.75rem;
     height: 2.75rem;
     fill: none;
@@ -119,6 +221,10 @@
       50% {
         opacity: 0.3;
       }
+    }
+    .video-veil-hint {
+      animation: none;
+      opacity: 1;
     }
   }
 </style>

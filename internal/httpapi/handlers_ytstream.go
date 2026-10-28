@@ -143,23 +143,34 @@ func (s *Server) handleYtStreamSeg(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveYtSeg(w http.ResponseWriter, r *http.Request, sess *ytstream.Session, abs string) {
 	if warm, ok := s.ytStream.WarmFor(sess.VideoID); ok {
 		if p, hit := warm.Get(abs); hit {
-			if u, err := url.Parse(abs); err == nil && isHLSPlaylist(u, p.ContentType) {
-				out := rewritePlaylist(p.Body, u, "youtube", sess.Ref)
-				w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-				w.Header().Set("Cache-Control", "private, max-age=30")
-				_, _ = w.Write(out)
-				return
-			}
-			s.log.Debug("预热命中", "url", abs, "bytes", len(p.Body))
-			w.Header().Set("Content-Type", p.ContentType)
-			w.Header().Set("Cache-Control", "private, max-age=600")
-			w.Header().Set("Content-Length", strconv.Itoa(len(p.Body)))
-			_, _ = w.Write(p.Body)
+			s.writePrefetched(w, sess, abs, p)
+			return
+		}
+		// 预热正在取同一条地址：等它，别自己再向 YouTube 要一份。
+		// 起播时这条连接就是「第一段分片」，两路并发只会把同一根出口带宽掰成两半。
+		if p, hit := warm.Wait(r.Context(), abs); hit {
+			s.writePrefetched(w, sess, abs, p)
 			return
 		}
 	}
 	s.log.Debug("预热未命中，回源", "url", abs)
 	s.proxyMedia(w, r, abs, "youtube", sess.Ref)
+}
+
+// writePrefetched 把预热取回来的字节发出去（子清单要现改写成会话地址，分片原样发）。
+func (s *Server) writePrefetched(w http.ResponseWriter, sess *ytstream.Session, abs string, p ytstream.Prefetched) {
+	if u, err := url.Parse(abs); err == nil && isHLSPlaylist(u, p.ContentType) {
+		out := rewritePlaylist(p.Body, u, "youtube", sess.Ref)
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Header().Set("Cache-Control", "private, max-age=30")
+		_, _ = w.Write(out)
+		return
+	}
+	s.log.Debug("预热命中", "url", abs, "bytes", len(p.Body))
+	w.Header().Set("Content-Type", p.ContentType)
+	w.Header().Set("Cache-Control", "private, max-age=600")
+	w.Header().Set("Content-Length", strconv.Itoa(len(p.Body)))
+	_, _ = w.Write(p.Body)
 }
 
 // warmYtVideo 是「起播预热」：把两条子清单和头两个分片先取回本地。
@@ -169,6 +180,9 @@ func (s *Server) serveYtSeg(w http.ResponseWriter, r *http.Request, sess *ytstre
 // 所以提前到「点开弹窗」那一步（比播放器早一秒多）跑，等播放器开口时已经是本地回环。
 //
 // 取不到就当没预热过（签名过期之类）：不影响播放，只是退回原来的慢路径。
+//
+// 这里每一条地址都先 Claim 再取：handleYtStreamInfo 和 handleYtStreamMaster 各会
+// 开一轮预热（点开弹窗一次、播放器拉清单又一次），不去重就是同一段分片下载两遍。
 func (s *Server) warmYtVideo(ctx context.Context, videoID string, v hls.StreamVariant, renditions []hls.Rendition) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -186,13 +200,22 @@ func (s *Server) warmYtVideo(ctx context.Context, videoID string, v hls.StreamVa
 		wg.Add(1)
 		go func(i int, raw string) {
 			defer wg.Done()
+			if !warm.Claim(raw) {
+				// 另一轮预热已经在取这条清单：等它取回来，再从缓存里读地址列表
+				p, hit := warm.Wait(ctx, raw)
+				if hit {
+					segs[i] = firstMediaURLs(raw, p.Body, 2)
+				}
+				return
+			}
 			ct, body, err := s.fetchRawMedia(ctx, raw, "youtube")
 			if err != nil {
 				s.log.Debug("预热失败", "url", raw, "err", err)
+				warm.Settle(raw, "", nil)
 				return
 			}
 			s.log.Debug("预热子清单", "bytes", len(body), "url", raw)
-			warm.Put(raw, ct, body)
+			warm.Settle(raw, ct, body)
 			segs[i] = firstMediaURLs(raw, body, 2)
 		}(i, raw)
 	}
@@ -205,11 +228,15 @@ func (s *Server) warmYtVideo(ctx context.Context, videoID string, v hls.StreamVa
 			segWg.Add(1)
 			go func(u string) {
 				defer segWg.Done()
-				ct, body, err := s.fetchRawMedia(ctx, u, "youtube")
-				if err != nil {
+				if !warm.Claim(u) {
 					return
 				}
-				warm.Put(u, ct, body)
+				ct, body, err := s.fetchRawMedia(ctx, u, "youtube")
+				if err != nil {
+					warm.Settle(u, "", nil)
+					return
+				}
+				warm.Settle(u, ct, body)
 			}(u)
 		}
 	}

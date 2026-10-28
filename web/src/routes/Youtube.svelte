@@ -681,6 +681,7 @@
               type={HLS_TYPE}
               engine="hls"
               poster={v.posterUrl || v.thumbUrl}
+              posterFallback={v.thumbUrl}
               title={v.title}
               videoKey={v.id}
               qualities={qualityOptions}
@@ -711,7 +712,13 @@
       {:else}
         <div class="relative mt-3 aspect-video w-full overflow-hidden rounded-xl bg-black">
           {#if streamLoading}
-            <VideoLoading poster={v.posterUrl || v.thumbUrl} label="正在解析最高画质" />
+            <VideoLoading
+              poster={v.posterUrl || v.thumbUrl}
+              posterFallback={v.thumbUrl}
+              kind="poster"
+              hint="正在解析最高画质…"
+              label="正在解析最高画质"
+            />
           {/if}
           {#if streamError}
             <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
