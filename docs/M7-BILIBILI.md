@@ -249,8 +249,13 @@ job 41 done      已完成 折1万次，会坏吗？iPhone Duo深度评测（143
 `hasCookie=true` 只是「库里非空」，B 站看到的是两百多个同名假字段，等于没登录。
 （顺带解释了「配了 Cookie 还是 720P」：画质确实靠 Cookie，但这条 Cookie 从没生效过。）
 → 已修：`normalizeBiliCookie` 认三种输入（整段 Cookie 头 / 裸 SESSDATA / cookies.txt），
-跳过 `#` 注释、认 `#HttpOnly_` 数据行、同名只留最后一个；用例见
-`internal/httpapi/cookies_test.go`。
+跳过 `#` 注释、认 `#HttpOnly_` 数据行、同名只留最后一个，并且**文件里逐行按域过滤**
+（只收域里带 `bilibili` 的，整份浏览器导出时混进来的 `google.com` / `youtube.com` 不会被
+转发给 B 站）；用例见 `internal/httpapi/cookies_test.go`。
+
+补一条要紧的：那份 `cookies.txt` 本身是**好的**——把 213 段按 7 列一组的顺序还原回来，
+正好是 30 条真 Cookie（`buvid3` / `bili_jct` / `DedeUserID` / `SESSDATA` 都在），
+拿它打 nav 就是 `isLogin=true`。坏的只是「我们当时的整理逻辑」。
 
 修好之后按同样的 Cookie 实测：
 

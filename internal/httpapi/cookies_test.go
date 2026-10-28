@@ -44,6 +44,13 @@ func TestNormalizeBiliCookie(t *testing.T) {
 			want: "SESSDATA=abc%2C1700000000%2Cxyz",
 		},
 		{
+			name: "cookies.txt 里别的站点要丢掉",
+			in: ".google.com\tTRUE\t/\tFALSE\t1809347801\tSID\tgoogle-session\t\n" +
+				"space.bilibili.com\tFALSE\t/\tFALSE\t1809347801\tSESSDATA\tabc%2C1700000000%2Cxyz\t\n" +
+				"www.youtube.com\tFALSE\t/\tTRUE\t1809347801\tSAPISID\tyt-session\t\n",
+			want: "SESSDATA=abc%2C1700000000%2Cxyz",
+		},
+		{
 			name: "同名 cookie 以最后一个为准",
 			in:   "SESSDATA=old%2C1%2Caa; SESSDATA=new%2C2%2Cbb",
 			want: "SESSDATA=new%2C2%2Cbb",

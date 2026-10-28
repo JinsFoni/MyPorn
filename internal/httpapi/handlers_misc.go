@@ -98,6 +98,8 @@ func (s *Server) hasBiliCookie() bool {
 //  3. **浏览器/curl 导出的 cookies.txt（Netscape 格式）**——每行 7 列、制表符分隔：
 //     域  子域 路径 安全  过期时间  名  值
 //
+// 第 3 种只收域里带 bilibili 的行（整份浏览器 Cookie 导出时常常混着别的站点，那些不发）。
+//
 // 第 3 种以前会被逐段当成「裸 SESSDATA 值」，粘一份 30 条 cookie 的文件就会拼出
 // 两百多个 `SESSDATA=<莫名其妙>` 的假字段（实测：4,639 字节、213 段）。B 站当然不认，
 // 于是「配了 Cookie 还是 720P、还是被限流」。所以这里按行分类处理，注释行（# 开头，
@@ -133,8 +135,12 @@ func normalizeBiliCookie(raw string) (string, error) {
 		} else if strings.HasPrefix(line, "#") {
 			continue // 真注释：cookies.txt 的头几行就是这些
 		}
-		if name, value, ok := parseNetscapeLine(line); ok {
-			add(name, value)
+		if domain, name, value, ok := parseNetscapeLine(line); ok {
+			// cookies.txt 常常是「整份浏览器 Cookie」导出的，里面混着别的站点。
+			// 那些别往 B 站发：既没用，又等于把无关站点的登录态递给第三方。
+			if strings.Contains(strings.ToLower(domain), "bilibili") {
+				add(name, value)
+			}
 			continue
 		}
 		// Cookie 头那种 k=v; k=v（也兼容换行/制表符分隔的键值对）。
@@ -173,20 +179,20 @@ func normalizeBiliCookie(raw string) (string, error) {
 
 // parseNetscapeLine 认 Netscape cookies.txt 的一行：域 子域 路径 安全 过期 名 值。
 // 制表符分隔是标准写法，某些导出会用空格对齐，所以空格分隔也认（过期列必须全是数字）。
-func parseNetscapeLine(line string) (name, value string, ok bool) {
+func parseNetscapeLine(line string) (domain, name, value string, ok bool) {
 	fields := strings.Split(line, "\t")
 	if len(fields) < 7 {
 		fields = strings.Fields(line)
 		if len(fields) != 7 || !isAllDigits(fields[4]) {
-			return "", "", false
+			return "", "", "", false
 		}
 	}
-	// 末尾可能还有空字段（值里带制表符的极端情况），只取第 6、7 列。
-	name, value = strings.TrimSpace(fields[5]), strings.TrimSpace(fields[6])
+	// 末尾可能还有空字段（值里带制表符的极端情况），只取第 1、6、7 列。
+	domain, name, value = strings.TrimSpace(fields[0]), strings.TrimSpace(fields[5]), strings.TrimSpace(fields[6])
 	if name == "" || value == "" {
-		return "", "", false
+		return "", "", "", false
 	}
-	return name, value, true
+	return domain, name, value, true
 }
 
 func isAllDigits(s string) bool {
