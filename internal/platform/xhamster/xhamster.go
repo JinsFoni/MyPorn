@@ -182,12 +182,28 @@ func (a *Adapter) ParsePerformerURL(raw string) (string, error) {
 	return "", errors.New("链接里没有艺人标识（应形如 /pornstars/<slug>）")
 }
 
-// performerPath 返回艺人主页路径（第 1 页与第 N 页）。
+// performerPath 返回艺人影片列表的路径（第 1 页与第 N 页）。
+//
+// **必须带 `/newest`**：不带时站点给的是默认序（`sort: "rated"`，按评分/默认排序），
+// 而增量同步是「遇到已入库影片即停」——第 1 页最上面躺着一堆几年前的老片，
+// 一撞上就停，新上传的片子永远发现不了。
+//
+// 2026-10 实测（`mysaaat`，42 部）：默认页只会给出 38 条按评分排的
+// （`trendingVideoSectionComponent`），最新那 4 条单独挂在 `newestVideoSectionComponent` 里、我们根本没用；
+// 换 `/newest` 后是 42 条、`sort: "added"`、按 `created` 严格倒序，最新那条落在第一位。
+// 另一个坑：`/full-length/newest` 不是「完整视频」而是「长片」这个分类（riley-reid 上只剩 34 条、
+// 且第 2 页直接 404），别拿它当过滤器用；竖版短视频另有 `/shorts` 页，
+// 默认列表与 `/newest` 都是横版长片（实测缩略图 526x298、时长 2 分钟起）。
 func performerPath(slug string, page int) string {
 	if page <= 1 {
-		return "/pornstars/" + url.PathEscape(slug)
+		return "/pornstars/" + url.PathEscape(slug) + "/newest"
 	}
-	return fmt.Sprintf("/pornstars/%s/%d", url.PathEscape(slug), page)
+	return fmt.Sprintf("/pornstars/%s/newest/%d", url.PathEscape(slug), page)
+}
+
+// performerURLPath 是给人看/存下来的艺人主页地址（不带排序）。
+func performerURLPath(slug string) string {
+	return "/pornstars/" + url.PathEscape(slug)
 }
 
 // GetPerformer 抓艺人资料（名字、头像、影片数、订阅数、简介、资料行）。
@@ -203,12 +219,13 @@ func (a *Adapter) GetPerformer(ctx context.Context, performerID string) (*model.
 	p := performerFrom(iv, performerID)
 	p.Platform = a.Key()
 	p.PerformerID = performerID
-	p.URL = a.base + performerPath(performerID, 1)
+	// 存干净的主页地址，不把「我抓列表时用的排序」写进用户资料里。
+	p.URL = a.base + performerURLPath(performerID)
 	return p, nil
 }
 
-// ListPerformerVideos 取一页影片。xHamster 的艺主页第 1 页是 /pornstars/<slug>，
-// 第 2 页起是 /pornstars/<slug>/<n>，每页 46 条（perPage 字段也是 46）。
+// ListPerformerVideos 取一页影片：`/pornstars/<slug>/newest`，第 2 页起是 `/newest/<n>`，
+// 每页 46 条（`perPage` 字段也是 46），按发布时间倒序（为什么必须指定排序见 performerPath）。
 func (a *Adapter) ListPerformerVideos(ctx context.Context, performerID string, page int) (*platform.Page, error) {
 	if page < 1 {
 		page = 1

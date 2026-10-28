@@ -19,9 +19,11 @@ import (
 type listAdapter struct {
 	fakeAdapter
 	items []model.Video
+	pages []int // 被请求过的页码，用来盯「从第几页开始扫」
 }
 
 func (l *listAdapter) ListPerformerVideos(ctx context.Context, id string, page int) (*platform.Page, error) {
+	l.pages = append(l.pages, page)
 	if page > 1 {
 		return &platform.Page{Page: page, HasMore: false, TotalPages: 1}, nil
 	}
@@ -31,6 +33,7 @@ func (l *listAdapter) ListPerformerVideos(ctx context.Context, id string, page i
 type syncFixture struct {
 	st    *store.Store
 	r     *Runner
+	ad    *listAdapter
 	subID int64
 	perf  int64
 }
@@ -68,7 +71,7 @@ func newSyncFixture(t *testing.T, items []model.Video) *syncFixture {
 	cfg := &config.Config{MaxDownload: 2, SyncHours: 6}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	runner := NewRunner(cfg, st, reg, nil, nil, nil, events.NewHub(), log, imgcache.New(t.TempDir(), nil, "", log))
-	return &syncFixture{st: st, r: runner, subID: subID, perf: perfID}
+	return &syncFixture{st: st, r: runner, ad: ad, subID: subID, perf: perfID}
 }
 
 func (f *syncFixture) runSync(t *testing.T, mode string) {
@@ -167,4 +170,33 @@ func mustVideos(t *testing.T, st *store.Store) []*model.Video {
 		t.Fatal(err)
 	}
 	return vids
+}
+
+// 回填已经完成过，再点「完整同步」要从第 1 页重扫：从断点页续跑会落在末页之外
+// （单页创作者上表现成「同步完成，新增 0 部」），而用户点它的意思就是「从头再扫一遍」。
+func TestFullSyncRestartsWhenBackfillDone(t *testing.T) {
+	f := newSyncFixture(t, sampleVideos())
+	if err := f.st.MarkBackfillProgress(f.subID, 1, nil, true); err != nil {
+		t.Fatal(err)
+	}
+
+	f.runSync(t, "full")
+
+	if len(f.ad.pages) == 0 || f.ad.pages[0] != 1 {
+		t.Fatalf("应从第 1 页开始重扫，实际请求了 %v", f.ad.pages)
+	}
+}
+
+// 上次回填被打断（还没标记完成）：仍然从断点下一页续，不把前面几百页重扫一遍。
+func TestFullSyncResumesInterruptedBackfill(t *testing.T) {
+	f := newSyncFixture(t, sampleVideos())
+	if err := f.st.MarkBackfillProgress(f.subID, 3, nil, false); err != nil {
+		t.Fatal(err)
+	}
+
+	f.runSync(t, "full")
+
+	if len(f.ad.pages) == 0 || f.ad.pages[0] != 4 {
+		t.Fatalf("应从断点下一页（第 4 页）续跑，实际请求了 %v", f.ad.pages)
+	}
 }

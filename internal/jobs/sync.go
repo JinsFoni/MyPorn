@@ -29,7 +29,8 @@ func (r *Runner) runSyncJob(ctx context.Context, j *model.Job, c *Ctl) error {
 }
 
 // syncSubscription 执行一次艺人同步：
-//   - 首次（backfillDone=false）或 mode=full：从断点页继续翻页直到末页
+//   - 首次（backfillDone=false）：从断点页继续翻页直到末页（续跑只对「被中断」有意义）
+//   - mode=full：从头重扫到末页（已经回填完过的订阅也一样从头，见下面 startPage 的注释）
 //   - 其余情况：只抓第 1 页，遇到已入库影片即停止
 func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) error {
 	sub, err := r.st.GetSubscription(p.SubscriptionID)
@@ -73,8 +74,18 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 
 	full := p.Mode == "full" || !sub.BackfillDone
 	startPage := 1
-	if full && sub.BackfillPage > 0 {
+	// 「从断点续跑」只对「上次回填被中断」有意义。已经回填完的订阅再点一次「完整同步」，
+	// 用户要的是从头再扫一遍（列表中间漏掉的、当时写入失败的那几部只能靠它补）；
+	// 而从断点页续会直接落在末页之外——单页创作者（如 mysaaat）上就是「同步完成，新增 0 部」。
+	if full && !sub.BackfillDone && sub.BackfillPage > 0 {
 		startPage = sub.BackfillPage + 1
+	}
+	if full && startPage == 1 && sub.BackfillPage > 0 {
+		// 从头重扫：先把旧断点清掉，否则这一轮要是在中途被打断，
+		// 下次续跑会拿着上一轮的末尾页码，把前面几页整个跳过去。
+		if err := r.st.MarkBackfillProgress(sub.ID, 0, nil, false); err != nil {
+			r.log.Warn("重置回填断点失败", "subscription", sub.ID, "err", err)
+		}
 	}
 
 	maxPages := 0

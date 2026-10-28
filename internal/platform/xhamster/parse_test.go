@@ -195,3 +195,53 @@ func TestParseInitialsToleratesListInfoValues(t *testing.T) {
 		t.Fatalf("名字=%q", p.Name)
 	}
 }
+
+// 列表必须按「最新」取：默认序是 sort=rated，第 1 页最上面是老片，
+// 而增量同步遇到已入库影片就停，于是新片永远发现不了（2026-10 实测 mysaaat 漏了最新 4 部）。
+func TestPerformerPathUsesNewestSort(t *testing.T) {
+	cases := map[int]string{
+		1:  "/pornstars/riley-reid/newest",
+		2:  "/pornstars/riley-reid/newest/2",
+		34: "/pornstars/riley-reid/newest/34",
+	}
+	for page, want := range cases {
+		if got := performerPath("riley-reid", page); got != want {
+			t.Fatalf("第 %d 页 → %q，期望 %q", page, got, want)
+		}
+	}
+	// 资料里存的仍然是不带排序的主页地址
+	if got := performerURLPath("riley-reid"); got != "/pornstars/riley-reid" {
+		t.Fatalf("主页地址 = %q", got)
+	}
+}
+
+// 带 /newest 的页面里没有 newestVideoSectionComponent，整页只有 trending 那一个大分区
+// （2026-10 实测：mysaaat 42 条、riley-reid 每页 46 条），解析不能因此变成空。
+func TestParseNewestSortedListing(t *testing.T) {
+	const fixture = `<script>window.initials={"sort":"added","isDefaultOrder":false,` +
+		`"infoComponent":{"pornstarTop":{"name":"mysaaat","videoCount":42}},` +
+		`"trendingVideoSectionComponent":{"videoListProps":{"videoThumbProps":[` +
+		`{"id":1792929031,"duration":1276,"created":1792929031,"title":"The student paid","pageURL":"https://xhamster.com/videos/the-student-xh1"},` +
+		`{"id":1786716606,"duration":687,"created":1786716606,"title":"The tutoring","pageURL":"https://xhamster.com/videos/the-tutoring-xh2"}` +
+		`]}}};</script>`
+
+	iv, err := parseInitials([]byte(fixture))
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	section := iv.videoSection()
+	if section == nil {
+		t.Fatal("没认出影片列表")
+	}
+	items := section.items()
+	if len(items) != 2 {
+		t.Fatalf("拿到 %d 条，期望 2", len(items))
+	}
+	// 第一条就是最新的那部
+	if items[0].Created != 1792929031 || items[1].Created >= items[0].Created {
+		t.Fatalf("不是按发布时间倒序: %d, %d", items[0].Created, items[1].Created)
+	}
+	if got := videoFromThumb(items[0], defaultBase); got == nil || got.PlatformVideoID == "" {
+		t.Fatal("第一条没能转成影片")
+	}
+}

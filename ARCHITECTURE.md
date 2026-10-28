@@ -438,6 +438,13 @@ X 的账号名猜不出来的（艺名拼起来超过 15 字符、账号名里�
 - **两套清单都要**：站点把 AV1 与 H.264 分成两个 master（`_TPL_.av1.mp4.m3u8` / `_TPL_.h264.mp4.m3u8`），
   两条都解析、合并后交给 `model.SortVariantsDesc`；清单里的 `CODECS` 缺失时用来源 codec 补上。
   拿不到清单时退到 `downloadDropdownComponent.sources.mp4`（144p–720p 直链）。
+- **影片列表一律带 `/newest`**：`/pornstars/<slug>` 默认是评分序（`sort:"rated"`），第 1 页最上面
+  是几年前的老片，最新的几部甚至不在我们用的那个分区里（`newestVideoSectionComponent` 只有 4 条）。
+  而增量同步是「遇到已入库影片即停」——排序不对就等于老片一挡，**新片永远发现不了**。
+  所以列表固定请求 `/pornstars/<slug>/newest`（第 N 页 `/newest/<n>`，`sort:"added"`、按 `created` 倒序、
+  可翻页）；2026-10 实测把 `mysaaat` 从「38 条按评分排」纠正成「42 条按时间排」，补回漏掉的 4 部新片。
+  顺带记一笔：`/full-length` 不是「完整视频」过滤器而是站点的「长片」分类（riley-reid 上只剩 34 条且不可翻页），
+  竖版短视频另有 `/shorts` 页——默认列表与 `/newest` 本来就是横版长片（缩略图 526×298、时长 2 分钟起）。
 - **搜索退化**：`/api/front/search/suggest` 被 Cloudflare 挡住（带 csrf token、Referer、Cookie 也是 403），
   `/pornstars?search=` 会被忽略并返回完整 A–Z 列表。所以站内搜索只做「按 slug 精确探测」：
   名字打全（`Riley Reid` → `riley-reid`）能搜到，报出的名字还必须与输入一致，否则当没搜到。

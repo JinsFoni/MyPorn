@@ -126,7 +126,9 @@ make backend           # 先编译
 | 搜索 | `/api/front/search/suggest` 被 Cloudflare 拦（服务端带 token/Referer/Cookie 也是 403），站内搜索退化为 slug 精确探测 | 搜索一直是空结果但粘贴链接能订阅 → 正常现象 |
 | 资料行的 `value` 形态 | **不是字符串**了也算正常：2026-10 起「Interests and fetishes」是对象数组 `[{id,slug,name,…}]`（`aboutMeComponent.personalInfoList` 与 `appearanceInfoList` 都会有），解析时用 `json.RawMessage` 收下来再宽松取文本 | 报 `cannot unmarshal array into Go struct field … of type string`，表现是「这类艺人一个都加不进来」 |
 | 主页路径 | `/pornstars/<slug>` 现在 **301** 到 `/creators/<slug>`（客户端自动跟随，两种粘贴都能用） | 抓资料 404 → 先看是不是又被换了路径 |
-| 列表分页 | `/pornstars/<slug>/<n>` 与 `/creators/<slug>/<n>` 都只到末页为止，**翻过头回 404 而不是空页**；单页创作者（如 `mysaaat`）的 `paginationComponent` 干脆是空的 | 回填卡在「未完成」且日志有「分页抓取中断 page=2」→ 看是不是末页 404 没被当成「到头了」 |
+| 列表排序（**必须带 `/newest`**） | 默认的 `/pornstars/<slug>` 是 `sort:"rated"`（按评分/默认序），第 1 页最上面是几年前的老片，最新的那几部甚至**不在同一个分区里**（`newestVideoSectionComponent` 只有 4 条，我们用的大分区 `trendingVideoSectionComponent` 是 38 条按评分排的）。带 `/newest` 才是 `sort:"added"`、按 `created` 严格倒序、条数也齐（2026-10 实测 `mysaaat`：默认 38 条 + 漏掉最新 4 条 → `/newest` 42 条 = 页面自称的 `videoCount`）。增量同步是「遇到已入库影片即停」，排序不对就等于老片一挡、**新片永远发现不了** | 订阅之后再也看不到新片、日志里「新增 0 部」→ 先 curl 一下 `/pornstars/<slug>/newest` 看 `sort` 字段是不是 `added` |
+| 列表分页 | 路径跟着排序走：`/pornstars/<slug>/newest`、第 N 页 `/pornstars/<slug>/newest/<n>`，都只到末页为止，**翻过头回 404 而不是空页**；单页创作者（如 `mysaaat`）的 `paginationComponent` 干脆是空的 | 回填卡在「未完成」且日志有「分页抓取中断 page=2」→ 看是不是末页 404 没被当成「到头了」 |
+| 别拿 `/full-length` 当过滤器 | 它不是「完整视频」而是站点的「长片」分类：riley-reid 上只剩 34 条、且 `/full-length/newest/2` 直接 **404**（不可翻页）。竖版短视频另有 `/shorts` 页；默认列表与 `/newest` 本来就是横版长片（缩略图 526×298、时长 2 分钟起） | 影片数突然只剩几十条、翻页 404 → 看路径里是不是混进了 `full-length` |
 
 ## 二、beeg（`internal/platform/beeg`）
 
