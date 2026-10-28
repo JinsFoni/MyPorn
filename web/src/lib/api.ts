@@ -22,6 +22,7 @@ import type {
   PerformerPage,
   PlatformInfo,
   PlaybackInfo,
+  RemuxStatus,
   ResolvedPerformer,
   SearchPerformersResponse,
   Settings,
@@ -285,6 +286,17 @@ export const api = {
   },
   playback(videoId: number | string): Promise<PlaybackInfo> {
     return request<PlaybackInfo>(`/api/videos/${id(videoId)}/playback`);
+  },
+  /**
+   * 分轨档位（B 站 1080P+/4K）的合流进度。
+   *
+   * 第一次问就顺手把合流启动起来，之后每次问只是取快照；state 变 ready 才值得把
+   * `/remux?v=…` 交给 <video>——否则那个请求要挂好几分钟才回第一个字节。
+   */
+  remuxStatus(videoId: number | string, variantId: string): Promise<RemuxStatus> {
+    return request<RemuxStatus>(
+      `/api/videos/${id(videoId)}/remux${qs({ v: variantId, status: 1 })}`,
+    );
   },
 
   // ---- 任务 ----

@@ -256,16 +256,44 @@ func (e *Encoder) remuxFromURLs(ctx context.Context, urls []string, referer, ua 
 // 两条流都要带 Referer —— B 站媒体 CDN 不带 Referer 直接 403（实测）。
 //
 // 输出走 faststart：moov 挪到文件头，浏览器拿到前几 MB 就能起播并拖动进度条。
-func (e *Encoder) RemuxTo(ctx context.Context, videoURL, audioURL, referer, ua, outPath string) error {
-	if err := e.remuxURLTo(ctx, []string{videoURL, audioURL}, referer, ua, outPath, "mp4", 0, nil); err != nil {
-		return err
+//
+// totalSec / onProgress 只为「让等待可见」：4K 那一档光画面就有 554 MB（AV1）
+// 到 1.77 GB（H.264），整条流下完才开始合，用户要在遮罩上等 1~3 分钟。
+func (e *Encoder) RemuxTo(ctx context.Context, videoURL, audioURL, referer, ua, outPath string,
+	totalSec int, onProgress func(percent float64)) error {
+	wrapped := func(percent float64, _ int64) {
+		if onProgress != nil {
+			onProgress(percent)
+		}
 	}
-	return nil
+	return e.remuxURLTo(ctx, []string{videoURL, audioURL}, referer, ua, outPath, "mp4", totalSec, wrapped)
+}
+
+// remuxInputFlags 是每条输入前面的那串参数。
+//
+// -user_agent / -headers 是**输入侧**参数，必须紧挨着各自那条 -i（B 站两条流都要 Referer）。
+// 另外几条是「别被 CDN 拖死」用的：B 站媒体流里混着 PCDN 节点，实测会出现
+// 「连接没断、字节不来了」的假死（写满 649 MB 后 3 分半零字节），而 ffmpeg 默认会一直等，
+// 最后只能由外层整体超时收场——那时用户已经等了 10 分钟。
+// -rw_timeout 让单次读写 30 秒没数据就报错，-reconnect* 让真断流自己接上。
+func remuxInputFlags(ua, referer string) []string {
+	args := []string{
+		"-rw_timeout", "30000000",
+		"-reconnect", "1",
+		"-reconnect_streamed", "1",
+		"-reconnect_on_network_error", "1",
+		"-reconnect_delay_max", "5",
+	}
+	if ua != "" {
+		args = append(args, "-user_agent", ua)
+	}
+	if referer != "" {
+		args = append(args, "-headers", "Referer: "+referer+"\r\n")
+	}
+	return args
 }
 
 // remuxURLTo 拉一组输入（1 条 = 音画一体的单文件；2 条 = 画面 + 声音分轨）remux 到 output。
-//
-// -user_agent / -headers 是**输入侧**参数，必须紧挨着各自那条 -i（B 站两条流都要 Referer）。
 func (e *Encoder) remuxURLTo(ctx context.Context, urls []string, referer, ua, output, format string,
 	totalSec int, onProgress func(percent float64, bytesWritten int64)) error {
 
@@ -273,12 +301,7 @@ func (e *Encoder) remuxURLTo(ctx context.Context, urls []string, referer, ua, ou
 	_ = os.Remove(tmp)
 	args := []string{"-y", "-hide_banner", "-loglevel", "error", "-nostdin"}
 	for _, u := range urls {
-		if ua != "" {
-			args = append(args, "-user_agent", ua)
-		}
-		if referer != "" {
-			args = append(args, "-headers", "Referer: "+referer+"\r\n")
-		}
+		args = append(args, remuxInputFlags(ua, referer)...)
 		args = append(args, "-i", u)
 	}
 	if len(urls) > 1 {

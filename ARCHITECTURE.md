@@ -588,7 +588,25 @@ handler → muxcache.Ensure(key="<videoID>-<variantID>")
 ```
 
 签名地址几小时就过期，所以合流前会（在 produce 回调里）重新解析一次播放地址；成品按 key 缓存，
-过期的是**上游地址**而不是成品。下载复用同一判定：`best.AudioURL != ""` 就走
+过期的是**上游地址**而不是成品。
+
+合流是「整条流下完才出成品」，等多久只取决于档位：1080P 88 MB / 十几秒，4K 一档 554 MB（AV1）
+到 1.77 GB（H.264），实测 49 秒 ~ 7 分半。所以播放链路分成两段：
+
+```
+前端 → GET /remux?v=X&status=1   立刻回 {state, percent, elapsedSec}，顺手 Begin 合流
+     → 每 1.2 秒轮询，遮罩上写「正在准备 4K AV1 · 62% · 约 554 MB · 已等 48 秒」
+     → state=ready 才把 /remux?v=X 交给 <video>（这时是成型文件，Range 秒开）
+```
+
+`muxcache` 因此多了 `Begin` / `Snapshot`，`RemuxTo` 多了 `totalSec` + `onProgress`（进度来自
+`-progress pipe:1` 的 `out_time_us`）。合流跑在 `context.Background()` 上但**带 10 分钟超时**，
+超时按 `504 mux_timeout` 报、并清掉这部片子的画质缓存逼下次重新解析；成功/失败都由 `OnMerged`
+回调记一条日志（耗时只有它自己知道）。
+
+输入侧还挂着几条「别被 CDN 拖死」的参数：`-rw_timeout 30000000 -reconnect 1 -reconnect_streamed 1
+-reconnect_on_network_error 1 -reconnect_delay_max 5`。起因是一次 PCDN 假死——649 MB 写完
+之后 3 分半零字节、连接没断，ffmpeg 默认会一直等，最后只能由外层整体超时收场。下载复用同一判定：`best.AudioURL != ""` 就走
 `Encoder.RemuxFromURLs`（两路输入 + 每路各自的 `Referer`），估算体积用「视频带宽 + 音轨带宽」
 （实测 150,153,388 估算 vs 150,109,750 实际，差 0.03%）。
 

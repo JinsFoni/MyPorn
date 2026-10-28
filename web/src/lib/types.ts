@@ -269,6 +269,21 @@ export interface PlaybackInfo {
   tags?: string[];
 }
 
+/**
+ * 分轨合流（B 站 1080P+/4K）的准备进度。
+ *
+ * 这些档位的片源是画面、声音两条流，必须服务端合流成一份 mp4 才能播；
+ * 4K 一档要整条流下完（554 MB ~ 1.77 GB），头一次点要等几分钟。
+ */
+export interface RemuxStatus {
+  state: 'idle' | 'merging' | 'ready' | 'failed';
+  /** 0~100，只有 merging 时有意义 */
+  percent: number;
+  elapsedSec: number;
+  /** state = failed 时的原因 */
+  error?: string;
+}
+
 export interface OpenListSettings {
   baseUrl: string;
   root: string;

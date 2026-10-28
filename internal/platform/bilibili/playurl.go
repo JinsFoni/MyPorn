@@ -66,7 +66,7 @@ func (s dashStream) backups() []string {
 	return s.Backup2
 }
 
-// mediaHostSuffixes 是「快的那条 CDN」。实测同一条片子：
+// mediaHostSuffixes 是「官方那条 CDN」。实测同一条片子：
 //
 //	PCDN（*.edge.mountaintoys.cn / *.mcdn.bilivideo.cn）: 0.9 MB/s
 //	官方 upos-*（*.bilivideo.com）                      : 6.6 MB/s
@@ -74,28 +74,67 @@ func (s dashStream) backups() []string {
 // 所以只要列表里有一条官方 CDN 就用它——每条 durl/dash 的 backup_url 里基本都有。
 var mediaHostSuffixes = []string{"bilivideo.com", "bilivideo.cn", "akamaized.net"}
 
-// pickMediaURL 在「主地址 + 备用地址」里挑一条官方 CDN 的；没有就退回主地址
-// （PCDN 也能放，只是慢；不能为了快就什么都不给）。
+// isPCDNURL 判断一条播放地址是不是 PCDN 边缘节点。
+//
+// 为什么必须单独判：PCDN 的域名是 *.mcdn.bilivideo.cn，**也以 bilivideo.cn 结尾**，
+// 所以早先「后缀命中 bilivideo.cn 就算官方源」的写法等于把 PCDN 当官方——
+// 候选列表里第一条就是 PCDN，于是我们永远从 PCDN 起。2026-10 实测代价：
+//
+//	4K 一档（2160p.av1）从 PCDN 拉，554 MB 拖了 7 分半；
+//	同一条流另一次直接卡死——ffmpeg 写满 649 MB 后 3 分半零字节，
+//	既不断开也不报错，最后只能等 muxcache 的 10 分钟上限把所有请求一起作废。
+//
+// 判据用「主机名里的 mcdn/mountaintoys 标签 + 这两个已知的 PCDN 端口」，
+// 而不是简单的字符串包含：upos-sz-mirrorcos.bilivideo.com:443 这种官方源不能误伤。
+func isPCDNURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ".mcdn.") || strings.HasPrefix(host, "mcdn.") ||
+		strings.Contains(host, ".mountaintoys.") || strings.HasPrefix(host, "mountaintoys.") {
+		return true
+	}
+	switch u.Port() {
+	case "8082", "4483": // 实测就是这两个端口上的 PCDN 节点
+		return true
+	}
+	return false
+}
+
+// mediaRank 给候选地址排队：0 = 官方 CDN，1 = 认不出来的第三方，2 = PCDN。
+func mediaRank(raw string) int {
+	if isPCDNURL(raw) {
+		return 2
+	}
+	if u, err := url.Parse(raw); err == nil && hostAllowed(u.Hostname()) {
+		return 0
+	}
+	return 1
+}
+
+// pickMediaURL 在「主地址 + 备用地址」里按 mediaRank 挑最好的一条。
+// 官方源缺席时才退到第三方，PCDN 排最后（能放，只是慢/容易卡，不能什么都不给）。
 func pickMediaURL(primary string, backups []string) string {
 	cands := make([]string, 0, len(backups)+1)
 	if primary != "" {
 		cands = append(cands, primary)
 	}
 	cands = append(cands, backups...)
+	best, bestRank := "", 3
 	for _, c := range cands {
 		if c == "" {
 			continue
 		}
-		if u, err := url.Parse(c); err == nil && hostAllowed(u.Hostname()) {
-			return c
+		if r := mediaRank(c); r < bestRank {
+			best, bestRank = c, r
+			if bestRank == 0 {
+				break
+			}
 		}
 	}
-	for _, c := range cands {
-		if c != "" {
-			return c
-		}
-	}
-	return ""
+	return best
 }
 
 func hostAllowed(host string) bool {

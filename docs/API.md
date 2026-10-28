@@ -337,13 +337,41 @@ type Video = {
 
 给 B 站那种「音视频分开」的档位用：服务端用 ffmpeg `-c copy` 合成 mp4，落盘缓存后按普通文件提供。
 
-- 首次请求会等合流跑完（实测 25 分钟 480P 约 15 秒、44 分钟 PCDN 源约 2 分钟），之后是磁盘命中（毫秒级）；
+- 首次请求会等合流跑完，**等多久完全取决于档位**（下面都是本机实测）：
+
+  | 档位 | 成品体积 | 冷启动耗时 |
+  |---|---|---|
+  | 480P / 25 分钟 | 68 MB | 约 15 秒 |
+  | 1080P | 88 MB | 十几秒 |
+  | 4K（AV1） | 554 MB | 49 秒（走官方 CDN）／7 分 31 秒（走 PCDN） |
+  | 4K（HEVC） | 657 MB | 约 75 秒 |
+  | 4K（H.264） | 1.77 GB | 约 3 分钟 |
+
 - 缓存 key = `<videoID>-<variantID>`，目录 `DATA_DIR/mux/`，TTL 7 天；
 - 同一个 key 并发（浏览器起播会打好几个 Range 请求）只跑一次 ffmpeg；
 - 上游签名地址过期时会在合流前重新解析一次；调用方断开不会打断已经开始的合流；
 - 响应带 `Range`/`206`、`Cache-Control: private, max-age=3600`；
-- 找不到该变体 / 它没有音轨 → `404 not_found`；重新解析播放地址失败 → `502 resolve_failed`；
-  合流本身失败 → `502 mux_failed`。
+- 找不到该变体 / 它没有音轨 → `404 not_found`；合流失败 → `502 mux_failed`；
+  超过 10 分钟没合完 → `504 mux_timeout`（4K 慢到这一步基本都是 CDN 卡住了）；
+- 失败后会顺手清掉这部片子的画质缓存，下一次 `/playback` 重新解析、通常拿到另一条线路。
+
+#### A4·补·1 进度：`GET /api/videos/{id}/remux?v=<variantID>&status=1`
+
+4K 一档要等 49 秒到几分钟，而上面那条路「合流没完就一个字节都不回」——前端只能干等，
+用户看到的就是「点了 4K 没反应」。所以另开一条**立刻返回**的进度接口：
+
+```json
+{"state": "merging", "percent": 62.5, "elapsedSec": 48}
+{"state": "ready",   "percent": 100,  "elapsedSec": 0}
+{"state": "failed",  "percent": 0,    "elapsedSec": 12, "error": "...合流超时..."}
+```
+
+- 第一次问就顺手把合流**在后台启动**，不会阻塞；重复问只是取快照，不会重开 ffmpeg；
+- `state` 取 `idle` / `merging` / `ready` / `failed`；`percent` 只在 `merging` 时有意义（0~99，
+  100 只表示「盘上已经有成品」）；
+- 失败记录保留 5 分钟，前端刷新一眼就能看到上次为什么没好，而不是无限「正在准备」；
+- 前端拿到 `ready` 之后才把 `/api/videos/{id}/remux?v=…` 交给 `<video>`，那时是一个已经成型的
+  文件，Range 秒开、能拖动。
 
 ### A5. SSE 新增事件
 

@@ -28,9 +28,24 @@
     kind?: 'poster' | 'frame';
     /** 读屏文案（视觉上不渲染：画面上只留转环） */
     label?: string;
+    /**
+     * 会**画在画面上**的一行进度说明，只在「等得比转环更长」时传。
+     *
+     * 上面那条「画面上一个字都不写」的规矩是为「一两秒的对焦」定的；B 站 4K 那一档是另一回事——
+     * 服务端要先把 554 MB~1.77 GB 的整条流下完才能合成，头一次点要等 1~3 分钟。
+     * 那种长度上不给任何反馈（只转圈），用户只会得出一个结论：这档放不了。
+     * 所以这里留一个口子：不传就没字，传了才显示百分比。
+     */
+    detail?: string | null;
   }
 
-  let { poster = null, posterFallback = null, kind = 'frame', label = '正在加载播放器' }: Props = $props();
+  let {
+    poster = null,
+    posterFallback = null,
+    kind = 'frame',
+    label = '正在加载播放器',
+    detail = null,
+  }: Props = $props();
 
   /**
    * 当前该用哪张图。后端抓不到封面时发的是一张 1×1 的透明 PNG（不是 4xx），
@@ -83,6 +98,9 @@
   <svg class="video-veil-spinner" viewBox="0 0 24 24" aria-hidden="true">
     <circle cx="12" cy="12" r="9" />
   </svg>
+  {#if detail}
+    <p class="video-veil-detail">{detail}</p>
+  {/if}
   <span class="sr-only">{label}</span>
 </div>
 
@@ -107,6 +125,19 @@
   .video-veil-spinner {
     position: relative;
     grid-area: 1 / 1;
+  }
+
+  /* 进度说明压在转环下面一行（同一格里往下挤），字号克制：
+     它的作用是「我知道还在动」，不是要把视线钉在这里。 */
+  .video-veil-detail {
+    position: relative;
+    grid-area: 1 / 1;
+    margin-top: 4.5rem;
+    font-size: 0.8125rem;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+    color: rgb(255 255 255 / 0.82);
+    text-shadow: 0 1px 3px rgb(0 0 0 / 0.6);
   }
 
   /* 不能靠 transform: scale 去盖 blur 的四周——原来那 1.08 会让缓冲时糊的这帧比播放中的画面

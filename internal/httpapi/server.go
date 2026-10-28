@@ -68,6 +68,16 @@ func New(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg 
 	}
 	if runner != nil {
 		s.mux = muxcache.New(filepath.Join(cfg.DataDir, "mux"), runner.Encoder())
+		// 合流的耗时只有 muxcache 自己知道（4K 一档 554 MB 起步，实测 49 秒~7 分钟，
+		// 差别全在 CDN 那条线上），日志记在这里才不会漏。
+		s.mux.OnMerged = func(key string, elapsed time.Duration, size int64, err error) {
+			if err != nil {
+				log.Warn("分轨合流失败", "key", key, "elapsed", elapsed.Round(100*time.Millisecond), "err", err)
+				return
+			}
+			log.Info("分轨合流完成", "key", key, "size", size,
+				"elapsed", elapsed.Round(100*time.Millisecond))
+		}
 	}
 	// 解析器现取 yt-dlp：设置页换完路径，下一个请求就用新的。
 	s.ytStream = ytstream.NewManager(func(ctx context.Context, videoID string) (ytstream.Upstream, error) {

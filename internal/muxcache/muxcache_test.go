@@ -12,15 +12,24 @@ import (
 )
 
 type fakeMuxer struct {
-	calls int32
-	delay time.Duration
-	fail  bool
-	got   Source
+	calls   int32
+	delay   time.Duration
+	fail    bool
+	got     Source
+	reports func(onProgress func(percent float64)) // 非 nil 时先按它报一遍进度
+	block   chan struct{}                          // 非 nil 时先报完进度再阻塞，直到这个 channel 关闭
 }
 
-func (f *fakeMuxer) RemuxTo(_ context.Context, videoURL, audioURL, referer, ua, outPath string) error {
+func (f *fakeMuxer) RemuxTo(_ context.Context, videoURL, audioURL, referer, ua, outPath string,
+	totalSec int, onProgress func(percent float64)) error {
 	atomic.AddInt32(&f.calls, 1)
-	f.got = Source{VideoURL: videoURL, AudioURL: audioURL, Referer: referer, UA: ua}
+	f.got = Source{VideoURL: videoURL, AudioURL: audioURL, Referer: referer, UA: ua, TotalSec: totalSec}
+	if f.reports != nil && onProgress != nil {
+		f.reports(onProgress)
+	}
+	if f.block != nil {
+		<-f.block
+	}
 	if f.delay > 0 {
 		time.Sleep(f.delay)
 	}
@@ -200,6 +209,79 @@ func TestPruneRemovesStaleFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(fresh); err != nil {
 		t.Error("新成品不该被清掉")
+	}
+}
+
+// TestBeginReportsProgressWithoutBlocking 是「4K 要等好几分钟」那条需求的回归测试：
+// 前端不能靠一个一直不回来的 HTTP 请求傻等，得能 Begin + 轮询看进度。
+func TestBeginReportsProgressWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	block := make(chan struct{})
+	m := &fakeMuxer{
+		block:   block,
+		reports: func(onProgress func(float64)) { onProgress(12); onProgress(64); onProgress(120) },
+	}
+	c := New(dir, m)
+
+	// 还没人要求过：idle。
+	if got := c.Snapshot("k").State; got != StateIdle {
+		t.Fatalf("初始状态 = %q，期望 idle", got)
+	}
+
+	c.Begin("k", func(context.Context) (Source, error) {
+		return Source{VideoURL: "v.m4s", AudioURL: "a.m4s", TotalSec: 1492}, nil
+	})
+
+	// Begin 不能阻塞：马上就该看到 merging（进度慢慢涨到夹住的 99）。
+	var snap Snapshot
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		snap = c.Snapshot("k")
+		if snap.State == StateMerging && snap.Percent > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if snap.State != StateMerging {
+		t.Fatalf("状态 = %q，期望 merging", snap.State)
+	}
+	if snap.Percent != 99 {
+		t.Errorf("百分比 = %v，期望夹在 99（120 不该原样透出）", snap.Percent)
+	}
+	if m.got.TotalSec != 1492 {
+		t.Errorf("合流器拿到的时长 = %d，期望 1492", m.got.TotalSec)
+	}
+
+	// 再 Begin 一次不该开第二趟 ffmpeg。
+	c.Begin("k", srcProvider(nil))
+	if got := atomic.LoadInt32(&m.calls); got != 1 {
+		t.Errorf("ffmpeg 跑了 %d 次，期望 1 次", got)
+	}
+
+	close(block)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.Snapshot("k").State == StateReady {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("合流完成后状态应当是 ready")
+}
+
+func TestSnapshotKeepsRecentFailure(t *testing.T) {
+	c := New(t.TempDir(), &fakeMuxer{fail: true})
+	if _, err := c.Ensure(context.Background(), "k", srcProvider(nil)); err == nil {
+		t.Fatal("期望失败")
+	}
+	snap := c.Snapshot("k")
+	if snap.State != StateFailed || snap.Err == nil {
+		t.Fatalf("失败后状态 = %q err=%v，期望 failed 且带原因", snap.State, snap.Err)
+	}
+	// 重试时失败记录要清掉，否则前端会一直看到上次的错。
+	c.Begin("k", srcProvider(nil))
+	if got := c.Snapshot("k").State; got != StateMerging && got != StateReady {
+		t.Errorf("重试后状态 = %q，期望 merging/ready", got)
 	}
 }
 

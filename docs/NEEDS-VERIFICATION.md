@@ -237,7 +237,10 @@ poster 1000×1500 / thumb 1280×720 / fanart 1920×1080 / nfo（含 `uniqueid ty
 | 播放地址 | `/x/player/playurl?bvid=&cid=&qn=127&fnval=4048&fourk=1`：`durl[]` + `dash{video,audio}` | 只剩 360P/480P → Cookie 没生效（`/api/bilibili/health` 的 `hasCookie` 只说明「库里非空」，要看 nav 是否 `isLogin=true`）；`accept_quality` 列着 4K 但 dash 不返回 → 正常，4K/HDR 要大会员 |
 | 合并规则 | durl 保底；DASH 跳过与 durl 同分辨率的档，其余照留；每档带上最高码率的音轨地址 | 下拉框出现两条同名档 → 合并规则被改坏 |
 | 媒体 CDN | `/api/stream` 放行 `bilivideo.com` / `bilivideo.cn`，补 `Referer: https://www.bilibili.com/` | 403 / 播放立刻中断 → 新 CDN 域名没加进 `streamHostSuffixes`，或 Referer 被去掉 |
+| CDN 选路 | `pickMediaURL` 在 `primary + backup[]` 里按 rank 选：0=官方（`upos-*` 等）、1=未知第三方、2=PCDN（`*.mcdn.bilivideo.cn:8082`、`*.edge.mountaintoys.cn:4483`），同 rank 保持原顺序 | 4K 合流忽快忽慢、动不动卡在某个体积不动 → 又选了 PCDN（看 `video_streams.url` 的 host 是不是 `*.mcdn.*:8082`） |
 | 封面 | `i0.hdslb.com/...jpg@960w_540h_1c.webp`（不校验 Referer，67 KB） | 卡片封面裂开 → `thumbURL` 的缩放后缀变了 |
-| 分轨合流 | `ffmpeg -i video -i audio -map 0:v:0 -map 1:a:0? -c copy -movflags +faststart`，产物缓存 7 天 | 切到 480P 黑屏/一直转 → 看日志有没有 `分轨合流完成`；没有就是 playurl 或 ffmpeg 参数问题 |
+| 分轨合流 | `ffmpeg -i video -i audio -map 0:v:0 -map 1:a:0? -c copy -movflags +faststart`，产物缓存 7 天；输入侧带 `-rw_timeout 30s` + `-reconnect*` | 切到 480P 黑屏/一直转 → 看日志有没有 `分轨合流完成` / `分轨合流失败`；都没有就是 playurl 或 ffmpeg 参数问题 |
+| 合流进度 | `GET /remux?v=X&status=1` 立刻回 `{state,percent,elapsedSec}` 并在后台开始合流；前端轮询到 `ready` 才把地址交给 `<video>` | 4K 只转圈不涨百分比 → 看这条接口是否 200、`state` 是否卡在 `idle`（`idle` 说明 `muxcache.Begin` 没跑起来）；`failed` 里带原因 |
+| 4K 冷启动耗时 | AV1 554 MB 约 49 秒（官方 CDN）／7 分半（PCDN）；HEVC 657 MB 约 75 秒；H.264 1.77 GB 约 3 分钟 | 超过 10 分钟 → `504 mux_timeout`，同时清该片画质缓存；换线路重试 |
 | 登录态 | 设置 → B 站 → Cookie，`normalizeBiliCookie` 认三种：整段 Cookie 头 / 裸 `SESSDATA` 值 / 浏览器导出的 `cookies.txt`（Netscape，含 `#HttpOnly_` 行）；同名只留最后一个 | 填了还是 720P → 解密库里那条看是不是 `SESSDATA=…; buvid3=…` 这种正经键值对；出现几十上百个同名 `SESSDATA=` 就是又被按「裸值」拆了 |
 | 限流语义 | `platform.ErrRateLimited`：翻页途中被限流不算失败（已抓入库、断点保留、退避 3 小时） | 每天红一次且回填不动 → 哨兵没被 `errors.Is` 认出（各家必须包在 `platform.ErrRateLimited` 外面） |

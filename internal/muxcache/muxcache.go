@@ -24,12 +24,17 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // Muxer 是真正干活的那一层（生产里是 *library.Encoder）。
+//
+// totalSec / onProgress 是给「进度可见」用的：4K 那一档要整条流下完（554 MB 起）
+// 才开始合成，用户可能等好几分钟，前端得能说出「现在到哪了」。
 type Muxer interface {
-	RemuxTo(ctx context.Context, videoURL, audioURL, referer, ua, outPath string) error
+	RemuxTo(ctx context.Context, videoURL, audioURL, referer, ua, outPath string,
+		totalSec int, onProgress func(percent float64)) error
 }
 
 // Source 是一次合流的输入。
@@ -38,7 +43,32 @@ type Source struct {
 	AudioURL string
 	Referer  string
 	UA       string
+	// TotalSec 是片子时长（秒），只用来把合流进度换算成百分比；0 = 不报进度。
+	TotalSec int
 }
+
+// State 是合流在外部看来的状态。
+type State string
+
+const (
+	StateIdle    State = "idle"    // 还没有人要求过
+	StateMerging State = "merging" // 正在下 + 合
+	StateReady   State = "ready"   // 成品在盘上
+	StateFailed  State = "failed"  // 最近一次失败了（带着原因）
+)
+
+// Snapshot 是给「等的那一头」看的一张快照。
+type Snapshot struct {
+	State   State
+	Percent float64
+	Elapsed time.Duration
+	Err     error
+}
+
+var (
+	errNoMuxer      = errors.New("合流器没配好（缺 ffmpeg）")
+	errNotTwoTracks = errors.New("拿到的不是两条流，没法合流")
+)
 
 // Cache 是合流缓存的目录 + 单飞表。
 type Cache struct {
@@ -48,9 +78,14 @@ type Cache struct {
 	TTL time.Duration
 	// Timeout 是单次合流的时限，默认 10 分钟。
 	Timeout time.Duration
+	// OnMerged 在每次真的跑完一趟合流（成功或失败）后被调一次，给外面记日志用。
+	// 走回调而不是自己写日志，是因为合流可能由「查进度」那条请求起头，
+	// 真正跑完时 HTTP 请求早就返回了——只有这里知道它花了多久。
+	OnMerged func(key string, elapsed time.Duration, size int64, err error)
 
 	mu       sync.Mutex
 	flights  map[string]*flight
+	failures map[string]failure
 	prunedAt time.Time
 }
 
@@ -58,16 +93,29 @@ type flight struct {
 	done chan struct{}
 	path string
 	err  error
+
+	started time.Time
+	pct     atomic.Uint32 // 0~99 的整数百分比（原子读，避免每次查进度都抢锁）
+}
+
+func (f *flight) progress() (float64, time.Duration) {
+	return float64(f.pct.Load()), time.Since(f.started)
+}
+
+type failure struct {
+	err error
+	at  time.Time
 }
 
 // New 建一个缓存。dir 不存在会在第一次合流时创建。
 func New(dir string, m Muxer) *Cache {
 	return &Cache{
-		Dir:     dir,
-		Muxer:   m,
-		TTL:     7 * 24 * time.Hour,
-		Timeout: 10 * time.Minute,
-		flights: map[string]*flight{},
+		Dir:      dir,
+		Muxer:    m,
+		TTL:      7 * 24 * time.Hour,
+		Timeout:  10 * time.Minute,
+		flights:  map[string]*flight{},
+		failures: map[string]failure{},
 	}
 }
 
@@ -82,6 +130,48 @@ func (c *Cache) Ready(key string) bool {
 	return err == nil && st.Size() > 0
 }
 
+// Begin 开始（或接上）一次合流，立刻返回，不等它跑完。
+//
+// 存在的理由：4K 要等好几分钟，前端不能傻等着一个不回来的 HTTP 请求——
+// 先 Begin 起来，再轮询 Snapshot 报进度，好了才把地址交给 <video>。
+func (c *Cache) Begin(key string, produce func(context.Context) (Source, error)) {
+	if c.Muxer == nil || c.Ready(key) {
+		return
+	}
+	c.prune()
+	c.mu.Lock()
+	if _, ok := c.flights[key]; ok {
+		c.mu.Unlock()
+		return
+	}
+	f := &flight{done: make(chan struct{}), started: time.Now()}
+	c.flights[key] = f
+	delete(c.failures, key)
+	c.mu.Unlock()
+	go c.run(f, key, c.Path(key), produce)
+}
+
+// Snapshot 报告某个 key 现在的状态（不启动任何东西）。
+func (c *Cache) Snapshot(key string) Snapshot {
+	if c.Ready(key) {
+		return Snapshot{State: StateReady, Percent: 100}
+	}
+	c.mu.Lock()
+	f, running := c.flights[key]
+	fail, failed := c.failures[key]
+	c.mu.Unlock()
+	if running {
+		pct, elapsed := f.progress()
+		return Snapshot{State: StateMerging, Percent: pct, Elapsed: elapsed}
+	}
+	// 5 分钟内的失败还留着：前端刷新一眼就能看到「上次为什么没好」，
+	// 而不是无限「正在准备」。
+	if failed && time.Since(fail.at) < 5*time.Minute {
+		return Snapshot{State: StateFailed, Err: fail.err, Elapsed: time.Since(fail.at)}
+	}
+	return Snapshot{State: StateIdle}
+}
+
 // Ensure 保证某个 key 的成品已就绪，返回它的绝对路径。
 //
 // produce 只在真的要合流时被调用，用来（重新）解析两条流的地址——签名地址会过期，
@@ -93,20 +183,22 @@ func (c *Cache) Ensure(ctx context.Context, key string, produce func(context.Con
 		return path, nil
 	}
 	if c.Muxer == nil {
-		return "", errors.New("合流器没配好（缺 ffmpeg）")
+		return "", errNoMuxer
 	}
 	c.prune()
 
 	c.mu.Lock()
-	if f, ok := c.flights[key]; ok {
-		c.mu.Unlock()
-		return c.wait(ctx, f)
+	f, ok := c.flights[key]
+	if !ok {
+		f = &flight{done: make(chan struct{}), started: time.Now()}
+		c.flights[key] = f
+		delete(c.failures, key)
 	}
-	f := &flight{done: make(chan struct{})}
-	c.flights[key] = f
 	c.mu.Unlock()
 
-	go c.run(f, key, path, produce)
+	if !ok {
+		go c.run(f, key, path, produce)
+	}
 	return c.wait(ctx, f)
 }
 
@@ -134,19 +226,47 @@ func (c *Cache) run(f *flight, key, path string, produce func(context.Context) (
 	}
 	src, err := produce(ctx)
 	if err == nil && (src.VideoURL == "" || src.AudioURL == "") {
-		err = errors.New("拿到的不是两条流，没法合流")
+		err = errNotTwoTracks
 	}
 	if err == nil {
 		if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
 			err = fmt.Errorf("创建合流缓存目录失败: %w", mkErr)
 		} else {
-			err = c.Muxer.RemuxTo(ctx, src.VideoURL, src.AudioURL, src.Referer, src.UA, path)
+			err = c.Muxer.RemuxTo(ctx, src.VideoURL, src.AudioURL, src.Referer, src.UA, path,
+				src.TotalSec, func(pct float64) {
+					if pct < 0 {
+						pct = 0
+					}
+					if pct > 99 {
+						pct = 99 // 100 留给「盘上已经有成品」这个确定状态
+					}
+					f.pct.Store(uint32(pct))
+				})
 		}
+	}
+
+	if c.OnMerged != nil {
+		var size int64
+		if err == nil {
+			if st, statErr := os.Stat(path); statErr == nil {
+				size = st.Size()
+			}
+		}
+		c.OnMerged(key, time.Since(f.started), size, err)
 	}
 
 	c.mu.Lock()
 	f.err = err
 	f.path = path
+	if err != nil {
+		// 超时要在错误链里带上 context.DeadlineExceeded：外面靠 errors.Is 区分
+		// 「用户切走了」和「这条线路卡死了」，前者不该回话，后者要给出明确原因。
+		if cerr := ctx.Err(); cerr != nil {
+			err = fmt.Errorf("%w: %v", cerr, err)
+			f.err = err
+		}
+		c.failures[key] = failure{err: err, at: time.Now()}
+	}
 	delete(c.flights, key)
 	c.mu.Unlock()
 }

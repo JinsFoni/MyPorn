@@ -6,7 +6,14 @@
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import VideoLoading from '../components/VideoLoading.svelte';
   import { api, messageFor } from '../lib/api';
-  import { formatBandwidth, formatCount, formatDate, formatDuration, relativeTime } from '../lib/format';
+  import {
+    formatBandwidth,
+    formatBytes,
+    formatCount,
+    formatDate,
+    formatDuration,
+    relativeTime,
+  } from '../lib/format';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
@@ -14,6 +21,7 @@
   import {
     codecTag,
     needsHlsEngine,
+    needsRemuxPrep,
     pickVariant,
     rememberHeight,
     rememberedHeight,
@@ -23,7 +31,7 @@
     type QualityOption,
   } from '../lib/player';
   import { router } from '../lib/router.svelte';
-  import type { PlaybackInfo, VideoDetail } from '../lib/types';
+  import type { PlaybackInfo, PlaybackVariant, RemuxStatus, VideoDetail } from '../lib/types';
 
   interface Props {
     id: string;
@@ -66,6 +74,21 @@
   let selectedVariantId = $state<string | null>(null);
   let mockNote = $state('');
   let downloadOpen = $state(false);
+  /**
+   * 「正在准备这一档」的进度：只有分轨档位（B 站 1080P+/4K）会用到。
+   * 这些档位要先在服务端把音画两条流合成一份 mp4，4K 一档 554 MB~1.77 GB，
+   * 头一次点要等 1~3 分钟。以前这段时间是一个不回头的 HTTP 请求，用户只看到转圈，
+   * 最后当成「放不了」——现在换成轮询进度 + 明确百分比。
+   */
+  let preparing = $state<{
+    variantId: string;
+    label: string;
+    percent: number;
+    bytes: number;
+    elapsedSec: number;
+  } | null>(null);
+  /** 换档位/离开页面时 +1，让还在跑的轮询自己退出 */
+  let prepToken = 0;
   /** 「重新解析」时 +1，用来重建播放器（地址没变也要重新挂） */
   let attempt = $state(0);
   /** 标签默认只露这么多，剩下的折在「+N」里 */
@@ -81,6 +104,21 @@
    * 也不把一张高清封面亮在屏幕正中央——这页本来就是为了看片，一闪而过的封面没有信息价值。
    */
   const poster = $derived(video && !privacy.on ? imageUrl(video.thumbUrl, 1280) : null);
+  /** 准备中的那一行字：`正在准备 4K AV1 · 62%` */
+  const prepHeadline = $derived(
+    preparing ? `${preparing.label} · ${String(Math.round(preparing.percent))}%` : '',
+  );
+  /**
+   * 副行：体积 + 已经等了多久 + 「只等这一次」。
+   * 最后这半句很重要——不说清楚，用户会以为每次点 4K 都要等这么久。
+   */
+  const prepDetail = $derived.by(() => {
+    if (!preparing) return '';
+    const size = preparing.bytes > 0 ? `约 ${formatBytes(preparing.bytes)} · ` : '';
+    return `${size}已等 ${String(preparing.elapsedSec)} 秒 · 合好之后同一档秒开`;
+  });
+  const prepVeilDetail = $derived(preparing ? `${prepHeadline} · ${prepDetail}` : null);
+
   /** 这批片源里只要有一条 HLS，就整个用 hls.js 引擎（它也能放 mp4） */
   const engine = $derived(needsHlsEngine(playback?.variants ?? []) ? 'hls' : 'native');
   const source = $derived.by((): { src: string; type: string } | null => {
@@ -114,6 +152,9 @@
   async function loadPlayback(): Promise<void> {
     loadingPlayback = true;
     playError = '';
+    // 换了一部片子（或重新解析）：上一次的准备进度、还在跑的轮询都作废。
+    preparing = null;
+    prepToken += 1;
     try {
       const info = await api.playback(videoId);
       // HLS 引擎是单独一个 chunk（含 hls.js）：只有真要放 HLS 时才下载
@@ -124,10 +165,16 @@
         video = { ...video, tags: info.tags };
       }
       const preferred = pickVariant(info, rememberedHeight());
-      selectedVariantId = preferred?.id ?? info.defaultVariantId;
       // 本地文件本来就是同源直发，"用代理播放"对它是空操作。
       const chosen = preferred ?? info.variants.find((v) => v.id === info.defaultVariantId) ?? null;
       proxyAvailable = info.proxyPlaybackUrl !== null && chosen?.local !== true;
+      if (chosen && needsRemuxPrep(chosen)) {
+        // 分轨档位（4K/1080P+）要先在服务端合流：地址先压着，进度到 ready 再交给播放器。
+        selectedVariantId = null;
+        void activateVariant(chosen);
+      } else {
+        selectedVariantId = chosen?.id ?? info.defaultVariantId;
+      }
     } catch (err) {
       playError = messageFor(err);
     } finally {
@@ -146,6 +193,8 @@
 
   function retryPlayback(): void {
     playError = '';
+    preparing = null;
+    prepToken += 1;
     attempt += 1;
     void loadPlayback();
   }
@@ -153,9 +202,64 @@
   function applyVariant(variantId: string): void {
     const variant = playback?.variants.find((v) => v.id === variantId);
     if (!variant) return;
+    void activateVariant(variant);
+  }
+
+  /**
+   * 切到某一档。
+   *
+   * 分轨档位（B 站 1080P+ / 4K）要先等服务端把音画两轨合成一份 mp4——4K 一档
+   * 554 MB~1.77 GB，头一次要等 1~3 分钟。所以这里先轮询进度、把百分比画在画面上，
+   * 合好才改 selectedVariantId（这时 <video> 拿到的是一个已经就绪的文件，秒开）。
+   */
+  async function activateVariant(variant: PlaybackVariant): Promise<void> {
+    const token = ++prepToken;
     playError = '';
-    selectedVariantId = variantId;
+    if (needsRemuxPrep(variant)) {
+      const ready = await waitForRemux(variant, token);
+      if (!ready || token !== prepToken) return;
+    }
+    selectedVariantId = variant.id;
     rememberHeight(variant.height);
+  }
+
+  /** 轮询合流进度，ready 时返回 true；失败/取消返回 false（原因写进 playError）。 */
+  async function waitForRemux(variant: PlaybackVariant, token: number): Promise<boolean> {
+    const codec = codecTag(variant);
+    const label = `正在准备 ${variantLabel(variant)}${codec === null ? '' : ` ${codec}`}`;
+    // 体积按码率 × 时长估：菜单上只有 Mbps，用户看到「约 554 MB」才知道自己在等什么。
+    const bytes =
+      variant.bandwidth > 0 && video !== null ? (variant.bandwidth / 8) * video.durationSec : 0;
+    for (;;) {
+      let status: RemuxStatus;
+      try {
+        status = await api.remuxStatus(videoId, variant.id);
+      } catch (err) {
+        if (token === prepToken) {
+          preparing = null;
+          playError = messageFor(err);
+        }
+        return false;
+      }
+      if (token !== prepToken) return false;
+      if (status.state === 'ready') {
+        preparing = null;
+        return true;
+      }
+      if (status.state === 'failed') {
+        preparing = null;
+        playError = `这一档准备失败：${status.error ?? '未知原因'}。换个档位，或点「重新解析」再来一次。`;
+        return false;
+      }
+      preparing = {
+        variantId: variant.id,
+        label,
+        percent: status.percent,
+        bytes,
+        elapsedSec: status.elapsedSec,
+      };
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
   }
 
   function switchToProxy(): void {
@@ -216,6 +320,11 @@
   $effect(() => {
     void loadVideo();
     void loadPlayback();
+  });
+
+  // 离开这一页就把轮询停掉：prepToken 一变，waitForRemux 下一轮自己退出。
+  $effect(() => () => {
+    prepToken += 1;
   });
 
   // 先把封面塞进浏览器缓存：播放器挂载时会立刻要这张图，否则会闪一下它自带的占位插画
@@ -281,7 +390,18 @@
           onFailed={onFailed}
         >
           {#snippet overlay()}
-            {#if playError}
+            {#if preparing}
+              <div
+                class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-ink/80 px-6 text-center"
+              >
+                <span
+                  class="h-6 w-6 animate-spin rounded-full border-2 border-fg/25 border-t-fg"
+                  aria-hidden="true"
+                ></span>
+                <p class="text-ui tabular-nums text-fg/90">{prepHeadline}</p>
+                <p class="text-meta text-dim">{prepDetail}</p>
+              </div>
+            {:else if playError}
               <div class="pointer-events-auto absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center">
                 <p class="max-w-md text-ui text-fg/90">{playError}</p>
                 <div class="flex flex-wrap items-center justify-center gap-2">
@@ -298,8 +418,13 @@
       {/key}
     {:else}
       <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-black">
-        {#if loadingPlayback}
-          <VideoLoading {poster} kind="poster" label="正在解析播放地址" />
+        {#if loadingPlayback || preparing}
+          <VideoLoading
+            {poster}
+            kind="poster"
+            label={preparing ? prepHeadline : '正在解析播放地址'}
+            detail={prepVeilDetail}
+          />
         {:else if playError}
           <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
             <p class="max-w-md text-ui text-fg/90">{playError}</p>

@@ -407,17 +407,61 @@ func TestPickMediaURL(t *testing.T) {
 	if !strings.Contains(got, "bilivideo.com") {
 		t.Errorf("没换到官方 CDN: %q", got)
 	}
+	// 这条是 2026-10 的真 bug：PCDN 的域名也以 bilivideo.cn 结尾，
+	// 早先的「后缀命中就算官方源」会把主地址（PCDN）当成官方源直接返回。
+	got = pickMediaURL("https://cn-hncs-cm-03-08.bilivideo.com:8082/a.m4s",
+		[]string{"https://upos-sz-mirrorcoso1.bilivideo.com/a.m4s"})
+	if !strings.Contains(got, "upos-sz-mirrorcoso1") {
+		t.Errorf("带 8082 端口的 PCDN 主地址应当让位给官方源: %q", got)
+	}
+	got = pickMediaURL("https://xy183x234x98x139xy.mcdn.bilivideo.cn:8082/a.m4s",
+		[]string{"https://cn-hncs-cm-03-08.bilivideo.com/a.m4s"})
+	if !strings.Contains(got, "cn-hncs-cm-03-08") {
+		t.Errorf("mcdn 主地址应当让位给官方源: %q", got)
+	}
 	// 没有官方 CDN 就退回主地址（PCDN 慢但能放）
 	got = pickMediaURL("https://x.mcdn.bilivideo.cn/a.m4s", []string{"https://y.edge.mountaintoys.cn/a.m4s"})
 	if !strings.Contains(got, "mcdn.bilivideo.cn") {
-		t.Errorf("主地址本身是 bilivideo.cn 时该被选中: %q", got)
+		t.Errorf("只剩 PCDN 时主地址该被选中: %q", got)
 	}
 	got = pickMediaURL("https://y.edge.mountaintoys.cn/a.m4s", nil)
 	if !strings.Contains(got, "mountaintoys") {
 		t.Errorf("只剩 PCDN 时也应当给一条: %q", got)
 	}
+	// 官方源之间保持原有顺序（主地址优先）
+	if got := pickMediaURL("https://upos-sz-estghw.bilivideo.com/a.m4s",
+		[]string{"https://upos-sz-mirrorcos.bilivideo.com/a.m4s"}); !strings.Contains(got, "estghw") {
+		t.Errorf("官方主地址应当优先: %q", got)
+	}
 	if got := pickMediaURL("", nil); got != "" {
 		t.Errorf("空地址应当返回空串: %q", got)
+	}
+}
+
+func TestIsPCDNURL(t *testing.T) {
+	// 官方源不能被误伤：它们的协议、端口、路径都和 PCDN 一样，只有主机名不同。
+	official := []string{
+		"https://upos-sz-mirrorcoso1.bilivideo.com/upgcxcode/a.m4s?e=1",
+		"https://cn-hncs-cm-03-08.bilivideo.com/upgcxcode/a.m4s",
+		"https://upos-hz-mirrorakam.akamaized.net/upgcxcode/a.m4s",
+	}
+	for _, u := range official {
+		if isPCDNURL(u) {
+			t.Errorf("官方源被判成了 PCDN: %s", u)
+		}
+	}
+	pcdn := []string{
+		"https://xy183x234x98x139xy.mcdn.bilivideo.cn:8082/v1/resource/upgcxcode/a.m4s",
+		"https://b-baacc04b083cltm107bs0ym3d1a.edge.mountaintoys.cn:4483/a.m4s",
+		"https://x.mcdn.bilivideo.cn/a.m4s", // 没写端口也要认出来
+	}
+	for _, u := range pcdn {
+		if !isPCDNURL(u) {
+			t.Errorf("PCDN 没认出来: %s", u)
+		}
+	}
+	if isPCDNURL("这不是地址") {
+		t.Error("解析不了的串不该算 PCDN")
 	}
 }
 

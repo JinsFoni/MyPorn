@@ -60,6 +60,18 @@ export function sourceTypeFor(isHls: boolean): string {
   return isHls ? HLS_TYPE : MP4_TYPE;
 }
 
+/**
+ * 这一档是不是「服务端分轨合流」的档位（B 站 1080P+ / 4K）。
+ *
+ * 判据只看地址：这类档位的 url 是 `/api/videos/{id}/remux?v=…`，音画两条流要先合成
+ * 一份 mp4 才播得动。合成是「整条流下完才出成品」，4K 一档 554 MB~1.77 GB，
+ * 头一次点下去要等好几分钟——所以页面得先问进度，好了再把地址交给 <video>，
+ * 不能让播放器挂着一个几分钟不回头的请求。
+ */
+export function needsRemuxPrep(variant: PlaybackVariant): boolean {
+  return variant.local !== true && !variant.hls && /\/remux\?/.test(variant.url);
+}
+
 // ---------- 编码偏好 ----------
 
 export type CodecFamily = '' | 'av1' | 'hevc' | 'vp9' | 'avc';
