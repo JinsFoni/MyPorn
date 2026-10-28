@@ -107,6 +107,23 @@ export function navigate(to: string, opts: { replace?: boolean } = {}): void {
   commit(0);
 }
 
+/**
+ * 只改查询串、保留其它参数（默认 replace，不占历史）。
+ *
+ * 页内筛选（`/bilibili?up=<id>&mode=unseen`、`/youtube?channel=<id>&mode=saved&v=<videoId>`）
+ * 都靠它写进地址栏：换筛选条件不该在历史里留一串垃圾，但**必须留在 URL 上**——
+ * B 站点开影片是整页跳转（`/video/:id`），退回时组件会重建，只有地址栏还记得你选了谁。
+ */
+export function patchQuery(patch: Record<string, string | null>, opts: { replace?: boolean } = {}): void {
+  const q = new URLSearchParams(loc.search);
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null || v === '') q.delete(k);
+    else q.set(k, v);
+  }
+  const search = q.toString();
+  navigate(search === '' ? loc.path : `${loc.path}?${search}`, { replace: opts.replace ?? true });
+}
+
 export function back(): void {
   window.history.back();
 }

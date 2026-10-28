@@ -109,6 +109,10 @@ ALTER TABLE video_streams ADD COLUMN audio_url TEXT NOT NULL DEFAULT '';
 
 ## 6. 界面：独立一页，管理里也独立一格
 
+筛选状态写在地址栏（`/bilibili?up=<id>&mode=unseen`）：换 UP 主 / 全部·未看用 `replaceState`，
+不堆历史；点投稿是整页跳转到 `/video/:id`，所以退回（浏览器后退，或详情页那个「返回 B 站」）
+会自动回到同一个 UP 主、同一个筛选。卡片链接带 `?back=<原路径>`，详情页据此决定返回哪儿。
+
 B 站不是「追一个艺人」，是「订阅一个内容源」。所以它和 YouTube（M6）一样**有自己的页面**，
 不混进「艺人」「关注」流，也不在「关注管理」的列表里：
 

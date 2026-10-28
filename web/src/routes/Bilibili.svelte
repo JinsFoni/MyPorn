@@ -25,7 +25,7 @@
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
   import { ui } from '../lib/ui.svelte';
-  import { navigate } from '../lib/router.svelte';
+  import { navigate, patchQuery, router } from '../lib/router.svelte';
   import { formatCount, relativeFuture } from '../lib/format';
   import type { BiliChannel, BiliHealth, ResolvedPerformer, Video } from '../lib/types';
 
@@ -42,11 +42,37 @@
   let channelsError = $state('');
   let health = $state<BiliHealth | null>(null);
 
-  // ---- 筛选 ----
-  let filterChannel = $state<number | null>(null);
-  let mode = $state<Mode>('all');
+  // ---- 筛选（唯一真源是地址栏：?up=<id>&mode=unseen） ----
+  /**
+   * 选中的 UP 主与「全部 / 未看」都写在 URL 上，不在组件里各存一份。
+   * 理由：点开影片是整页跳转（`/video/:id`），退回时本组件会重新创建，
+   * 状态只活在内存里就会丢——地址栏留着，退回来还是原来那个 UP 主、原来那个筛选。
+   * 顺带好处：刷新不丢、复制链接给别人看到的是同一个视角。
+   */
+  function readQuery(): { up: number | null; mode: Mode } {
+    const q = router.query;
+    const up = Number.parseInt(q.get('up') ?? '', 10);
+    return {
+      up: Number.isFinite(up) && up > 0 ? up : null,
+      mode: q.get('mode') === 'unseen' ? 'unseen' : 'all',
+    };
+  }
+
+  const initial = readQuery();
+  let filterChannel = $state<number | null>(initial.up);
+  let mode = $state<Mode>(initial.mode);
   /** 换筛选条件时 +1，让 InfiniteList 重头拉 */
   let wallKey = $state(0);
+
+  // 地址栏变了（后退/前进、贴链接进来、手改 URL）→ 状态跟上并重拉。
+  // 相等就什么都不做，所以「点胶囊 → patchQuery → 这里再跑一次」不会形成循环。
+  $effect(() => {
+    const next = readQuery();
+    if (next.up === filterChannel && next.mode === mode) return;
+    filterChannel = next.up;
+    mode = next.mode;
+    wallKey += 1;
+  });
 
   // ---- 添加 UP 主 ----
   let addOpen = $state(false);
@@ -90,13 +116,11 @@
   }
 
   function setChannel(id: number | null): void {
-    filterChannel = id;
-    wallKey += 1;
+    patchQuery({ up: id === null ? null : String(id) });
   }
 
   function setMode(next: Mode): void {
-    mode = next;
-    wallKey += 1;
+    patchQuery({ mode: next === 'all' ? null : next });
   }
 
   onMount(() => {

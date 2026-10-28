@@ -20,7 +20,7 @@
   import { live } from '../lib/live.svelte';
   import { privacy } from '../lib/privacy.svelte';
   import { ui } from '../lib/ui.svelte';
-  import { navigate, router, setPageTitle } from '../lib/router.svelte';
+  import { patchQuery, router, setPageTitle } from '../lib/router.svelte';
   import { formatBandwidth, formatCount, formatDateTime, relativeTime } from '../lib/format';
   import { HLS_TYPE, codecFamily, type QualityOption } from '../lib/player';
   import type { YtChannel, YtHealth, YtResolve, YtStreamInfo, YtVideo } from '../lib/types';
@@ -40,8 +40,24 @@
   let health = $state<YtHealth | null>(null);
 
   // ---- 筛选 ----
-  let filterChannel = $state<number | null>(null);
-  let mode = $state<Mode>('all');
+  // ---- 筛选（唯一真源是地址栏：?channel=<id>&mode=unseen|saved） ----
+  /**
+   * 选中的频道与「全部 / 未看 / 收藏」都写在 URL 上：播放弹窗、刷新、后退都靠地址栏还原，
+   * 打开某条影片时也只是在查询串上追加 `v=`（见 openDetail），不丢频道。
+   */
+  function readQuery(): { channel: number | null; mode: Mode } {
+    const q = router.query;
+    const ch = Number.parseInt(q.get('channel') ?? '', 10);
+    const m = q.get('mode');
+    return {
+      channel: Number.isFinite(ch) && ch > 0 ? ch : null,
+      mode: m === 'unseen' || m === 'saved' ? m : 'all',
+    };
+  }
+
+  const initialQuery = readQuery();
+  let filterChannel = $state<number | null>(initialQuery.channel);
+  let mode = $state<Mode>(initialQuery.mode);
   /** 换筛选条件时 +1，让 InfiniteList 重头拉 */
   let wallKey = $state(0);
 
@@ -118,14 +134,21 @@
   }
 
   function setChannel(id: number | null): void {
-    filterChannel = id;
-    wallKey += 1;
+    patchQuery({ channel: id === null ? null : String(id) });
   }
 
   function setMode(next: Mode): void {
-    mode = next;
-    wallKey += 1;
+    patchQuery({ mode: next === 'all' ? null : next });
   }
+
+  // 地址栏变了（后退/前进、贴链接）→ 状态跟上并重拉；相等就跳过，不会和 patchQuery 打转。
+  $effect(() => {
+    const next = readQuery();
+    if (next.channel === filterChannel && next.mode === mode) return;
+    filterChannel = next.channel;
+    mode = next.mode;
+    wallKey += 1;
+  });
 
   onMount(() => {
     void loadChannels();
@@ -200,7 +223,8 @@
 
   function openDetail(video: YtVideo): void {
     if (router.query.get('v') === video.videoId) return;
-    navigate(`/youtube?v=${encodeURIComponent(video.videoId)}`);
+    // push 一条历史：后退＝关弹窗。频道 / 筛选参数一路带着（patchQuery 只改 v）。
+    patchQuery({ v: video.videoId }, { replace: false });
   }
 
   // URL 一变就同步弹窗：点卡片、浏览器后退、刷新、贴深链接走的是同一条路。
@@ -222,7 +246,7 @@
         video = await api.ytVideoLookup(videoId);
       } catch (err) {
         live.toast(messageFor(err), 'error');
-        navigate('/youtube', { replace: true });
+        patchQuery({ v: null });
         return;
       }
       // 等查询的这段时间用户可能已经退回去了，别再弹出来
@@ -358,8 +382,8 @@
 
   function closeDetail(): void {
     if (wantVideoId !== '') {
-      // 关弹窗＝把 ?v= 去掉；用 replace，免得后退又把它弹回来
-      navigate('/youtube', { replace: true });
+      // 关弹窗＝把 ?v= 去掉；用 replace，免得后退又把它弹回来。频道 / 筛选留在 URL 里。
+      patchQuery({ v: null });
       return;
     }
     hideDetail();

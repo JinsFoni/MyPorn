@@ -22,7 +22,7 @@
     variantLabel,
     type QualityOption,
   } from '../lib/player';
-  import { navigate } from '../lib/router.svelte';
+  import { router } from '../lib/router.svelte';
   import type { PlaybackInfo, VideoDetail } from '../lib/types';
 
   interface Props {
@@ -226,13 +226,29 @@
     img.decoding = 'async';
     img.src = url;
   });
+  /**
+   * 「返回」去哪儿：优先看点进来的那一页（卡片链接带的 `?back=`），
+   * 没有就落回「关注」。只认站内绝对路径（以单个 / 开头），别的一律忽略，免得被带去外站。
+   */
+  const backTo = $derived.by(() => {
+    const raw = router.query.get('back') ?? '';
+    return raw.startsWith('/') && !raw.startsWith('//') ? raw : '/';
+  });
+  const backLabel = $derived.by(() => {
+    if (backTo.startsWith('/bilibili')) return '返回 B 站';
+    if (backTo.startsWith('/youtube')) return '返回 YouTube';
+    if (backTo.startsWith('/performer')) return '返回艺人';
+    if (backTo.startsWith('/downloads')) return '返回下载';
+    if (backTo === '/') return '返回关注';
+    return '返回上一页';
+  });
 </script>
 
 {#if pageError}
   <EmptyState title="打不开这个影片" hint={pageError} icon="error">
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => void loadVideo()}>重试</button>
-      <a data-link href="/" class="btn btn-ghost">返回关注</a>
+      <a data-link href={backTo} class="btn btn-ghost">{backLabel}</a>
     {/snippet}
   </EmptyState>
 {:else if loadingVideo && !video}
@@ -399,7 +415,7 @@
       <section class="mt-10">
         <div class="mb-3 flex items-center justify-between">
           <h3 class="text-title font-medium text-fg">相关影片</h3>
-          <button type="button" class="btn btn-ghost h-8" onclick={() => navigate('/')}>回关注</button>
+          <a data-link href={backTo} class="btn btn-ghost h-8">{backLabel}</a>
         </div>
         <div class="grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-3 xl:grid-cols-4">
           {#each video.related.slice(0, 8) as related (related.id)}

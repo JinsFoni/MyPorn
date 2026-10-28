@@ -1,6 +1,7 @@
 <script lang="ts">
   import DownloadDialog from './DownloadDialog.svelte';
   import { api } from '../lib/api';
+  import { router } from '../lib/router.svelte';
   import { imageUrl } from '../lib/img';
   import { privacy } from '../lib/privacy.svelte';
   import { formatDate, formatDuration, relativeTime } from '../lib/format';
@@ -16,6 +17,17 @@
   }
 
   let { video, eager = false }: Props = $props();
+
+  /**
+   * 点进影片时把「现在这一页」记进链接：`/video/62?back=%2Fbilibili%3Fup%3D10`。
+   * 详情页的「返回」就用它——从 B 站墙（带 ?up= / ?mode=）点进去，退回来还是同一个视角。
+   * 影片页里的「相关影片」不加（否则会链回自己）。
+   */
+  const backQuery = $derived(
+    router.path.startsWith('/video/')
+      ? ''
+      : `?back=${encodeURIComponent(`${router.path}${router.search}`)}`,
+  );
 
   let previewOn = $state(false);
   let previewEl = $state<HTMLVideoElement | null>(null);
@@ -103,7 +115,7 @@
 
 <article class="group relative min-w-0 [contain-intrinsic-size:auto_16rem] [content-visibility:auto]">
   <a
-    href={`/video/${String(video.id)}`}
+    href={`/video/${String(video.id)}${backQuery}`}
     data-link
     class="block"
     aria-label={`${video.title}，时长 ${formatDuration(video.durationSec)}`}
