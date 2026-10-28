@@ -127,6 +127,27 @@
   let attempts = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let sawError: unknown = null;
+
+  /**
+   * 播放管线掉线后的自愈次数。
+   *
+   * 实测（本机 Chrome、2160p VP9 60fps、`YFsMnJEbV1U`）：硬件解码器会偶发失败，
+   * 元素报 `PIPELINE_ERROR_DECODE`（`VTDecompressionOutputCallback`，`-12909`），
+   * 之后 hls.js 每次 append 都被拒、`MediaSource.readyState` 变成 `ended`，
+   * 页面上看到的就是「站内播放失败（video SourceBuffer error…）」。
+   * 这个错误**不会自己好**：元素的 `error` 一旦置上，`hls.recoverMediaError()`
+   * 也清不掉（实测调用后 `currentTime` 仍然不动），只有把片源重新装一遍才能重建管线。
+   * 所以这里先自己救：同一份片源原地重装、回到原进度接着播；连续救不回来才交给页面弹错。
+   */
+  const MAX_MEDIA_RECOVERIES = 3;
+  let mediaRecoveries = 0;
+  let recoverResumeAt = -1;
+  /**
+   * 自愈后要回到的位置。光设一次 `currentTime` 不保险：刚重装的管线还没缓冲到那里时，
+   * 浏览器会把这次 seek 丢掉，于是「救回来」变成「从头再放一遍」（实测就是这样丢的进度）。
+   * 所以盯着它，直到真的落在目标附近，或者试满 6 次放弃。
+   */
+  let seekWatch: { target: number; tries: number; last: number } | null = null;
   let startedSent = false;
   /** 上次的音量/静音：等媒体就绪后再套用一次，避免被播放器默认值（满音量）覆盖 */
   const savedVolume = readVolume();
@@ -247,6 +268,50 @@
   /** 只有 HLS 才带 hls.js 配置；mp4 直链走原生解码，给了也没人看。 */
   function hlsEngineConfig(type: string) {
     return type.includes('mpegurl') ? { hlsJs: HLS_BUFFER_CONFIG } : undefined;
+  }
+
+  /**
+   * 重建播放管线：把同一份片源原样再装一遍，保留进度与播放意图。
+   *
+   * 先把 source 摘掉再装，是因为元素的 `error` 已经置上了——不摘掉的话播放器会认为
+   * 「还是同一条片源」，不会重建 MediaSource（见 MAX_MEDIA_RECOVERIES 的注释）。
+   * 进度走 pendingSeek 那条老路：等 `canPlay`/`duration` 就绪再 seek，
+   * 立刻 seek 会停在「时间点有了、缓冲区还没到」的死等状态（实测就是这么卡住的）。
+   */
+  function recoverPipeline(at: number): void {
+    const el = mediaEl;
+    if (!el) return;
+    pendingSeek = Number.isFinite(at) && at > 1 ? at : 0;
+    pendingPlay = true;
+    wantPlay = true;
+    wantPlayTries = 0;
+    recoverResumeAt = pendingSeek;
+    seekWatch = pendingSeek > 0 ? { target: pendingSeek, tries: 0, last: 0 } : null;
+    sawError = null;
+    appliedSrc = '';
+    beginBuffering();
+    if (el instanceof HTMLVideoElement) {
+      el.removeAttribute('src');
+      el.load();
+    } else {
+      (el as EngineSourceHost).source = null;
+    }
+    // 给引擎一点时间把上一条 SourceBuffer / hls 实例拆干净；越往后等越久，
+    // 因为「立刻重装」实测会在解码器还没复位时又撞一次同样的错
+    const wait = recoveryDelay(mediaRecoveries);
+    const reattach = () => {
+      appliedSrc = '';
+      attach();
+    };
+    if (wait > 0) window.setTimeout(reattach, wait);
+    else requestAnimationFrame(reattach);
+  }
+
+  /** 第 n 次自愈前的等待：第 1 次立刻，之后 2.5 s、8 s（实测解码器复位需要时间） */
+  function recoveryDelay(n: number): number {
+    if (n <= 1) return 0;
+    if (n === 2) return 2500;
+    return 8000;
   }
 
   /**
@@ -376,6 +441,9 @@
     snapCanvas = null;
     snapAt = 0;
     veilArt = null;
+    // 换了片子就是新的一条管线：自愈额度重新算
+    mediaRecoveries = 0;
+    recoverResumeAt = -1;
   });
 
   /**
@@ -410,6 +478,32 @@
   /** 兜底：时间在走就说明数据是通的，别让加载态一直挂着（个别引擎只发 waiting 不发 playing） */
   function mediaTicking(): void {
     captureFrame();
+    // 自愈之后又顺畅播了 20 秒：说明这次救回来了，把次数还回去，
+    // 免得一条长片子里偶发三次就把额度用光
+    if (recoverResumeAt >= 0 && boundVideo !== null && boundVideo.currentTime > recoverResumeAt + 20) {
+      recoverResumeAt = -1;
+      mediaRecoveries = 0;
+      seekWatch = null;
+    }
+    // 自愈后的回位：没落到位就再要一次（见 seekWatch 的注释）
+    if (seekWatch !== null && boundVideo !== null && boundVideo.readyState >= 1) {
+      if (Math.abs(boundVideo.currentTime - seekWatch.target) > 1.5) {
+        // 每秒最多试一次，最多 10 秒：4K 一段要下两三秒，急着连点只会全被浏览器丢掉
+        const nowMs = Date.now();
+        if (seekWatch.tries < 10 && nowMs - seekWatch.last > 1000) {
+          seekWatch.tries += 1;
+          seekWatch.last = nowMs;
+          // 先让引擎从目标点开始拉（hls.js 默认从 0 开始，光设 currentTime 它不认）
+          const eng = (mediaEl as { engine?: { startLoad?: (at: number) => void } } | null)?.engine;
+          eng?.startLoad?.(seekWatch.target);
+          boundVideo.currentTime = seekWatch.target;
+        } else if (seekWatch.tries >= 10) {
+          seekWatch = null;
+        }
+      } else {
+        seekWatch = null;
+      }
+    }
     if (buffering && boundVideo !== null && boundVideo.readyState >= 3) mediaReady();
   }
 
@@ -701,10 +795,18 @@
 
       if (s.error && s.error !== sawError) {
         sawError = s.error;
-        const detail = s.error.message.trim();
-        onFailed?.(detail === '' ? '播放失败，请重试。' : detail);
-        // 交给页面的错误浮层（带「重新解析 / 用代理播放」），把内置弹窗收掉
-        s.dismissError();
+        // 解码器/MediaSource 掉线先自愈（见 MAX_MEDIA_RECOVERIES），
+        // 救不回来才把错误交给页面的浮层——别让人正看着就弹「播放失败」
+        if (mediaRecoveries < MAX_MEDIA_RECOVERIES && mediaEl !== null) {
+          mediaRecoveries += 1;
+          recoverPipeline(s.currentTime);
+          s.dismissError();
+        } else {
+          const detail = s.error.message.trim();
+          onFailed?.(detail === '' ? '播放失败，请重试。' : detail);
+          // 交给页面的错误浮层（带「重新解析 / 用代理播放」），把内置弹窗收掉
+          s.dismissError();
+        }
       }
 
       if (s.started && !startedSent) {
