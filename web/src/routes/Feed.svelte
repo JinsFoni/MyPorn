@@ -177,10 +177,13 @@
 
 <PerformerRail />
 
-<div class="mb-3 flex items-center gap-2 overflow-x-auto pb-1 lg:mb-5">
+<!-- 筛选胶囊的样式对齐 YouTube 页的「全部频道」：无底色、选中才吃 bg-raise，未看数走一个小角标 -->
+<div class="mb-3 flex items-center gap-1.5 overflow-x-auto pb-1 lg:mb-5">
   <button
     type="button"
-    class="chip h-8 px-3.5 text-ui {newOnly ? '' : 'bg-hi text-ink hover:bg-hi'}"
+    class="shrink-0 rounded-full px-3 py-1.5 text-meta transition-colors {newOnly
+      ? 'text-muted hover:bg-panel hover:text-fg'
+      : 'bg-raise text-fg'}"
     aria-pressed={!newOnly}
     onclick={() => { if (newOnly) toggleNewOnly(); }}
   >
@@ -188,13 +191,18 @@
   </button>
   <button
     type="button"
-    class="chip h-8 gap-1.5 px-3.5 text-ui {newOnly ? 'bg-hi text-ink hover:bg-hi' : 'hover:bg-raise'}"
+    class="flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-meta transition-colors {newOnly
+      ? 'bg-raise text-fg'
+      : 'text-muted hover:bg-panel hover:text-fg'}"
     aria-pressed={newOnly}
     onclick={() => { if (!newOnly) toggleNewOnly(); }}
   >
-    <span class="h-1.5 w-1.5 rounded-full {newCount > 0 ? (newOnly ? 'bg-ink' : 'bg-hi') : 'bg-dim'}" aria-hidden="true"></span>
     新片
-    <span class="tabular-nums">{newCount}{newCountMore ? '+' : ''}</span>
+    {#if newCount > 0}
+      <span class="rounded-full bg-hi px-1 text-[0.625rem] font-semibold leading-4 text-ink tabular-nums">
+        {newCount > 99 ? '99+' : `${String(newCount)}${newCountMore ? '+' : ''}`}
+      </span>
+    {/if}
   </button>
 
   <p class="ml-auto hidden shrink-0 text-meta text-dim sm:block">
