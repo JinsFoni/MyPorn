@@ -207,6 +207,9 @@ make backend           # 先编译
 | 嵌播（iframe） | `youtube-nocookie.com/embed/<id>` 对**一批版权音乐视频直接拒播**（「此视频不能观看」），裸 HTML 页面也能复现，与本应用无关；`lTRiuFIWV54`、`jNQXAC9IVRw` 正常；`oEmbed` 全部 200（不是上传者关了嵌入） | 弹窗黑框/拒播 → 别看前端，直接拿 id 拼一张裸 HTML 试嵌；同时确认站内播放（下一条）是否可用 |
 | 站内播放（HLS 代理） | `yt-dlp -j` 的 `formats[]` 里有 `protocol=m3u8_native` + `manifest_url`（签名 `hls_variant`，寿命约 6 小时、**绑出口 IP**）；master 24 KB、子清单 877 KB/1369 行、分片 `Content-Type` 常是 `application/octet-stream` 且**忽略 Range**；实测 Chrome 4K 起播 `readyState=4`、`videoWidth=3840` | 全部报 `no_ytdlp`/`upstream` → 先看 `GET /api/yt/health` 的版本；单条报「没有可用的 HLS 清单」→ 该视频可能直播/会员/分区限制；分片 410 → 会话过期，前端「重试」会重新解析 |
 | 站内播放的音轨 | 视频变体与音轨在 master 里是**分开列**的（`AUDIO="233"`/`"234"`，233=Opus、234=AAC）；改写时必须把 `#EXT-X-MEDIA` 一起搬过去 | 画面有、声音没有 → 改写的 master 里丢了 `EXT-X-MEDIA` 或 `AUDIO="aud"` 没对上 |
+| 4K 分片与预热上限 | 2160p VP9 60fps 28 220 650 bps，单分片 10.4–23.2 MB / 5.1–7.0 s；`maxWarmObject` 现为 64 MiB 且**超限直接不缓存**（以前 16 MiB + `io.LimitReader` 会把首分片截成 16777216 字节，hls.js 反复 `bufferAppendError`、`currentTime` 钉在 0）；预热预算 128 MB / 8 条视频 | 4K 一开就转圈、`buffered` 一直是空、`currentTime` 不动 → 先 `curl -s -o /dev/null -w '%{size_download}'` 量首分片是否恰好等于 16777216（是就说明截断又回来了）；`MYPORN_YT_WARM=0` 可关预热做二分 |
+| 分片 403 重试 | googlevideo 会偶发对单个分片回 403（1 秒后重试 200）；`openUpstream` 对 403/408/429/500/502/503/504 在写入浏览器前重试 3 次（150/400 ms），410 不重试 | 播放中偶发 `502` + hls.js `fragLoadError` → 看日志里该分片是不是只试了一次；410 也重试说明 `retryableStatus` 被改宽了 |
+| hls.js 缓冲 | 只对 HLS 注入 `maxBufferLength=60`、`maxBufferSize=250 MB`、`backBufferLength=30`（`VideoPlayer.svelte` 的 `hlsEngineConfig`）；默认 30 s / 60 MB 在 4K 下只等于 ~17 秒 | 4K 播放时缓冲长期在 10 秒上下抖、走两步停一下 → 先确认 `el.engine.config.maxBufferLength === 60`，再看链路是否掉到 3.5 MB/s 以下 |
 | 签名寿命 | 清单地址里的 `expire` 在**路径**里（`/api/manifest/hls_variant/expire/1793159341/…`），只有分片地址放进查询串；只读查询串会读不到寿命 | 每次播放都重跑一遍 yt-dlp（4 秒）→ `expireFromURL` 又只看 `Query()` 了 |
 
 真机验收（2026-10-28，直连）：添加 `UCq-Fj5jknLsUf-MWSy4_brA`（T-Series）→ 深度回填 200 条 6 秒 →

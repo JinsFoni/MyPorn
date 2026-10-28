@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -173,6 +174,14 @@ func (s *Server) writePrefetched(w http.ResponseWriter, sess *ytstream.Session, 
 	_, _ = w.Write(p.Body)
 }
 
+// ytWarmEnabled 是排查开关：MYPORN_YT_WARM=0 时整个起播预热关掉。
+//
+// 理由很实际：预热把「子清单 + 头两个分片」提到浏览器开口之前取，4K 出问题时
+// 很难分清是「我们预热取回来的字节」还是「浏览器自己那条路径」的锅。
+// 关掉再跑一遍就能二分（实测 6 次加载里 2 次失败、关掉预热 3 次失败，
+// 两路都会失败 → 不是预热的锅，这才排到无头浏览器的解码上去）。
+var ytWarmEnabled = os.Getenv("MYPORN_YT_WARM") != "0"
+
 // warmYtVideo 是「起播预热」：把两条子清单和头两个分片先取回本地。
 //
 // 本机实测：解析已缓存时点开到出第一帧约 1.6 秒，其中子清单 0.35s、第一个分片 0.9s，
@@ -184,6 +193,9 @@ func (s *Server) writePrefetched(w http.ResponseWriter, sess *ytstream.Session, 
 // 这里每一条地址都先 Claim 再取：handleYtStreamInfo 和 handleYtStreamMaster 各会
 // 开一轮预热（点开弹窗一次、播放器拉清单又一次），不去重就是同一段分片下载两遍。
 func (s *Server) warmYtVideo(ctx context.Context, videoID string, v hls.StreamVariant, renditions []hls.Rendition) {
+	if !ytWarmEnabled {
+		return
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	warm := s.ytStream.Warm(videoID)

@@ -211,9 +211,14 @@ const warmTTL = 15 * time.Minute
 
 // maxWarmVideos / maxWarmBytes 兜住内存：一条视频预热 ≤ 两份子清单 + 几个分片，
 // 十几条在跑也就几十 MB，再多就按最旧淘汰。
+//
+// 32 MiB 这个额度是照「分片几 MB」估的，4K 一上来就不够：实测 2160p 每段 21~23 MB，
+// 影像段 + 音轨段就要 24 MB，再有一条视频在预热（最多 8 条）全被挤掉。
+// 抬到 128 MiB 够放两段 4K 影像 + 各自音轨，8 条视频都满载时上限仍是 1 GB 量级，
+// 对一台自托管的播放服务可以接受。
 const (
 	maxWarmVideos = 8
-	maxWarmBytes  = 32 << 20
+	maxWarmBytes  = 128 << 20
 )
 
 // Warm 是一条视频的起播预热：上游地址 → 已经取回来的字节。

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mario/myporn/internal/hls"
 	"github.com/mario/myporn/internal/imgcache"
@@ -79,23 +80,9 @@ func (s *Server) proxyMedia(w http.ResponseWriter, r *http.Request, raw, platfor
 		return
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, matchOriginalURL(u), nil)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_request", "非法的播放地址")
-		return
-	}
-	req.Header.Set("User-Agent", mediaUserAgent)
-	req.Header.Set("Referer", platformReferer(s, platformKey, u))
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-	if rg := r.Header.Get("Range"); rg != "" {
-		req.Header.Set("Range", rg)
-	}
-
 	// 播放大文件不能沿用 20s 的整体超时：这里用没有 Client.Timeout 的客户端，
 	// 靠请求上下文取消来收尾（用户暂停/关页面即断开）。
-	client := s.streamClientFor(platformKey)
-	resp, err := client.Do(req)
+	resp, err := s.openUpstream(r.Context(), u, platformKey, r.Header.Get("Range"))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "resolve_failed", "取流失败: "+err.Error())
 		return
@@ -123,9 +110,86 @@ func (s *Server) proxyMedia(w http.ResponseWriter, r *http.Request, raw, platfor
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// maxWarmObject 是单个预热对象的大小上限：HLS 分片几百 KB 到几 MB，
-// 超了说明这不是一段分片（或者是个超大文件），不值得先拉进内存。
-const maxWarmObject = 16 << 20
+// upstreamAttempts / upstreamRetryDelay 是取上游媒体对象的尝试次数与退避。
+//
+// 为什么要自己重试：YouTube 的 googlevideo 会**偶发**对连续分片请求回 403，
+// 同一地址隔一秒再要就正常。实测一条 4K fancam（321 秒）播 40 秒里撞了 3 次，
+// hls.js 自己也会重试（fragLoadingMaxRetry=6），但它每次重试要先把整个分片重新排队，
+// 实测代价 3~9 秒，正好把缓冲吃穿——用户看到的就是「一顿一顿」。
+// 在这一层重试只多花 150~400 毫秒，播放器那头完全无感。
+const upstreamAttempts = 3
+
+func upstreamRetryDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 150 * time.Millisecond
+	}
+	return 400 * time.Millisecond
+}
+
+// retryableStatus 是「同一地址重试大概率能过」的上游状态码。
+// 403 在 googlevideo 上是限流信号（不是签名失效，失效会 410），所以也算。
+func retryableStatus(code int) bool {
+	switch code {
+	case http.StatusForbidden, http.StatusRequestTimeout, http.StatusTooManyRequests,
+		http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// openUpstream 取上游媒体的响应：网络错误与可重试状态码都再试几次。
+//
+// 只在**还没往浏览器写任何字节之前**重试，所以对播放器是完全透明的：
+// 它看到的要么是一次成功响应，要么是最终失败。
+func (s *Server) openUpstream(ctx context.Context, u *url.URL, platformKey, rangeHdr string) (*http.Response, error) {
+	client := s.streamClientFor(platformKey)
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, matchOriginalURL(u), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", mediaUserAgent)
+		req.Header.Set("Referer", platformReferer(s, platformKey, u))
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+		if rangeHdr != "" {
+			req.Header.Set("Range", rangeHdr)
+		}
+
+		resp, err := client.Do(req)
+		switch {
+		case err != nil:
+			lastErr = err
+		case retryableStatus(resp.StatusCode) && attempt < upstreamAttempts:
+			// 把这一小段错误响应的正文丢掉再关，连接才能干净地回到池子里。
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+			resp.Body.Close()
+			lastErr = fmt.Errorf("上游返回 %d", resp.StatusCode)
+		default:
+			return resp, nil
+		}
+		if attempt >= upstreamAttempts {
+			return nil, lastErr
+		}
+		select {
+		case <-time.After(upstreamRetryDelay(attempt)):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// maxWarmObject 是单个预热对象的大小上限：HLS 分片几百 KB 到几十 MB。
+//
+// 原来定 16 MiB 是按「分片只有几 MB」估的，YouTube 4K 直接把这个假设打穿：
+// 实测 2160p VP9 60fps（itag 628，28220 kbps，分段 5~7 秒）每段 21~23 MB。
+// 超限那一版是「按上限截断后照旧入缓存」，于是**第一段视频分片永远是残缺的 16 MiB**
+// （16777216 字节，第二次请求 5 毫秒就原样再发一遍）。hls.js 把残缺的 fMP4 塞进
+// SourceBuffer 得到 bufferAppendError，重试又命中同一份截断字节，循环不休：
+// 实测 40 秒里 28 次 waiting、currentTime 卡在 0、缓冲区区间为空。
+// 所以口径改成「超过上限就整条不缓存」——宁可少一次预热，也不能把半段字节当整段发出去。
+const maxWarmObject = 64 << 20
 
 // fetchRawMedia 取一个媒体对象的原文（清单也不改写）：给「起播预热」用。
 //
@@ -151,11 +215,28 @@ func (s *Server) fetchRawMedia(ctx context.Context, raw, platformKey string) (st
 	if resp.StatusCode >= 400 {
 		return "", nil, fmt.Errorf("上游返回 %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxWarmObject))
+	// 多读 1 个字节用来判断「是不是超限」：宁可整条不缓存，也不截断后冒充完整对象
+	// （4K 分片 22 MB 被截成 16 MiB 就是上面注释里那个 bufferAppendError 的来历）。
+	data, err := readCapped(resp.Body, maxWarmObject)
 	if err != nil {
 		return "", nil, err
 	}
 	return resp.Header.Get("Content-Type"), data, nil
+}
+
+// readCapped 读完一个媒体对象，超过 limit 就整体报错。
+//
+// 单独抽出来是为了能测：这里是「截断 → 播放器 append 失败 → 无限重试」这类
+// 隐蔽故障的唯一入口，必须有一个小的、能断言「要么完整、要么报错」的单元。
+func readCapped(body io.Reader, limit int) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, int64(limit)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > limit {
+		return nil, fmt.Errorf("对象超过上限 %d 字节", limit)
+	}
+	return data, nil
 }
 
 // serveRewrittenPlaylist 把 m3u8 里的分片/子清单地址改写成代理地址。

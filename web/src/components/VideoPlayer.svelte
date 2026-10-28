@@ -29,7 +29,13 @@
 
   /** hlsjs-video 的 `source` 属性（原生 <video> 没有；按需断言） */
   interface EngineSourceHost extends HTMLElement {
-    source: { src: string; type: string; capRenditionToPlayerSize?: boolean } | null;
+    source: {
+      src: string;
+      type: string;
+      capRenditionToPlayerSize?: boolean;
+      /** hls.js 的配置透传口：`{ hlsJs: {...} }`，见 HLS_BUFFER_CONFIG */
+      engine?: { hlsJs: Record<string, unknown> } | undefined;
+    } | null;
   }
 
   interface Props {
@@ -209,13 +215,38 @@
     bar.update({ qualities, selected: selectedQuality, ambient });
   }
 
+  /**
+   * hls.js 的缓冲参数。默认值（maxBufferLength 30s / maxBufferSize 60MB）在 4K 下是**自相矛盾**的：
+   * 60MB 按 28.2 Mbps（3.5 MB/s）只够 17 秒，于是真正的上限是 17 秒而不是 30 秒。
+   *
+   * 实测（本机，2160p VP9 60fps，YouTube 分片 21~23 MB/段 5~7 秒）：
+   * 链路能跑到 5~8 MB/s，但单段耗时抖动到 2.7~14.4 秒（14.4 秒那次 22.6 MB = 1.6 MB/s，
+   * 已经低于实时码率）。17 秒的缓冲撑不住几次这样的抖动，表现就是一分钟里顿几回。
+   * 这里按 60 秒给（4K 约 210 MB，本机播放可接受），并把回看缓冲压到 30 秒以免无限涨。
+   */
+  const HLS_BUFFER_CONFIG = {
+    maxBufferLength: 60,
+    maxBufferSize: 250 * 1000 * 1000,
+    backBufferLength: 30,
+  };
+
   function applySource(el: HTMLElement, next: { src: string; type: string }): void {
     if (el instanceof HTMLVideoElement) {
       el.src = next.src;
       return;
     }
     // capRenditionToPlayerSize 关掉：契约要求「最高画质不设上限」，播放器别偷偷按窗口大小降档
-    (el as EngineSourceHost).source = { src: next.src, type: next.type, capRenditionToPlayerSize: false };
+    (el as EngineSourceHost).source = {
+      src: next.src,
+      type: next.type,
+      capRenditionToPlayerSize: false,
+      engine: hlsEngineConfig(next.type),
+    };
+  }
+
+  /** 只有 HLS 才带 hls.js 配置；mp4 直链走原生解码，给了也没人看。 */
+  function hlsEngineConfig(type: string) {
+    return type.includes('mpegurl') ? { hlsJs: HLS_BUFFER_CONFIG } : undefined;
   }
 
   /**

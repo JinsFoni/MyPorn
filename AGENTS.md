@@ -16,6 +16,13 @@
 否则页面会一直跑旧 chunk（`index-XXXXXXXX.js` 的 hash 对不上就是它），
 看起来像「改了没生效」。
 
+**播放测试一律静音**（元素加 `muted`、再 `v.muted = true`）。测试视频的声音会从这台机器的
+音箱里放出来，人还坐在前面。
+
+**无头 Chromium 的「解码」结论不能当结论**：4K VP9 在无头里会随机报
+`PipelineStatus::PIPELINE_ERROR_DECODE: video decode error!`（同一份字节 ffmpeg 能解、md5 与上游一致），
+量链路/缓存用 curl 或片段计时，别用无头浏览器的卡顿反推服务端有问题。
+
 ## 构建与运行
 
 ```bash
