@@ -337,13 +337,16 @@
               {live.activeDownloads}
             </span>
           {:else if item.href === '/youtube' && live.ytUnseen > 0}
-      <span
-        class="absolute -right-2 -top-1 min-w-[0.9375rem] rounded-full bg-hi px-1 text-[0.625rem] font-medium leading-[0.9375rem] text-ink tabular-nums"
-        aria-hidden="true"
-      >
-        {live.ytUnseen > 9 ? '9+' : live.ytUnseen}
-      </span>
-    {:else if item.href === '/moments' && live.momentsUnseen > 0}
+            <!-- 和「下载」「动态」同款：行内角标，跟着文字走。
+                 别把底栏那套 absolute -right-2 -top-1 搬进来——这一行没有定位祖先，
+                 会一路逃到 <aside> 的右上角，变成一个悬在侧边栏外的小白圆。 -->
+            <span
+              class="rounded-full bg-hi px-[0.3rem] text-[0.6875rem] font-medium leading-4 tabular-nums text-ink"
+              aria-label={`${String(live.ytUnseen)} 个未看新视频`}
+            >
+              {live.ytUnseen > 99 ? '99+' : live.ytUnseen}
+            </span>
+          {:else if item.href === '/moments' && live.momentsUnseen > 0}
             <span
               class="rounded-full bg-hi px-[0.3rem] text-[0.6875rem] font-medium leading-4 tabular-nums text-ink"
               aria-label={`${String(live.momentsUnseen)} 张新照片`}
