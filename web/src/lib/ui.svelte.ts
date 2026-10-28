@@ -15,6 +15,7 @@ export type SettingsPane =
   | 'download'
   | 'social'
   | 'youtube'
+  | 'bilibili'
   | 'libraries'
   | 'account';
 
@@ -25,6 +26,7 @@ const PANE_IDS: readonly SettingsPane[] = [
   'download',
   'social',
   'youtube',
+  'bilibili',
   'libraries',
   'account',
 ];

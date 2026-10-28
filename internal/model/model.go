@@ -89,6 +89,11 @@ type Variant struct {
 	Bandwidth int
 	Codec     string
 	URL       string
+	// AudioURL 非空表示音画是分开的两条流（B 站 DASH 就是这样）：同一条 url 直接喂给
+	// <video> 只有画面没有声音，必须先由服务端合流成一份文件才能播，见 internal/muxcache。
+	//
+	// 其余平台（HLS / 单文件 mp4）音画一体，这里留空。
+	AudioURL string `json:",omitempty"`
 	// ApproxBandwidth 为 true 表示码率是从文件名猜的（如 "1080P_4000K"），
 	// 并非清单声明的真实值，体积预估要按经验系数折算。
 	ApproxBandwidth bool `json:",omitempty"`

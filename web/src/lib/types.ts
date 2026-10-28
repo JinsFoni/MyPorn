@@ -228,6 +228,7 @@ export interface Settings {
     instagram: string;
     x: string;
     youtube: string;
+    bilibili: string;
   };
   namingTemplate: string;
   downloadConcurrency: number;
@@ -243,6 +244,13 @@ export interface Settings {
   openlist: OpenListSettings;
   social: SocialSettings;
   youtube: YouTubeSettings;
+  bilibili: BilibiliSettings;
+}
+
+/** M7 B 站订阅的设置。Cookie 同样只写不读 */
+export interface BilibiliSettings {
+  /** 配了 SESSDATA 才能拿 1080P 以上（未登录最高 720P） */
+  hasCookie: boolean;
 }
 
 /** M6 YouTube 订阅的设置。Cookie 只写不读，只告诉前端「有没有配」 */
@@ -268,6 +276,7 @@ export interface SettingsPatch {
     instagram?: string;
     x?: string;
     youtube?: string;
+    bilibili?: string;
   };
   namingTemplate?: string;
   autoDownloadNew?: boolean;
@@ -284,6 +293,8 @@ export interface SettingsPatch {
     ytdlpPath?: string;
     cookies?: string;
   };
+  /** cookie 传空串表示清除 */
+  bilibili?: { cookie?: string };
 }
 
 export type JobType =

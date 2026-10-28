@@ -387,9 +387,9 @@ func (s *Store) SaveVariants(videoID int64, vs []model.Variant) error {
 			approx = 1
 		}
 		if _, err := tx.Exec(`INSERT OR REPLACE INTO video_streams
-			(video_id, height, width, bandwidth, codec, url, approx_bw, fetched_at)
-			VALUES (?,?,?,?,?,?,?,?)`, videoID, v.Height, v.Width, v.Bandwidth, v.Codec, v.URL, approx,
-			time.Now().UTC().Format(time.RFC3339)); err != nil {
+			(video_id, height, width, bandwidth, codec, url, audio_url, approx_bw, fetched_at)
+			VALUES (?,?,?,?,?,?,?,?,?)`, videoID, v.Height, v.Width, v.Bandwidth, v.Codec, v.URL,
+			v.AudioURL, approx, time.Now().UTC().Format(time.RFC3339)); err != nil {
 			return err
 		}
 	}
@@ -398,7 +398,7 @@ func (s *Store) SaveVariants(videoID int64, vs []model.Variant) error {
 
 // GetVariants 返回按质量降序的清晰度列表。
 func (s *Store) GetVariants(videoID int64) ([]model.Variant, time.Time, error) {
-	rows, err := s.db.Query(`SELECT height, width, bandwidth, codec, url, approx_bw, fetched_at
+	rows, err := s.db.Query(`SELECT height, width, bandwidth, codec, url, audio_url, approx_bw, fetched_at
 		FROM video_streams WHERE video_id = ? ORDER BY height DESC, bandwidth DESC`, videoID)
 	if err != nil {
 		return nil, time.Time{}, err
@@ -410,7 +410,7 @@ func (s *Store) GetVariants(videoID int64) ([]model.Variant, time.Time, error) {
 		var v model.Variant
 		var approx int
 		var f string
-		if err := rows.Scan(&v.Height, &v.Width, &v.Bandwidth, &v.Codec, &v.URL, &approx, &f); err != nil {
+		if err := rows.Scan(&v.Height, &v.Width, &v.Bandwidth, &v.Codec, &v.URL, &v.AudioURL, &approx, &f); err != nil {
 			return nil, time.Time{}, err
 		}
 		v.ApproxBandwidth = approx != 0

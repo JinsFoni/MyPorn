@@ -220,35 +220,74 @@ func RemoveTemp(dir string) {
 // totalSec 用于把 ffmpeg 的进度换算成百分比；onProgress 可为 nil。
 func (e *Encoder) RemuxFromURL(ctx context.Context, rawURL, referer, ua string,
 	desiredBase string, totalSec int, onProgress func(percent float64, bytesWritten int64)) (string, error) {
+	return e.remuxFromURLs(ctx, []string{rawURL}, referer, ua, desiredBase, totalSec, onProgress)
+}
+
+// RemuxFromURLs 是「音画分轨」的下载路径：画面一条、声音一条，合起来 remux 成一份。
+//
+// B 站 1080P 以上只给 DASH（video.m4s + audio.m4s），两条流谁也不带对方，
+// 下载下来必须当场合流，否则片子只有画面没声音。
+func (e *Encoder) RemuxFromURLs(ctx context.Context, videoURL, audioURL, referer, ua string,
+	desiredBase string, totalSec int, onProgress func(percent float64, bytesWritten int64)) (string, error) {
+	return e.remuxFromURLs(ctx, []string{videoURL, audioURL}, referer, ua, desiredBase, totalSec, onProgress)
+}
+
+// remuxFromURLs 先试 mp4（faststart、浏览器直接能播），失败再退 mkv（音轨编码更宽松）。
+func (e *Encoder) remuxFromURLs(ctx context.Context, urls []string, referer, ua string,
+	desiredBase string, totalSec int, onProgress func(percent float64, bytesWritten int64)) (string, error) {
 
 	mp4 := desiredBase + ".mp4"
-	err := e.remuxURLTo(ctx, rawURL, referer, ua, mp4, "mp4", totalSec, onProgress)
+	err := e.remuxURLTo(ctx, urls, referer, ua, mp4, "mp4", totalSec, onProgress)
 	if err == nil {
 		return mp4, nil
 	}
 	mp4Err := err
 	mkv := desiredBase + ".mkv"
-	if err2 := e.remuxURLTo(ctx, rawURL, referer, ua, mkv, "matroska", totalSec, onProgress); err2 != nil {
+	if err2 := e.remuxURLTo(ctx, urls, referer, ua, mkv, "matroska", totalSec, onProgress); err2 != nil {
 		return "", fmt.Errorf("封装失败：mp4 %v；mkv %v", mp4Err, err2)
 	}
 	return mkv, nil
 }
 
-func (e *Encoder) remuxURLTo(ctx context.Context, rawURL, referer, ua, output, format string,
+// RemuxTo 把两条分轨（画面 + 声音）合成一份 mp4，同样 -c copy、不转码。
+//
+// 需要它的是 DASH 站：B 站把 1080P 以上的片源拆成 video.m4s / audio.m4s 两条流，
+// 各拉各的、谁也不带对方。播放时不先合流就只有画面没有声音（或者干脆播不动）。
+// 两条流都要带 Referer —— B 站媒体 CDN 不带 Referer 直接 403（实测）。
+//
+// 输出走 faststart：moov 挪到文件头，浏览器拿到前几 MB 就能起播并拖动进度条。
+func (e *Encoder) RemuxTo(ctx context.Context, videoURL, audioURL, referer, ua, outPath string) error {
+	if err := e.remuxURLTo(ctx, []string{videoURL, audioURL}, referer, ua, outPath, "mp4", 0, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+// remuxURLTo 拉一组输入（1 条 = 音画一体的单文件；2 条 = 画面 + 声音分轨）remux 到 output。
+//
+// -user_agent / -headers 是**输入侧**参数，必须紧挨着各自那条 -i（B 站两条流都要 Referer）。
+func (e *Encoder) remuxURLTo(ctx context.Context, urls []string, referer, ua, output, format string,
 	totalSec int, onProgress func(percent float64, bytesWritten int64)) error {
 
 	tmp := output + ".tmp"
 	_ = os.Remove(tmp)
 	args := []string{"-y", "-hide_banner", "-loglevel", "error", "-nostdin"}
-	if ua != "" {
-		args = append(args, "-user_agent", ua)
+	for _, u := range urls {
+		if ua != "" {
+			args = append(args, "-user_agent", ua)
+		}
+		if referer != "" {
+			args = append(args, "-headers", "Referer: "+referer+"\r\n")
+		}
+		args = append(args, "-i", u)
 	}
-	if referer != "" {
-		args = append(args, "-headers", "Referer: "+referer+"\r\n")
+	if len(urls) > 1 {
+		// 画面取第 1 条、声音取第 2 条：DASH 就是这样给的，别指望顺序颠倒。
+		args = append(args, "-map", "0:v:0", "-map", "1:a:0?")
+	} else {
+		args = append(args, "-map", "0:v:0", "-map", "0:a:0?")
 	}
-	args = append(args, "-i", rawURL,
-		"-map", "0:v:0", "-map", "0:a:0?",
-		"-c", "copy")
+	args = append(args, "-c", "copy")
 	if format == "mp4" {
 		args = append(args, "-movflags", "+faststart")
 	}

@@ -2,13 +2,15 @@
 
 单用户自托管的视频聚合站：订阅艺人 → 在线看最高画质 → 下载进本地库 → 生成 Emby 元数据 → 上传 OpenList 生成 strm。
 
-当前进度：**M5 社交动态**（订阅 X / Instagram 博主 → 照片墙 → 一键存进本地库，并与艺人打通）。
-M4 的新片通知、Emby 自动扫库按要求暂缓。
+当前进度：**M7 bilibili**（订阅 UP 主 → 投稿墙 → 站内播 → 下载入库）。前六期：M1 订阅/播放、
+M2 本地库/下载、M3 OpenList（部分）、M4 xHamster/beeg、M5 社交动态、M6 YouTube。
+新片通知、Emby 自动扫库按要求暂缓。
 
 - 需求：`REQUIREMENTS.md`
 - 架构与选型：`ARCHITECTURE.md`
 - 接口契约：`docs/API.md`
 - 上线前必读：`docs/NEEDS-VERIFICATION.md`（解析选择器需在能访问站点的机器上核对）
+- bilibili 一期：`docs/M7-BILIBILI.md`（实测记录、两条列表通道、分轨合流都在这里）
 
 ## 当前状态（三个站都能用）
 
@@ -44,9 +46,9 @@ M2（本地库 + 下载队列 + Emby 元数据）已实现并实测通过：
 - 下载前自动补全影片详情（简介/标签/评分），一键「再下载一份」到别的库
 - **下载默认纯手动**：只有点卡片/详情页的下载按钮才会入队；设置里可选「同步到新片后自动下载」（默认关闭，首次全量回填永不自动下载）
 
-M4 的 xHamster / beeg 适配器已实现并实测通过（详见下节）；新片通知、Emby API 自动扫库本轮不做。
+M4 的 xHamster / beeg 适配器、M6 的 YouTube 频道订阅、M7 的 bilibili 都已实现并实测通过（详见下节）。
 
-## 多站适配器（xHamster / beeg）
+## 多站适配器（xHamster / beeg / bilibili）
 
 各站自己维护自己的解析器，上层（订阅、同步、播放、下载、元数据）完全不区分平台。
 
@@ -69,6 +71,18 @@ M4 的 xHamster / beeg 适配器已实现并实测通过（详见下节）；新
   粘贴主页链接永远可用。
 - 代理：`PLATFORM_PROXY_XHAMSTER` / `PLATFORM_PROXY_BEEG` 或设置页里的专用代理，
   留空跟随全局代理；两家实测在国内可直连，所以「没配代理」不会在界面上报警。
+
+- **bilibili**：数据全在 JSON 接口里（没有页面可解析），但接口分两种脾气：资料/详情/播放地址
+  （`/x/web-interface/card`、`/x/web-interface/view`、`/x/player/playurl`）随便调；空间投稿列表
+  （`/x/space/arc/search`）是全站风控最严的一个，服务端连打几次就 `-799` 甚至 HTTP 412 封禁，
+  一封几十分钟到几小时。所以列表走了**两条通道**：日常增量用安卓客户端的
+  `/x/v2/space/archive/cursor`（appkey 签名，同一 IP 被封着也照样给 20 条），
+  翻页回填才动 web 接口（1 次 / 20 秒 + 退避）。被限流不算同步失败——已抓的照常入库、
+  断点照留、退避 3 小时。详见 `docs/M7-BILIBILI.md`。
+- **bilibili 的画质**：未登录时 web 只给到 720P 的单文件（durl）+ 360/480P 的分轨（DASH）；
+  1080P 以上要在设置里填 `SESSDATA`。分轨的音视频是两条独立 m4s，浏览器播不了，
+  所以点播到那一档时服务端用 ffmpeg 合成一份 mp4 缓存起来（`/api/videos/{id}/remux?v=…`，
+  单飞 + 7 天 TTL，实测 25 分钟 480P 约 15 秒、44 分钟 PCDN 源约 2 分钟），下载走同一条路。
 
 未开始：M3（OpenList 上传 + strm + `/d/` 直链 spike）。
 
@@ -145,6 +159,8 @@ internal/platform/     适配器接口与注册表
 internal/platform/pornhub/  Pornhub 解析（随站点改版维护的地方）
 internal/platform/xhamster/  xHamster 解析（window.initials JSON + 播放地址解密）
 internal/platform/beeg/      beeg 解析（store.externulls.com 公开接口）
+internal/platform/bilibili/  bilibili 解析（App cursor + web arc/search 两条列表通道、playurl 合并）
+internal/muxcache/          DASH 分轨合流的单飞缓存（ffmpeg 出一份 mp4 给浏览器播）
 internal/hls/                HLS master 清单解析（三个站共用，保证编码偏好一致）
 internal/jobs/         任务队列：同步、下载、进度与取消
 internal/events/       进程内事件中心（SSE）

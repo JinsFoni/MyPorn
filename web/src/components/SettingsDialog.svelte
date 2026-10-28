@@ -28,6 +28,7 @@
     openlist: { baseUrl: 'http://192.168.0.108:5244', root: '/123云盘/资源目录/MyPorn', hasToken: true },
     social: { syncHours: 6, hasInstagramCookie: false },
     youtube: { syncHours: 6, backfillLimit: 200, format: '', ytdlpPath: '', hasCookies: false },
+    bilibili: { hasCookie: false },
   };
 
   /** 侧边栏分类：左侧栏在弹窗里切换，右侧只渲染当前这一块 */
@@ -38,12 +39,21 @@
     { id: 'download', label: '下载', hint: '并发、限速与自动下载' },
     { id: 'social', label: '动态', hint: '博主抓取频率与 Instagram 登录态' },
     { id: 'youtube', label: 'YouTube', hint: 'yt-dlp、画质与登录态' },
+    { id: 'bilibili', label: 'B 站', hint: '登录态与画质' },
     { id: 'libraries', label: '本地库', hint: '落盘目录与空间' },
     { id: 'account', label: '账号', hint: '会话与退出' },
   ];
 
   /** 这四个分类共用一个表单，保存按钮在页脚（用 form 属性挂回来） */
-  const FORM_PANES: readonly SettingsPane[] = ['sync', 'network', 'upload', 'download', 'social', 'youtube'];
+  const FORM_PANES: readonly SettingsPane[] = [
+    'sync',
+    'network',
+    'upload',
+    'download',
+    'social',
+    'youtube',
+    'bilibili',
+  ];
 
   let settings = $state<Settings | null>(null);
   let loading = $state(true);
@@ -75,6 +85,8 @@
   let ytFormat = $state('');
   let ytdlpPath = $state('');
   let ytCookies = $state('');
+  let biliProxy = $state('');
+  let biliCookie = $state('');
   /** yt-dlp 健康度：进 YouTube 那一节时才拉（要 fork 一个进程，不值得每次开设置都跑） */
   let ytHealth = $state<YtHealth | null>(null);
   let ytHealthLoading = $state(false);
@@ -106,6 +118,8 @@
     ytFormat = value.youtube.format;
     ytdlpPath = value.youtube.ytdlpPath;
     ytCookies = '';
+    biliProxy = value.platformProxy.bilibili ?? '';
+    biliCookie = '';
   }
 
   async function loadYtHealth(): Promise<void> {
@@ -152,6 +166,7 @@
         instagram: instagramProxy,
         x: xProxy,
         youtube: youtubeProxy,
+        bilibili: biliProxy,
       },
       namingTemplate,
       downloadConcurrency,
@@ -176,6 +191,9 @@
     // 同上：Cookie 留空 = 不动
     const ytCookie = ytCookies.trim();
     if (ytCookie.length > 0) patch.youtube = { ...patch.youtube, cookies: ytCookie };
+    // B 站同理：留空 = 不动（服务端把空串当清除）
+    const biliCk = biliCookie.trim();
+    if (biliCk.length > 0) patch.bilibili = { cookie: biliCk };
     try {
       await api.updateSettings(patch);
       // 重新拉一次：token 永不回显，hasToken 等状态以服务端为准
@@ -542,6 +560,22 @@
                           抓 RSS 与下载都会走这个出口。碰上「要求人机验证」就换一个，改完即刻生效。
                         </p>
                       </div>
+                      <div>
+                        <label for="bilibili-proxy" class="label-meta mb-1.5">B 站专用代理</label>
+                        <input
+                          id="bilibili-proxy"
+                          class="field"
+                          type="text"
+                          placeholder="留空则跟随全局代理"
+                          spellcheck="false"
+                          autocomplete="off"
+                          bind:value={biliProxy}
+                          disabled={saving}
+                        />
+                        <p class="mt-1 text-meta text-dim">
+                          投稿列表接口限流极严（隔 10 秒打三次就封 IP 十几分钟）。国内直连即可；走海外出口时注意 B 站会限制部分区域的画质。
+                        </p>
+                      </div>
                     </div>
                   </section>
                 {:else if ui.settingsPane === 'upload'}
@@ -737,6 +771,43 @@
                         disabled={saving}
                       ></textarea>
                     </div>
+                  </section>
+                {:else if ui.settingsPane === 'bilibili'}
+                  <section>
+                    <p class="text-meta text-dim">
+                      订阅 UP 主时贴主页地址 <code class="font-mono">space.bilibili.com/&lt;mid&gt;</code> 即可。B
+                      站不支持按名字搜索（搜索接口要浏览器指纹签名），所以搜索框里敲名字会直接提示贴链接。
+                    </p>
+
+                    <div class="mt-5">
+                      <div class="flex items-center justify-between">
+                        <label for="bili-cookie" class="label-meta">Cookie（SESSDATA）</label>
+                        <span class="text-meta {settings.bilibili.hasCookie ? 'text-sage' : 'text-dim'}">
+                          {settings.bilibili.hasCookie ? '已配置' : '未配置'}
+                        </span>
+                      </div>
+                      <p class="mt-1 text-meta text-dim">
+                        不填也能看，但最高只有 720P（未登录时 B 站只给 480P 的 DASH 和 720P 的单文件）。
+                        1080P / 4K 必须登录：从已登录的浏览器里复制整串 Cookie（至少含
+                        <span class="text-muted">SESSDATA</span>）粘进来即可。Cookie 加密存库，保存后不再回显。
+                      </p>
+                      <textarea
+                        id="bili-cookie"
+                        class="field mt-2 h-24 resize-y font-mono text-meta"
+                        placeholder={settings.bilibili.hasCookie
+                          ? '已保存 · 留空表示不修改'
+                          : 'SESSDATA=xxxxxx%2Cyyyyyy%2C…; bili_jct=…; DedeUserID=…'}
+                        spellcheck="false"
+                        autocomplete="off"
+                        bind:value={biliCookie}
+                        disabled={saving}
+                      ></textarea>
+                    </div>
+
+                    <p class="mt-5 text-meta text-dim">
+                      下载与在线播放都会用到这份登录态；1080P 以上的片源是音画分轨，服务端会先用 ffmpeg
+                      合成一份再播（第一次点开要等几秒，之后直接读缓存）。
+                    </p>
                   </section>
                 {:else if ui.settingsPane === 'download'}
                   <section>

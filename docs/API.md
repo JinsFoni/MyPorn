@@ -141,6 +141,9 @@ type Video = {
 - `id` 是稳定的选档标识：H.264 为 `1080p` / `2160p` / `sd` / `auto`；
   **非 H.264 带编码后缀**（`1080p.av1` / `1080p.hevc`），否则同分辨率两种编码会撞成同一个 id
 - `proxyPlaybackUrl` 为直链失败时的降级入口（M1 可返回 `null`）
+- **分轨档（B 站 DASH）的 `url` 不是 `/api/stream`，而是 `/api/videos/{id}/remux?v=<variantID>`**：
+  音视频两条独立流浏览器播不了，服务端合成一份 mp4 再当普通文件播（见 §A4 与 ARCHITECTURE §13.3）。
+  这种变体库里存了 `audio_url`；`url` 里出现的 `remux` 是前端判断「要等合流」的唯一依据
 - 解析失败 `502 {"error":{"code":"resolve_failed","message":"..."}}`
 
 **本地库里有文件时，第一路永远是它**（`id="local"`，`local:true`，`isDefault:true`）：
@@ -184,10 +187,11 @@ type Video = {
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/settings` | `{syncIntervalHours, globalProxy, platformProxy:{pornhub,xhamster,beeg},
+| GET | `/api/settings` | `{syncIntervalHours, globalProxy, platformProxy:{pornhub,xhamster,beeg,bilibili},
   namingTemplate, downloadConcurrency, downloadRateKb, autoDownloadNew, libraryRoot,
-  openlist:{baseUrl,root,hasToken}}`（**不含任何密钥明文**） |
-| PUT | `/api/settings` | 同结构，部分字段可选；密钥字段用 `{"openlist":{"token":"..."}}` 单独写，响应永不回显 |
+  openlist:{baseUrl,root,hasToken}, bilibili:{hasCookie}}`（**不含任何密钥明文**） |
+| PUT | `/api/settings` | 同结构，部分字段可选；密钥字段用 `{"openlist":{"token":"..."}}` 单独写，响应永不回显。
+  B 站登录态写 `{"bilibili":{"cookie":"SESSDATA=…"}}`（裸的 SESSDATA 值也认），只回 `bilibili.hasCookie` |
 
 ## 8. 健康检查
 
@@ -319,7 +323,8 @@ type Video = {
 ### A4. 播放代理（M2 修正）
 
 `GET /api/stream?u=<urlencoded 上游地址>&p=<platform>` → 媒体字节流
-- 白名单域名：`pornhub.com / phncdn.com / xhcdn.com / xhamster.com / beeg.com ...`
+- 白名单域名：`pornhub.com / phncdn.com / xhcdn.com / xhamster.com / beeg.com / bilivideo.com / bilivideo.cn ...`
+  （B 站的媒体 CDN 不带 `Referer: https://www.bilibili.com/` 一律 403）
 - 服务端补 `Referer`（平台根地址）与 UA；透传 `Range` → `206`，支持拖动
 - m3u8 会改写内部 URI 后返回 `application/vnd.apple.mpegurl`
 - 该路由**不套 60s 整体超时**（长片要连续传输），靠请求上下文取消收尾
@@ -327,6 +332,18 @@ type Video = {
 因此 `GET /api/videos/{id}/playback` 返回的 `variants[].url` 已经是 `/api/stream?...` 同源地址，
 `proxyPlaybackUrl` 为首条变体的代理地址；每个变体多一个 `"hls": true|false` 字段，
 前端据此选择 hls.js 或原生 `<video>`。
+
+### A4·补. 分轨合流 `GET /api/videos/{id}/remux?v=<variantID>`
+
+给 B 站那种「音视频分开」的档位用：服务端用 ffmpeg `-c copy` 合成 mp4，落盘缓存后按普通文件提供。
+
+- 首次请求会等合流跑完（实测 25 分钟 480P 约 15 秒、44 分钟 PCDN 源约 2 分钟），之后是磁盘命中（毫秒级）；
+- 缓存 key = `<videoID>-<variantID>`，目录 `DATA_DIR/mux/`，TTL 7 天；
+- 同一个 key 并发（浏览器起播会打好几个 Range 请求）只跑一次 ffmpeg；
+- 上游签名地址过期时会在合流前重新解析一次；调用方断开不会打断已经开始的合流；
+- 响应带 `Range`/`206`、`Cache-Control: private, max-age=3600`；
+- 找不到该变体 / 它没有音轨 → `404 not_found`；重新解析播放地址失败 → `502 resolve_failed`；
+  合流本身失败 → `502 mux_failed`。
 
 ### A5. SSE 新增事件
 

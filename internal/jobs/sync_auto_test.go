@@ -40,6 +40,12 @@ type syncFixture struct {
 
 func newSyncFixture(t *testing.T, items []model.Video) *syncFixture {
 	t.Helper()
+	return newSyncFixtureWith(t, &listAdapter{items: items})
+}
+
+// newSyncFixtureWith 允许换成别的假适配器（比如专门模拟限流的那个）。
+func newSyncFixtureWith(t *testing.T, list platform.Adapter) *syncFixture {
+	t.Helper()
 	tmp := t.TempDir()
 	st, err := store.Open(filepath.Join(tmp, "sync.db"))
 	if err != nil {
@@ -65,9 +71,10 @@ func newSyncFixture(t *testing.T, items []model.Video) *syncFixture {
 		t.Fatal(err)
 	}
 
-	ad := &listAdapter{items: items}
+	// 只有走默认 fixture 的用例需要断言「请求过哪些页」，其余给 nil 就行。
+	ad, _ := list.(*listAdapter)
 	reg := platform.NewRegistry()
-	reg.Register(ad)
+	reg.Register(list)
 	cfg := &config.Config{MaxDownload: 2, SyncHours: 6}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	runner := NewRunner(cfg, st, reg, nil, nil, nil, events.NewHub(), log, imgcache.New(t.TempDir(), nil, "", log))

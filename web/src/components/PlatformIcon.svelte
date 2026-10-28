@@ -2,6 +2,7 @@
   import pornhubIcon from '../assets/platform/pornhub.png';
   import xhamsterIcon from '../assets/platform/xhamster.png';
   import beegIcon from '../assets/platform/beeg.svg';
+  import bilibiliIcon from '../assets/platform/bilibili.svg';
 
   interface Props {
     /** 后端 platform 字段（pornhub / xhamster / beeg …） */
@@ -28,11 +29,13 @@
      pornhub = 橙底黑 PH（从站方 apple-touch-icon 抠出来的橙色方块）
      xhamster = 深色方砖 + 白色仓鼠头（站方 180px touch icon）
      beeg = 自带渐变底 + 白色字标的 favicon.svg
+     bilibili = 粉底白色「小电视」（照官方 app icon 画的超简版 SVG：天线 + 机身 + 两只眼睛）
      都缩到 64px 左右。 */
   const ICONS: Record<string, string> = {
     pornhub: pornhubIcon,
     xhamster: xhamsterIcon,
     beeg: beegIcon,
+    bilibili: bilibiliIcon,
   };
 
   let icon = $derived(ICONS[platform.toLowerCase()]);

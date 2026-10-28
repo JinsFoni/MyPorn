@@ -113,6 +113,8 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 	if sub.BackfillTotalPages != nil {
 		totalPages = *sub.BackfillTotalPages
 	}
+	// rateLimited 记下「这一轮是被限流叫停的」：限流不是错误，是节流。
+	var rateLimited error
 
 	for {
 		if err := c.Check(); err != nil {
@@ -130,6 +132,14 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 			if page > 1 && errors.Is(err, platform.ErrNotFound) {
 				r.log.Info("影片列表翻到末页", "performer", perf.PerformerID, "page", page)
 				finished = true
+				break
+			}
+			// 限流（B 站 -799 / 429、xHamster 429）不是「抓错了」，是「该歇会儿」。
+			// 已经抓到的页照常入库、断点照常留着，下一轮接着翻；只有在某一页都没抓到的
+			// 极端情况下才当失败处理，免得订阅悄无声息地一直不同步。
+			if errors.Is(err, platform.ErrRateLimited) {
+				rateLimited = err
+				r.log.Warn("列表被限流，这一轮先停", "performer", perf.PerformerID, "page", page, "err", err)
 				break
 			}
 			if page == startPage {
@@ -241,6 +251,11 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 		page++
 	}
 
+	// 一页都没抓到的限流不能算「同步完成」：订阅会一直不动却看不出来。
+	if rateLimited != nil && lastPage < startPage {
+		return fmt.Errorf("抓取第 %d 页失败: %w", startPage, rateLimited)
+	}
+
 	if full && finished {
 		var tp *int
 		if totalPages > 0 {
@@ -251,7 +266,11 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 		}
 	}
 
-	c.Progress(100, fmt.Sprintf("同步完成，新增 %d 部", totalNew), 0, 0, 0)
+	done := fmt.Sprintf("同步完成，新增 %d 部", totalNew)
+	if rateLimited != nil {
+		done = fmt.Sprintf("同步被限流中断，新增 %d 部（断点已存，稍后自动接着翻）", totalNew)
+	}
+	c.Progress(100, done, 0, 0, 0)
 	r.warmCovers(newCovers)
 	r.repairInBackground()
 	if len(autoIDs) > 0 {

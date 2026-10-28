@@ -26,6 +26,11 @@ var streamHostSuffixes = []string{
 	// 漏掉这个后缀，播放就在第 8 秒（两段 4 秒）之后每个分片都 400「非法的播放地址」。
 	"ahcdn.com",
 	"beeg.com", "beeg.porn",
+	// B 站：单文件档（durl）走这里的代理直出。媒体 CDN 必须带 Referer（不带一律 403），
+	// 而同一部片子的地址会在 PCDN（*.edge.mountaintoys.cn、*.mcdn.bilivideo.cn）和
+	// 官方 upos-*（*.bilivideo.com）之间混着给。白名单只放 B 站自己的域名后缀，
+	// 适配器那边会优先挑 upos-* 那条（实测 6.6 MB/s vs PCDN 0.9 MB/s）。
+	"bilivideo.com", "bilivideo.cn",
 	// YouTube 的 HLS（清单 + 分片）都在 googlevideo 上。地址是签名且绑定出口 IP 的，
 	// 只有本进程能取——浏览器拿到的永远是 /api/yt/seg/... 这种站内地址。
 	"googlevideo.com",

@@ -54,19 +54,82 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 // ---------- 设置 ----------
 
 type settingsDTO struct {
-	SyncIntervalHours   int        `json:"syncIntervalHours"`
-	GlobalProxy         string     `json:"globalProxy"`
-	PlatformProxy       proxyDTO   `json:"platformProxy"`
-	NamingTemplate      string     `json:"namingTemplate"`
-	DownloadConcurrency int        `json:"downloadConcurrency"`
-	DownloadRateKB      int        `json:"downloadRateKb"`
-	AutoDownloadNew     bool       `json:"autoDownloadNew"`
-	DefaultLibraryID    int64      `json:"defaultLibraryId"`
-	LibraryRoot         string     `json:"libraryRoot"`
-	FFmpegAvailable     bool       `json:"ffmpegAvailable"`
-	OpenList            olDTO      `json:"openlist"`
-	Social              socialDTO  `json:"social"`
-	YouTube             youtubeDTO `json:"youtube"`
+	SyncIntervalHours   int         `json:"syncIntervalHours"`
+	GlobalProxy         string      `json:"globalProxy"`
+	PlatformProxy       proxyDTO    `json:"platformProxy"`
+	NamingTemplate      string      `json:"namingTemplate"`
+	DownloadConcurrency int         `json:"downloadConcurrency"`
+	DownloadRateKB      int         `json:"downloadRateKb"`
+	AutoDownloadNew     bool        `json:"autoDownloadNew"`
+	DefaultLibraryID    int64       `json:"defaultLibraryId"`
+	LibraryRoot         string      `json:"libraryRoot"`
+	FFmpegAvailable     bool        `json:"ffmpegAvailable"`
+	OpenList            olDTO       `json:"openlist"`
+	Social              socialDTO   `json:"social"`
+	YouTube             youtubeDTO  `json:"youtube"`
+	Bilibili            bilibiliDTO `json:"bilibili"`
+}
+
+// bilibiliDTO 是 M7 B 站的设置。只有一项：Cookie。
+//
+// 为什么要 Cookie：未登录时 B 站只肯给 720P（durl）和 480P（dash），
+// 1080P 起必须登录。Cookie 与 YouTube 那套一样只写不读，只回答「配没配」。
+type bilibiliDTO struct {
+	HasCookie bool `json:"hasCookie"`
+}
+
+// bilibiliPatch 传 "" 表示清空 Cookie。
+type bilibiliPatch struct {
+	Cookie *string `json:"cookie"`
+}
+
+// hasBiliCookie 只回答「配没配」，不回传明文。
+func (s *Server) hasBiliCookie() bool {
+	v, err := s.st.GetSecret(s.box, "bili_cookie")
+	return err == nil && strings.TrimSpace(v) != ""
+}
+
+// normalizeBiliCookie 把用户粘进来的东西整理成一行 Cookie 头。
+//
+// 三种常见粘贴方式都接住：整串 `SESSDATA=xxx; bili_jct=yyy`、只有 SESSDATA 的值、
+// 以及从浏览器「复制为 Cookie」带换行/制表符的那种（Chrome 复制出来是按行分隔的）。
+func normalizeBiliCookie(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	// 换行/制表符当分隔符，逐段整理成 k=v; k=v。
+	var parts []string
+	for _, line := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == '\t'
+	}) {
+		for _, seg := range strings.Split(line, ";") {
+			seg = strings.TrimSpace(seg)
+			if seg == "" {
+				continue
+			}
+			// 只贴了 SESSDATA 的值（常见：一长串 %2C 分隔的 base64）。
+			if !strings.Contains(seg, "=") {
+				seg = "SESSDATA=" + seg
+			}
+			parts = append(parts, seg)
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("Cookie 里没认出任何字段")
+	}
+	has := false
+	for _, p := range parts {
+		if strings.HasPrefix(strings.ToLower(p), "sessdata=") {
+			if v := strings.TrimSpace(p[len("sessdata="):]); v != "" {
+				has = true
+			}
+		}
+	}
+	if !has {
+		return "", fmt.Errorf("Cookie 里没有 SESSDATA：B 站登录态靠它，请从已登录的浏览器里复制整串")
+	}
+	return strings.Join(parts, "; "), nil
 }
 
 // youtubeDTO 是 M6 YouTube 订阅的设置。
@@ -118,6 +181,7 @@ type proxyDTO struct {
 	Instagram string `json:"instagram"`
 	X         string `json:"x"`
 	YouTube   string `json:"youtube"`
+	Bilibili  string `json:"bilibili"`
 }
 
 // youtubeInt 读一个整数设置并夹到区间内（坏值一律回落默认）。
@@ -178,6 +242,7 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 			Instagram: get("proxy_instagram", s.cfg.PlatformProxyFor("instagram")),
 			X:         get("proxy_x", s.cfg.PlatformProxyFor("x")),
 			YouTube:   get("proxy_youtube", s.cfg.PlatformProxyFor("youtube")),
+			Bilibili:  get("proxy_bilibili", s.cfg.PlatformProxyFor("bilibili")),
 		},
 		NamingTemplate:      get("naming_template", library.DefaultTemplate),
 		DownloadConcurrency: conc,
@@ -202,6 +267,7 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 			YtDlpPath:     get("ytdlp_path", ""),
 			HasCookies:    s.hasYtCookies(),
 		},
+		Bilibili: bilibiliDTO{HasCookie: s.hasBiliCookie()},
 	}
 }
 
@@ -210,17 +276,18 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 }
 
 type settingsPatch struct {
-	SyncIntervalHours   *int          `json:"syncIntervalHours"`
-	GlobalProxy         *string       `json:"globalProxy"`
-	PlatformProxy       *proxyDTO     `json:"platformProxy"`
-	NamingTemplate      *string       `json:"namingTemplate"`
-	DownloadConcurrency *int          `json:"downloadConcurrency"`
-	DownloadRateKB      *int          `json:"downloadRateKb"`
-	AutoDownloadNew     *bool         `json:"autoDownloadNew"`
-	LibraryRoot         *string       `json:"libraryRoot"`
-	OpenList            *olDTO        `json:"openlist"`
-	Social              *socialPatch  `json:"social"`
-	YouTube             *youtubePatch `json:"youtube"`
+	SyncIntervalHours   *int           `json:"syncIntervalHours"`
+	GlobalProxy         *string        `json:"globalProxy"`
+	PlatformProxy       *proxyDTO      `json:"platformProxy"`
+	NamingTemplate      *string        `json:"namingTemplate"`
+	DownloadConcurrency *int           `json:"downloadConcurrency"`
+	DownloadRateKB      *int           `json:"downloadRateKb"`
+	AutoDownloadNew     *bool          `json:"autoDownloadNew"`
+	LibraryRoot         *string        `json:"libraryRoot"`
+	OpenList            *olDTO         `json:"openlist"`
+	Social              *socialPatch   `json:"social"`
+	YouTube             *youtubePatch  `json:"youtube"`
+	Bilibili            *bilibiliPatch `json:"bilibili"`
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
@@ -248,6 +315,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		set("proxy_instagram", strings.TrimSpace(p.PlatformProxy.Instagram))
 		set("proxy_x", strings.TrimSpace(p.PlatformProxy.X))
 		set("proxy_youtube", strings.TrimSpace(p.PlatformProxy.YouTube))
+		set("proxy_bilibili", strings.TrimSpace(p.PlatformProxy.Bilibili))
 	}
 	if p.NamingTemplate != nil {
 		set("naming_template", strings.TrimSpace(*p.NamingTemplate))
@@ -338,6 +406,18 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusInternalServerError, "internal", "保存 Cookie 失败")
 				return
 			}
+		}
+	}
+	if p.Bilibili != nil && p.Bilibili.Cookie != nil {
+		raw, err := normalizeBiliCookie(*p.Bilibili.Cookie)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		// 空串 = 清除（回到未登录画质）。
+		if err := s.st.SetSecret(s.box, "bili_cookie", raw); err != nil {
+			writeErr(w, http.StatusInternalServerError, "internal", "保存 Cookie 失败")
+			return
 		}
 	}
 	if p.OpenList != nil {

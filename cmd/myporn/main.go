@@ -23,6 +23,7 @@ import (
 	"github.com/mario/myporn/internal/jobs"
 	"github.com/mario/myporn/internal/platform"
 	"github.com/mario/myporn/internal/platform/beeg"
+	"github.com/mario/myporn/internal/platform/bilibili"
 	"github.com/mario/myporn/internal/platform/pornhub"
 	"github.com/mario/myporn/internal/platform/xcom"
 	"github.com/mario/myporn/internal/platform/xhamster"
@@ -370,6 +371,26 @@ func buildRegistry(cfg *config.Config, st *store.Store, box *secret.Box, log *sl
 	}
 	reg.Register(bg)
 	if err := st.SeedPlatform(bg.Key(), bg.Name(), bgBase); err != nil {
+		log.Warn("写入平台信息失败", "err", err)
+	}
+
+	blBase, _ := st.GetSetting("bilibili_base_url")
+	if blBase == "" {
+		blBase = "https://www.bilibili.com"
+	}
+	// Cookie 现取：设置页填完 SESSDATA，下一次解析就用上（1080P 以上必须登录）。
+	bl, err := bilibili.New(blBase, proxyFunc(px, "bilibili"), func() string {
+		v, gerr := st.GetSecret(box, "bili_cookie")
+		if gerr != nil {
+			return ""
+		}
+		return v
+	})
+	if err != nil {
+		return nil, fmt.Errorf("初始化 B 站适配器: %w", err)
+	}
+	reg.Register(bl)
+	if err := st.SeedPlatform(bl.Key(), bl.Name(), blBase); err != nil {
 		log.Warn("写入平台信息失败", "err", err)
 	}
 	return reg, nil

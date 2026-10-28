@@ -9,6 +9,7 @@ export const PLATFORM_LABEL: Record<string, string> = {
   xhamster: 'xHamster',
   beeg: 'beeg',
   youtube: 'YouTube',
+  bilibili: 'bilibili',
 };
 
 export function platformLabel(platform: string): string {

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -225,6 +226,13 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 	// 浏览器直接请求只会拿到 404，必须由服务端补上 Referer/UA 再转发。
 	for i, vv := range variants {
 		src := streamURL(v.Platform, vv.URL)
+		hls := strings.Contains(vv.URL, ".m3u8")
+		// 音画分轨的档位（B 站 1080P+）没法直接代理：一条 URL 只有一个轨。
+		// 改成让服务端先合流成 mp4，再把成品当文件发（Range 都支持）。
+		if vv.AudioURL != "" {
+			src = remuxURL(v.ID, vv.ID())
+			hls = false
+		}
 		first := i == 0
 		if first && defaultID == "" {
 			defaultID = vv.ID()
@@ -237,7 +245,7 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 			"bandwidth": vv.Bandwidth,
 			"codec":     vv.Codec,
 			"url":       src,
-			"hls":       strings.Contains(vv.URL, ".m3u8"),
+			"hls":       hls,
 			"isDefault": first && defaultID == vv.ID(),
 		})
 	}
@@ -259,6 +267,13 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 		"expiresAt":        expiresAt,
 		"tags":             tags,
 	})
+}
+
+// remuxURL 是「音画分轨」档位的播放地址：服务端合流成 mp4 再下发。
+func remuxURL(videoID int64, variantID string) string {
+	q := url.Values{}
+	q.Set("v", variantID)
+	return "/api/videos/" + strconv.FormatInt(videoID, 10) + "/remux?" + q.Encode()
 }
 
 // localFileURL 是本地文件的播放地址（支持 Range，浏览器能直接拖动进度条）。

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- B 站「小电视」：粉底 + 白色电视脸（官方 app icon 的构图，照着画了一份超简版，
+       线条只有天线、机身和两只眼睛，16px 下也认得出来）。 -->
+  <rect width="64" height="64" rx="14" fill="#FB7299"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 15.5 27.5 21M42 15.5 36.5 21"/>
+    <rect x="12" y="21" width="40" height="26" rx="7"/>
+  </g>
+  <g fill="#FFFFFF">
+    <path d="M23.5 30.5c1.9 0 3.4 1.7 3.4 3.9v1.2c0 2.2-1.5 3.9-3.4 3.9s-3.4-1.7-3.4-3.9v-1.2c0-2.2 1.5-3.9 3.4-3.9Z"/>
+    <path d="M40.5 30.5c1.9 0 3.4 1.7 3.4 3.9v1.2c0 2.2-1.5 3.9-3.4 3.9s-3.4-1.7-3.4-3.9v-1.2c0-2.2 1.5-3.9 3.4-3.9Z"/>
+  </g>
+</svg>

@@ -241,6 +241,12 @@ func (r *Runner) runDownloadJob(ctx context.Context, j *model.Job, c *Ctl) error
 func (r *Runner) downloadAndMux(ctx context.Context, c *Ctl, video *model.Video, best model.Variant,
 	workDir, binPath, outBase, referer string, estimated int64, ad platform.Adapter) (string, error) {
 
+	// 音画分轨（B 站 1080P 以上）：画面一条流、声音一条流，交给 ffmpeg 两路输入合流。
+	// 这一档不能走自研分段下载器——它按「一条清单」下分片，装不下两条独立的流。
+	if best.AudioURL != "" {
+		return r.muxFromTwoURLs(ctx, c, video, best, outBase, referer, estimated)
+	}
+
 	// 直链 mp4（Pornhub 的 get_media 会回这种）不必分片：直接让 ffmpeg 流式拉取再 -c copy 封装。
 	if !strings.Contains(best.URL, ".m3u8") {
 		return r.muxFromURL(ctx, c, video, best, outBase, referer, estimated)
@@ -291,6 +297,19 @@ func (r *Runner) muxFromURL(ctx context.Context, c *Ctl, video *model.Video, bes
 	return r.enc.RemuxFromURL(ctx, best.URL, referer, ua, outBase, video.DurationSec, func(pct float64, written int64) {
 		c.Progress(pct*0.9, fmt.Sprintf("下载中（ffmpeg）%.0f%%", pct), 0, written, estimated)
 	})
+}
+
+// muxFromTwoURLs 把画面 + 声音两条流拉下来合流成一份文件。
+//
+// 进度靠 ffmpeg 的 -progress 报（和单条直拉那条路径一样按 0-90% 折算）。
+func (r *Runner) muxFromTwoURLs(ctx context.Context, c *Ctl, video *model.Video, best model.Variant,
+	outBase, referer string, estimated int64) (string, error) {
+
+	ua := "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+	return r.enc.RemuxFromURLs(ctx, best.URL, best.AudioURL, referer, ua, outBase, video.DurationSec,
+		func(pct float64, written int64) {
+			c.Progress(pct*0.9, fmt.Sprintf("下载中（音画合流）%.0f%%", pct), 0, written, estimated)
+		})
 }
 
 // pickVariant 取最高画质：优先用 5 分钟内的缓存，否则重新解析。

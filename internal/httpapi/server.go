@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/mario/myporn/internal/events"
 	"github.com/mario/myporn/internal/imgcache"
 	"github.com/mario/myporn/internal/jobs"
+	"github.com/mario/myporn/internal/muxcache"
 	"github.com/mario/myporn/internal/platform"
 	"github.com/mario/myporn/internal/proxying"
 	"github.com/mario/myporn/internal/secret"
@@ -39,6 +41,9 @@ type Server struct {
 	log    *slog.Logger
 	static fs.FS
 	images *imgcache.Service // 图片缓存（与同步任务共用同一份磁盘缓存）
+	// mux 是「音画分轨」档位的合流缓存（B 站 DASH 用）：第一次点播放时用 ffmpeg
+	// 把画面和声音合成一份 mp4 落盘，之后直接当文件发。runner 为 nil 时也是 nil。
+	mux *muxcache.Cache
 	// ytStream 是 YouTube「站内播放」的地址簿与解析缓存（M6 补的那条线）。
 	ytStream *ytstream.Manager
 	// ytMaster 缓存「解析过的 master 清单」。googlevideo 每拉一次 master 都会重新签名
@@ -60,6 +65,9 @@ func New(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg 
 		static: static, images: images, limiter: newLoginLimiter(), started: time.Now(),
 		clients:  map[string]*http.Client{},
 		ytMaster: map[string]cachedYtSource{},
+	}
+	if runner != nil {
+		s.mux = muxcache.New(filepath.Join(cfg.DataDir, "mux"), runner.Encoder())
 	}
 	// 解析器现取 yt-dlp：设置页换完路径，下一个请求就用新的。
 	s.ytStream = ytstream.NewManager(func(ctx context.Context, videoID string) (ytstream.Upstream, error) {
@@ -163,6 +171,8 @@ func (s *Server) Routes() http.Handler {
 			pr.Get("/videos/{id}/playback", s.handlePlayback)
 			// 本地库文件的直接下发（Range 续传）：下载过的影片不再依赖平台解析。
 			pr.Get("/videos/{id}/file", s.handleVideoFile)
+			// 音画分轨的档位（B 站 1080P+）：服务端合流成一份 mp4 再下发。
+			pr.Get("/videos/{id}/remux", s.handleVideoRemux)
 
 			pr.Get("/jobs", s.handleListJobs)
 			pr.Post("/jobs/{id}/cancel", s.handleCancelJob)
@@ -234,6 +244,10 @@ func isLongLived(path string) bool {
 	}
 	// 本地文件下发是整片传输，一部 4K 片子看两小时也可能一直连着。
 	if strings.HasSuffix(path, "/file") && strings.HasPrefix(path, "/api/videos/") {
+		return true
+	}
+	// 合流接口的第一请求要等 ffmpeg 跑完（长片十几秒），成品下发同样是一整片传输。
+	if strings.HasSuffix(path, "/remux") && strings.HasPrefix(path, "/api/videos/") {
 		return true
 	}
 	// YouTube 站内播放的分片：单片几秒，但接着一个 CDN 慢慢吐的时候也可能超 60s。

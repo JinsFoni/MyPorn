@@ -219,3 +219,24 @@ poster 1000×1500 / thumb 1280×720 / fanart 1920×1080 / nfo（含 `uniqueid ty
 后端 4.9 秒解析出 8 档画质（最高 2160p VP9 18.7 Mbps）→ 播放器以 3840×2160 起播、
 `readyState=4`、7 个分片请求全部指向 `/api/yt/seg/<会话>/<n>` → 画质菜单切 720p 后
 `videoWidth=1280` 且播放不中断 → 隐私模式下同样能播、页面里没有 iframe。
+
+## 七、bilibili 订阅（M7，`internal/platform/bilibili/`）
+
+> 2026-10-28 已真机核对（大陆家宽直连、未登录）：解析 / 订阅 / 列表第 1 页 / 播放 / 合流 / 下载全部走通，
+> 记录见 `docs/M7-BILIBILI.md` §7。下表是站点改版或换机器（换出口 IP）时的自查点。
+
+| 核对点 | 当前实现 | 对不上时的症状 |
+|---|---|---|
+| UP 主主页 | `space.bilibili.com/<mid>`、`m.bilibili.com/space/<mid>`、纯数字 mid 都认；`/video` 之类子路径忽略，跟踪参数（`?spm_id_from=`）忽略；`/video/BV…` 这种会明确报错「不支持按视频链接订阅」 | 贴了主页链接说解析失败 → 先看是不是 `space.bilibili.com/<mid>/upload/video` 这种没见过的路径 |
+| 资料 | `/x/web-interface/card?mid=`：`name` / `face` / `sign` / `follower` / `archive_count`；资料行只填「性别」「等级」 | 名字或粉丝数变成 0 → card 接口换了字段名（`data.card.name` 这一层不能看错） |
+| 增量列表 | App `/x/v2/space/archive/cursor`，签名 `md5(排序查询串 + appSecret)`，固定 20 条 | 报「B 站接口返回的不是 JSON」/code 非 0 → `appkey`/`appSecret` 被官方换掉，或接口加强校验（此时回落到 web 列表，会变慢但能跑） |
+| 回填列表 | web `/x/space/arc/search?ps=20&pn=N&order=pubdate&order_avoided=true`，1 次 / 20 秒 | 一直 `-799` / 412 → 出口 IP 被这个接口封了（**滚动封禁，别用探测当健康检查**），歇几小时；换 IP 立刻恢复 |
+| 「翻完了」的判定 | `count` / `ps` 算总页数，`pn > 总页数` 时接口回空 `vlist` | 回填一直卡在最后一页 → `count` 字段位置变了 |
+| 详情 | `/x/web-interface/view?bvid=`：title / pubdate / duration / tname / owner / pages[] | 封面或时长变空 → `data.pages[0].cid` 取错（多 P 投稿只取第 1 个 cid） |
+| 播放地址 | `/x/player/playurl?bvid=&cid=&qn=127&fnval=4048&fourk=1`：`durl[]` + `dash{video,audio}` | 只剩一两档 → 未登录（登录态才有 1080P+），或 `fnval` 被改（少给 dash 就少一批档） |
+| 合并规则 | durl 保底；DASH 跳过与 durl 同分辨率的档，其余照留；每档带上最高码率的音轨地址 | 下拉框出现两条同名档 → 合并规则被改坏 |
+| 媒体 CDN | `/api/stream` 放行 `bilivideo.com` / `bilivideo.cn`，补 `Referer: https://www.bilibili.com/` | 403 / 播放立刻中断 → 新 CDN 域名没加进 `streamHostSuffixes`，或 Referer 被去掉 |
+| 封面 | `i0.hdslb.com/...jpg@960w_540h_1c.webp`（不校验 Referer，67 KB） | 卡片封面裂开 → `thumbURL` 的缩放后缀变了 |
+| 分轨合流 | `ffmpeg -i video -i audio -map 0:v:0 -map 1:a:0? -c copy -movflags +faststart`，产物缓存 7 天 | 切到 480P 黑屏/一直转 → 看日志有没有 `分轨合流完成`；没有就是 playurl 或 ffmpeg 参数问题 |
+| 登录态 | 设置 → B 站 → Cookie（至少要 SESSDATA），`normalizeBiliCookie` 三种输入格式都认 | 填了还是 720P → 检查存的是不是 `SESSDATA=…` 整段（裸值也行，但别带 `Cookie:` 前缀以外的垃圾） |
+| 限流语义 | `platform.ErrRateLimited`：翻页途中被限流不算失败（已抓入库、断点保留、退避 3 小时） | 每天红一次且回填不动 → 哨兵没被 `errors.Is` 认出（各家必须包在 `platform.ErrRateLimited` 外面） |

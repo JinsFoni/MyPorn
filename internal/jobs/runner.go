@@ -400,7 +400,15 @@ func (r *Runner) onFailure(jobType string, j *model.Job, err error) {
 		return
 	}
 	// 失败退避 30 分钟，避免调度器每分钟重试造成风控。
-	if e := r.st.PostponeSync(p.SubscriptionID, 30*time.Minute, err.Error()); e != nil {
+	//
+	// 限流要退得更远：B 站 space 接口被封是「滚动的」——实测被封一个多小时后，
+	// 每 30 分钟去探一次就够给它续期了（间隔 35s/60s/60min 都照样 412）。
+	// 与其半小时一次地白撞，不如歇 3 小时，反正增量那条路走的是 App 接口。
+	delay := 30 * time.Minute
+	if errors.Is(err, platform.ErrRateLimited) {
+		delay = 3 * time.Hour
+	}
+	if e := r.st.PostponeSync(p.SubscriptionID, delay, err.Error()); e != nil {
 		r.log.Warn("记录同步失败状态失败", "subscription", p.SubscriptionID, "err", e)
 	}
 }

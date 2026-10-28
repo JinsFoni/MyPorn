@@ -25,6 +25,13 @@ import (
 // 判断不出 404 就分不清「翻完了」和「抓取出错」，回填会一直卡在「未完成」。
 var ErrNotFound = errors.New("上游 404：页面不存在")
 
+// ErrRateLimited 表示上游把我们拦住了（429 / B 站 -799、412 风控）：等一会儿再来就行。
+//
+// 和 ErrNotFound 一样是跨站哨兵，各家把私有错误包在它外面。用得上它的地方是同步任务：
+// 限流不该当「抓取出错」处理——已经抓到的页照常入库、断点照常保留，
+// 下一轮接着翻就行；否则一个被限流的号每天都会红一次，而它其实什么都没做错。
+var ErrRateLimited = errors.New("上游限流")
+
 // Page 是艺人影片列表的一页。
 type Page struct {
 	Items      []model.Video

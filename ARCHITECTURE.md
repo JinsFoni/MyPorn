@@ -526,3 +526,69 @@ type ProfileProvider interface {
 是**任何平台都不入库**的——解析时丢、写库时再兜一次、老数据在启动时清一次
 （`store.pruneProfileLabels`，幂等）。要改这个口径只需改 `model` 里那一张表，不用重扫艺人。
 
+
+## 13. bilibili：风控下的两条列表通道 + 分轨合流
+
+站点形态与另外三家完全不同：没有页面可解析，数据全在 JSON 接口里；而接口分两种脾气——
+资料 / 详情 / 播放地址（`/x/web-interface/card`、`/x/web-interface/view`、`/x/player/playurl`）
+随便调，空间投稿列表 `/x/space/arc/search` 却是全站风控最严的一个。浏览器能过是因为它带
+WBI 签名 + 一整套 `dm_*` 指纹 + 真实 TLS 指纹，服务端调 wbi 版一律 `-352 风控校验失败`，
+非 wbi 版能过但连打几次就 `-799`，再打变成 HTTP 412 封禁（实测一封一小时以上，且**每探一次像在续期**）。
+
+### 13.1 列表：增量走 App，回填走 web
+
+```
+增量（每 6h，第 1 页）  App  /x/v2/space/archive/cursor?appkey=…&sign=md5(q+appsec)
+                          无风控；固定 20 条；offset/pn/page 一律忽略（访客拿不到第 2 页）
+回填（断点续翻）        web  /x/space/arc/search?ps=20&pn=N
+                          1 次 / 20 秒 + 30s/60s 退避；被封就等，断点在库里
+```
+
+- 两个来源的页大小都取 **20**：App 接口只肯给 20（传 `ps=30/50` 还是 20），web 侧迁就它。
+  页大小不一致会让「第 1 页 20 条 + 第 2 页从第 21 条起」错位，中间那 30 条永远补不上。
+- App 接口的签名是 `md5(按 key 排序的查询串 + appSecret)`，`appkey/appSecret` 是安卓客户端里的公开常量，
+  不是破解什么；解析出的 20 条里 `goto != "av"` 的（番剧等）直接丢——它们点开播不了。
+
+### 13.2 限流不是错误，是节流
+
+新增跨站哨兵 `platform.ErrRateLimited`（和 `platform.ErrNotFound` 同一套路，各家把私有错误包在它外面），
+同步任务对它**不给红色**：
+
+| 情况 | 行为 |
+|---|---|
+| 第 1 页就被限流 | 任务失败（这一轮什么都没拿到），退避 **3 小时**（其它错误 30 分钟） |
+| 翻页途中被限流 | 任务成功：已抓入库、断点留在最后一页、文案「同步被限流中断，新增 N 部（断点已存，稍后自动接着翻）」 |
+
+3 小时这个数字来自实测：B 站的封是滚动的，半小时探一次的节奏足够给它续期，不如歇远一点。
+
+### 13.3 播放：单文件直出，分轨现场合流
+
+`playurl` 同时给 `durl[]`（单文件 mp4）和 `dash{}`（音视频两条独立 m4s）。未登录时 durl 到 720P、
+dash 只有 360/480P。合并规则：
+
+- durl 一档照留（单文件，`/api/stream` 直接播，不占合流）；
+- DASH 里**与 durl 同分辨率的那一档跳过**（否则下拉框里两条一模一样的 720p），更低/更高的照留。
+
+浏览器播不了分轨，所以 `Variant.AudioURL` 非空时前端拿到的是
+`/api/videos/{id}/remux?v=<variantID>`，服务端合流一次后当普通文件播：
+
+```
+handler → muxcache.Ensure(key="<videoID>-<variantID>")
+            命中磁盘 → http.ServeFile（Range 由标准库处理）
+            未命中   → ffmpeg -i video -i audio -map 0:v:0 -map 1:a:0? -c copy -movflags +faststart
+                       单飞（浏览器起播会并发打好几个 Range 请求）
+                       跑在 context.Background() 上（调用方断开不打断已开始的工作）
+                       TTL 7 天，10 分钟扫一次过期
+```
+
+签名地址几小时就过期，所以合流前会（在 produce 回调里）重新解析一次播放地址；成品按 key 缓存，
+过期的是**上游地址**而不是成品。下载复用同一判定：`best.AudioURL != ""` 就走
+`Encoder.RemuxFromURLs`（两路输入 + 每路各自的 `Referer`），估算体积用「视频带宽 + 音轨带宽」
+（实测 150,153,388 估算 vs 150,109,750 实际，差 0.03%）。
+
+### 13.4 画质与登录态
+
+未登录时接口照样把 4K / 1080P 列在 `accept_quality` 里，但 `dash.video` 只有 360/480P、
+durl 只到 720P——**以实际返回为准**。1080P 以上要填 `SESSDATA`（设置 → B 站），
+和 YouTube 的 `yt_cookies` 同一个位置、同一套「加密存、只在用的时候读」的处理。
+`normalizeBiliCookie` 认三种输入：整段 Cookie 头、裸的 SESSDATA 值、换行/制表符分隔的键值对，但必须含 SESSDATA。
