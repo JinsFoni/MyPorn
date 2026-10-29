@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -170,6 +171,29 @@ func (c *Cache) Snapshot(key string) Snapshot {
 		return Snapshot{State: StateFailed, Err: fail.err, Elapsed: time.Since(fail.at)}
 	}
 	return Snapshot{State: StateIdle}
+}
+
+// KeysWithPrefix 返回缓存里已经就绪、且 key 以 prefix 开头的那些（按文件名排序）。
+//
+// 用在「上游这会儿解析不出来，但成品还在盘上」的时候：YouTube 的 IP 级风控会让
+// yt-dlp 连续几分钟拿不到地址，可已经合好的 4K 文件跟上游一点关系都没有，没必要陪它一起失败。
+func (c *Cache) KeysWithPrefix(prefix string) []string {
+	entries, err := os.ReadDir(c.Dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".mp4") {
+			continue
+		}
+		key := strings.TrimSuffix(e.Name(), ".mp4")
+		if key == prefix || strings.HasPrefix(key, prefix) {
+			out = append(out, key)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Clear 抹掉某个 key 的失败记录，让下一次 Begin/Ensure 能重新试一遍。

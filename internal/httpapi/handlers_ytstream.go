@@ -62,6 +62,16 @@ func (s *Server) handleYtStreamInfo(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	src, err := s.ytStreamSource(ctx, row)
 	if err != nil {
+		// 上游这会儿解析不出来（最常见：YouTube 的 IP 级风控，几分钟内 yt-dlp 拿不到地址），
+		// 但已经合好的 4K 成品还在盘上——那跟上游一点关系都没有，别陪它一起失败。
+		if q := s.cachedYtQualities(row.VideoID); len(q) > 0 {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"videoId": row.VideoID, "title": row.Title, "durationSec": row.DurationSec,
+				"src": "", "qualities": q, "default": q[0].Height, "expiresAt": "",
+				"cachedOnly": true,
+			})
+			return
+		}
 		writeSocialErr(w, err)
 		return
 	}
@@ -78,6 +88,28 @@ func (s *Server) handleYtStreamInfo(w http.ResponseWriter, r *http.Request) {
 		"default":     best.Height,
 		"expiresAt":   src.up.ExpiresAt.UTC().Format(time.RFC3339),
 	})
+}
+
+// cachedYtQualities 把盘上已经合好的成品折成画质菜单（按高度降序）。
+//
+// 只用来兜「上游解析失败」那一种情况：菜单里只剩这些原生播放的档，HLS 那条路没有地址。
+// 码率/编码不报（成品就是成品，菜单里只需要档位名），前端照旧按 progressive 走 /file。
+func (s *Server) cachedYtQualities(videoID string) []ytQualityDTO {
+	if s.mux == nil {
+		return nil
+	}
+	prefix := "yt-" + videoID + "-"
+	out := []ytQualityDTO{}
+	for _, key := range s.mux.KeysWithPrefix(prefix) {
+		raw := strings.TrimSuffix(strings.TrimPrefix(key, prefix), "p")
+		h, err := strconv.Atoi(raw)
+		if err != nil || h <= 0 {
+			continue
+		}
+		out = append(out, ytQualityDTO{Height: h, Label: strconv.Itoa(h) + "p", Progressive: true})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Height > out[j].Height })
+	return out
 }
 
 // handleYtStreamMaster 出「只有一档画质」的 master 清单。

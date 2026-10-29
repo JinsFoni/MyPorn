@@ -297,3 +297,22 @@ func TestSafeName(t *testing.T) {
 		t.Errorf("空 key = %q", got)
 	}
 }
+
+// KeysWithPrefix 给「上游解析不出来、但成品还在盘上」那条兜底路用：
+// 只认已经写完的 .mp4，参数对不上的一律不算。
+func TestKeysWithPrefix(t *testing.T) {
+	dir := t.TempDir()
+	c := &Cache{Dir: dir}
+	for _, name := range []string{"yt-abc-2160p.mp4", "yt-abc-1440p.mp4", "yt-abcdX-720p.mp4", "86-1080p.av1.mp4"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := c.KeysWithPrefix("yt-abc-")
+	if len(got) != 2 || got[0] != "yt-abc-1440p" || got[1] != "yt-abc-2160p" {
+		t.Fatalf("前缀匹配不对: %v", got)
+	}
+	if got := c.KeysWithPrefix("yt-zzz-"); len(got) != 0 {
+		t.Fatalf("没有匹配时应当是空的: %v", got)
+	}
+}

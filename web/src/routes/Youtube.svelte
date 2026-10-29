@@ -923,7 +923,8 @@
             detail={prepDetail}
           />
           {#if playError}
-            <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center">
+            <!-- z-10 是必须的：VideoLoading 那层糊图是 z-5，压在它下面的话这行字根本看不见 -->
+            <div class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center">
               <p class="max-w-md text-ui text-fg/90">{playError}</p>
               <div class="flex flex-wrap items-center justify-center gap-2">
                 <button type="button" class="btn" onclick={retryStream}>重试</button>
@@ -935,8 +936,13 @@
               </div>
             </div>
           {:else if fallbackQuality}
-            <div class="absolute inset-x-0 bottom-3 flex justify-center">
-              <button type="button" class="btn btn-ghost" onclick={switchToFallback}>
+            <!-- 同上：不抬 z-index 会被那层糊图盖住（实测按钮在 DOM 里、画面上一个字看不到） -->
+            <div class="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center">
+              <button
+                type="button"
+                class="btn btn-ghost pointer-events-auto bg-ink/60 backdrop-blur-sm"
+                onclick={switchToFallback}
+              >
                 不想等？先看 {fallbackQuality.label}
               </button>
             </div>
@@ -968,6 +974,12 @@
             </div>
           {/if}
         </div>
+      {/if}
+
+      {#if stream?.cachedOnly}
+        <p class="mt-2 rounded-lg bg-panel px-3 py-2 text-meta text-dim">
+          YouTube 这会儿解析不出来（多半是出口 IP 被限流），先放已经合好的本地副本；换档要等它能解析。
+        </p>
       {/if}
 
       <!-- 标题在播放器之后：弹窗一眼先看到画面，标题紧挨着频道/播放量这一行 -->

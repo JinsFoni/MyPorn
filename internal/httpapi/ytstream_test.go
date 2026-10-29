@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,7 +17,9 @@ import (
 
 	"github.com/mario/myporn/internal/config"
 	"github.com/mario/myporn/internal/events"
+	"github.com/mario/myporn/internal/hls"
 	"github.com/mario/myporn/internal/imgcache"
+	"github.com/mario/myporn/internal/muxcache"
 	"github.com/mario/myporn/internal/platform"
 	"github.com/mario/myporn/internal/store"
 	"github.com/mario/myporn/internal/ytstream"
@@ -248,3 +251,52 @@ func parseSegRef(t *testing.T, body string) (sid, n string) {
 }
 
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
+
+// 4K 那一档要报「实际要播的那条」（AV1 13.5 Mbps），不是 HLS 里的 VP9 28.2 Mbps；
+// 其余档位照旧报 HLS。数字取自 2026-10-29 实测的 YFsMnJEbV1U。
+func TestYtQualitiesPrefersAV1TrackFor2160p(t *testing.T) {
+	variants := []hls.StreamVariant{
+		{Height: 2160, Bandwidth: 28220650, Codecs: "vp09.00.51.08,mp4a.40.2"},
+		{Height: 1440, Bandwidth: 14143470, Codecs: "vp09.00.50.08,mp4a.40.2"},
+		{Height: 1080, Bandwidth: 6234340, Codecs: "avc1.64002A,mp4a.40.2"},
+	}
+	tracks := []ytstream.Track{{Height: 2160, Codecs: "av01.0.13M.08", Bandwidth: 13461975}}
+
+	got := ytQualities(variants, tracks)
+	if len(got) != 3 {
+		t.Fatalf("画质档数 = %d，想要 3", len(got))
+	}
+	// Codecs 保留完整串（菜单里前端自己按 codecFamily 折成「AV1」）
+	if !got[0].Progressive || got[0].Bandwidth != 13461975 || got[0].Codecs != "av01.0.13M.08" {
+		t.Fatalf("2160p 应当按 AV1 报并且 progressive: %+v", got[0])
+	}
+	for _, q := range got[1:] {
+		if q.Progressive {
+			t.Fatalf("%s 不该走原生播放: %+v", q.Label, q)
+		}
+	}
+	if got[1].Bandwidth != 14143470 {
+		t.Fatalf("1440p 码率被改了: %+v", got[1])
+	}
+}
+
+// 上游解析不出来时，盘上已经合好的成品照样要能列出来（按高度降序）。
+func TestCachedYtQualities(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"yt-YFsMnJEbV1U-2160p.mp4", "yt-YFsMnJEbV1U-1440p.mp4", "yt-other-720p.mp4"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Server{mux: &muxcache.Cache{Dir: dir}}
+	got := s.cachedYtQualities("YFsMnJEbV1U")
+	if len(got) != 2 || got[0].Height != 2160 || got[1].Height != 1440 {
+		t.Fatalf("缓存档位不对: %+v", got)
+	}
+	if !got[0].Progressive || got[0].Label != "2160p" {
+		t.Fatalf("缓存档位应当标成 progressive: %+v", got[0])
+	}
+	if none := s.cachedYtQualities("nope"); len(none) != 0 {
+		t.Fatalf("没有缓存时应当是空的: %+v", none)
+	}
+}

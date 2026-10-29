@@ -842,6 +842,13 @@ export interface YtStreamInfo {
   default: number;
   /** 上游签名到期时间（RFC3339） */
   expiresAt: string;
+  /**
+   * 上游这会儿解析不出来，只回来了「盘上已经合好的那几档」（目前就是 4K）。
+   *
+   * 出现的场合：YouTube 的 IP 级风控让 yt-dlp 连续几分钟拿不到地址。成品在盘上，
+   * 跟上游没关系，所以照样能原生播放——但换档要等它能解析。
+   */
+  cachedOnly?: boolean;
 }
 
 export interface YtVideosPage {
