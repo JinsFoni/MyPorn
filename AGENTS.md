@@ -40,6 +40,17 @@ PORT=18081 YTDLP_PATH=/tmp/ytvenv/bin/yt-dlp nohup ./bin/myporn >> .tmp/run/run.
 
 数据库在 `.tmp/run/data/myporn.db`（**不是** `.tmp/myporn.db`，后者是早期踩坑留下的幻觉）。
 
+### 起服务必须让 `.env.local` 生效
+
+`cd` 到仓库根再 `./bin/myporn`（这样 `DATABASE_PATH` / `APP_ENCRYPTION_KEY` 都来自 `.env.local`）。
+
+**别在 shell 里临时 `export APP_ENCRYPTION_KEY=...`**：`config.LoadDotEnv` 不覆盖已存在的环境变量，
+随手导一个随机密钥就会静默盖掉 `.env.local` 里那把，代价是库里**所有** Cookie / Token 当场解不开
+（AES-GCM 验签失败），界面只会显示「未配置」——用户看到的是「我明明配过，怎么又让我配」
+（2026-10-29 真踩：`bili_cookie` 2336 字节密文再也解不开）。改完之后启动日志会打
+`ERROR 已存的 Cookie/Token … 解不开 fields=… 当前密钥指纹=… 写库时用的指纹=…`，
+指纹对不上就是这件事。详见 `docs/M7-BILIBILI.md` §7.10。
+
 ## 提交
 
 - 标题一行中文，动词开头，说清「改了什么」。禁止英文标题、禁止 `fix: xxx` 这类前缀。

@@ -205,6 +205,11 @@ export interface BiliChannelsResponse {
 export interface BiliHealth {
   /** 库里存了 Cookie（不等于登录成功，见 loggedIn） */
   hasCookie: boolean;
+  /**
+   * 存着，但服务端用当前 APP_ENCRYPTION_KEY 解不开（密钥换过 / 库是别处拷来的）。
+   * 这时候重填 Cookie 没用，得先让服务端用回当初那把密钥——所以绝不能显示成「未配置」。
+   */
+  cookieBroken: boolean;
   /** 真拿这条 Cookie 问过 nav：能不能用。配了 Cookie 却是 false，多半是粘错了格式 */
   loggedIn: boolean;
   /** nav 回的昵称（登录成功才有） */
@@ -334,6 +339,8 @@ export interface Settings {
 export interface BilibiliSettings {
   /** 配了 SESSDATA 才能拿 1080P 以上（未登录最高 720P） */
   hasCookie: boolean;
+  /** 存着但不是用当前加密密钥写的：解不开，重填之前得先把服务端密钥修回来 */
+  cookieBroken: boolean;
 }
 
 /** M6 YouTube 订阅的设置。Cookie 只写不读，只告诉前端「有没有配」 */
@@ -346,6 +353,8 @@ export interface YouTubeSettings {
   /** 留空 = 从 PATH 里找 yt-dlp */
   ytdlpPath: string;
   hasCookies: boolean;
+  /** 同 BilibiliSettings.cookieBroken：存着但解不开 */
+  cookiesBroken: boolean;
 }
 
 /** PUT /api/settings：字段均可选；token 单独写，响应不回显 */

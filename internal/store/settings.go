@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/mario/myporn/internal/secret"
 )
@@ -25,6 +26,9 @@ func (s *Store) SetSetting(key, value string) error {
 }
 
 // GetSecret 读取并用 box 解密敏感配置项。
+//
+// 密钥不匹配时返回包裹了 secret.ErrWrongKey 的错误——**不要**把这种错误当成「没配置」：
+// 界面上就会变成「请重新填一次」，而用户明明填过（2026-10-29 的真实投诉）。
 func (s *Store) GetSecret(box *secret.Box, key string) (string, error) {
 	var enc string
 	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ? AND encrypted = '1'`, key).Scan(&enc)
@@ -42,10 +46,78 @@ func (s *Store) SetSecret(box *secret.Box, key, plain string) error {
 	if err != nil {
 		return err
 	}
+	// 顺手把「写这条密文用的密钥指纹」也记下来：下次启动一比对就知道密钥换过没有。
+	if err := s.SetSetting("secret_key_fp", box.Fingerprint()); err != nil {
+		return err
+	}
 	_, err = s.db.Exec(`INSERT INTO settings (key, value, encrypted, updated_at) VALUES (?,?, '1', ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, encrypted = '1', updated_at = excluded.updated_at`,
 		key, enc, now())
 	return err
+}
+
+// SecretState 是三态答案，比 bool 多出来的那一态就是用户投诉的那个 bug。
+type SecretState int
+
+const (
+	// SecretAbsent：压根没存过（或存的是空串）。
+	SecretAbsent SecretState = iota
+	// SecretOK：存了，用当前密钥能解开。
+	SecretOK
+	// SecretWrongKey：存了，但解不开——密钥换过 / 库是别处拷来的。
+	SecretWrongKey
+)
+
+// SecretState 只回答「这个槽现在什么状态」，不回传明文。
+func (s *Store) SecretState(box *secret.Box, key string) (SecretState, error) {
+	var enc string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ? AND encrypted = '1'`, key).Scan(&enc)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SecretAbsent, nil
+	}
+	if err != nil {
+		return SecretAbsent, err
+	}
+	if strings.TrimSpace(enc) == "" {
+		return SecretAbsent, nil
+	}
+	plain, err := box.Decrypt(enc)
+	if err != nil {
+		if secret.IsWrongKey(err) {
+			return SecretWrongKey, nil
+		}
+		return SecretAbsent, err
+	}
+	if strings.TrimSpace(plain) == "" {
+		return SecretAbsent, nil
+	}
+	return SecretOK, nil
+}
+
+// UndecryptableSecrets 把库里所有加密字段用当前密钥试解一遍，返回解不开的键名。
+//
+// 启动时调一次：密钥配错的话，日志里当场就写清楚是哪些 Cookie 废了，
+// 而不是等用户发现「Cookie 又要重配」。
+func (s *Store) UndecryptableSecrets(box *secret.Box) ([]string, error) {
+	rows, err := s.db.Query(`SELECT key, value FROM settings WHERE encrypted = '1'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var bad []string
+	for rows.Next() {
+		var key, enc string
+		if err := rows.Scan(&key, &enc); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(enc) == "" {
+			continue // 清空时写进去的就是空串，解不开才怪
+		}
+		if _, err := box.Decrypt(enc); err != nil {
+			bad = append(bad, key)
+		}
+	}
+	return bad, rows.Err()
 }
 
 // SeedPlatform 预置平台信息（幂等，仅补默认值）。

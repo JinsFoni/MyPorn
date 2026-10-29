@@ -136,6 +136,9 @@ func (s *Server) handleBiliSeen(w http.ResponseWriter, r *http.Request) {
 //   - 480P 这类档位音画分轨，浏览器放不了，服务端要靠 ffmpeg 合成 mp4。
 type biliHealthDTO struct {
 	HasCookie bool `json:"hasCookie"`
+	// CookieBroken：库里存着 Cookie，但用当前 APP_ENCRYPTION_KEY 解不开。
+	// 这种情况重填 Cookie 也没用——要先让服务端用回当初那把密钥（见 secret.ErrWrongKey）。
+	CookieBroken bool `json:"cookieBroken"`
 	// LoggedIn / Uname 是真去打一次 nav 问出来的：只回答「存着的那条 Cookie 能不能用」。
 	// 2026-10-29 踩过：hasCookie=true 但存的是被拆坏的 cookies.txt 片段，界面装没事。
 	LoggedIn bool   `json:"loggedIn"`
@@ -151,10 +154,12 @@ func (s *Server) handleBiliHealth(w http.ResponseWriter, _ *http.Request) {
 	if s.runner != nil {
 		ffmpegOK = s.runner.Encoder().Check(ctx) == nil
 	}
+	hasCookie, cookieBroken := s.secretState("bili_cookie")
 	dto := biliHealthDTO{
-		HasCookie: s.hasBiliCookie(),
-		FFmpegOK:  ffmpegOK,
-		HasProxy:  s.px.For(platformBilibili) != "",
+		HasCookie:    hasCookie,
+		CookieBroken: cookieBroken,
+		FFmpegOK:     ffmpegOK,
+		HasProxy:     s.px.For(platformBilibili) != "",
 	}
 	// 只有真的存了 Cookie 才去问 nav：没存就没得问，省一次请求。
 	if dto.HasCookie {

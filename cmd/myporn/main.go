@@ -37,6 +37,36 @@ import (
 	"github.com/mario/myporn/internal/ytsub"
 )
 
+// reportKeyState 在启动时把「这个密钥和库里的密文对不对得上」摊到日志里。
+//
+// 为什么要有这一步：密钥一换（或者 shell 里残留的旧环境变量把 .env.local 盖掉——
+// LoadDotEnv 不覆盖已存在的变量），库里所有 Cookie 都解不开，而界面只会显示
+// 「未配置 Cookie，请填一个」。用户看到的就是「我明明配过了为什么又让我配」
+// （2026-10-29 的真实投诉：库里 2336 字节的 bili_cookie 好好的，就是解不开）。
+func reportKeyState(st *store.Store, box *secret.Box, logger *slog.Logger) {
+	fp := box.Fingerprint()
+	prev, err := st.GetSetting("secret_key_fp")
+	if err != nil {
+		logger.Warn("读取密钥指纹失败", "err", err)
+	}
+	bad, scanErr := st.UndecryptableSecrets(box)
+	switch {
+	case scanErr != nil:
+		logger.Warn("扫描加密字段失败", "err", scanErr)
+	case len(bad) > 0:
+		logger.Error("已存的 Cookie/Token 用当前 APP_ENCRYPTION_KEY 解不开，界面会显示成「未配置」",
+			"fields", strings.Join(bad, ","), "当前密钥指纹", fp, "写库时用的指纹", prev)
+	case prev != "" && prev != fp:
+		logger.Warn("密钥指纹和上次写入时不一致，但库里的密文都能解开", "当前", fp, "上次", prev)
+	}
+	// 只在「密钥和库里的密文一致」时记指纹。反过来先记一把错的，以后就没法比对了。
+	if prev == "" && len(bad) == 0 {
+		if err := st.SetSetting("secret_key_fp", fp); err != nil {
+			logger.Warn("写入密钥指纹失败", "err", err)
+		}
+	}
+}
+
 func main() {
 	var (
 		root       = flag.String("root", ".", "项目根目录（读取 .env.local 与相对路径）")
@@ -81,6 +111,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer st.Close()
+	reportKeyState(st, box, logger)
 
 	// 代理解析器只建一次：所有 HTTP 客户端都通过它取代理，于是「设置里改代理」即时生效。
 	px := proxying.New(st, cfg)

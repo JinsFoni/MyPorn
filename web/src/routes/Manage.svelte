@@ -1286,9 +1286,11 @@
               <span class={biliHealth.loggedIn ? 'text-sage' : 'text-brick'}>
                 {biliHealth.loggedIn
                   ? `已登录 ${biliHealth.uname}（1080P 可用）`
-                  : biliHealth.hasCookie
-                    ? 'Cookie 存了但没登录成功（最高 720P）'
-                    : '未填 Cookie（最高 720P）'}
+                  : biliHealth.cookieBroken
+                    ? 'Cookie 在库里但解不开（服务端密钥变了，重填之前先修密钥）'
+                    : biliHealth.hasCookie
+                      ? 'Cookie 存了但没登录成功（最高 720P）'
+                      : '未填 Cookie（最高 720P）'}
               </span>
               <span class={biliHealth.ffmpegOk ? 'text-sage' : 'text-brick'}>
                 {biliHealth.ffmpegOk ? 'ffmpeg 可用（分轨档位能合流）' : 'ffmpeg 缺失，480P 及以上放不了'}

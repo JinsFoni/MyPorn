@@ -28,8 +28,15 @@
     ffmpegAvailable: true,
     openlist: { baseUrl: 'http://192.168.0.108:5244', root: '/123云盘/资源目录/MyPorn', hasToken: true },
     social: { syncHours: 6, hasInstagramCookie: false },
-    youtube: { syncHours: 6, backfillLimit: 200, format: '', ytdlpPath: '', hasCookies: false },
-    bilibili: { hasCookie: false },
+    youtube: {
+      syncHours: 6,
+      backfillLimit: 200,
+      format: '',
+      ytdlpPath: '',
+      hasCookies: false,
+      cookiesBroken: false,
+    },
+    bilibili: { hasCookie: false, cookieBroken: false },
   };
 
   /** 侧边栏分类：左侧栏在弹窗里切换，右侧只渲染当前这一块 */
@@ -751,8 +758,18 @@
                     <div class="mt-5">
                       <div class="flex items-center justify-between">
                         <label for="yt-cookie" class="label-meta">Cookie（可选）</label>
-                        <span class="text-meta {settings.youtube.hasCookies ? 'text-sage' : 'text-dim'}">
-                          {settings.youtube.hasCookies ? '已配置' : '未配置'}
+                        <span
+                          class="text-meta {settings.youtube.cookiesBroken
+                            ? 'text-brick'
+                            : settings.youtube.hasCookies
+                              ? 'text-sage'
+                              : 'text-dim'}"
+                        >
+                          {settings.youtube.cookiesBroken
+                            ? '存了但解不开'
+                            : settings.youtube.hasCookies
+                              ? '已配置'
+                              : '未配置'}
                         </span>
                       </div>
                       <p class="mt-1 text-meta text-dim">
@@ -763,7 +780,7 @@
                       <textarea
                         id="yt-cookie"
                         class="field mt-2 h-28 resize-y font-mono text-meta"
-                        placeholder={settings.youtube.hasCookies
+                        placeholder={settings.youtube.hasCookies || settings.youtube.cookiesBroken
                           ? '已保存 · 留空表示不修改'
                           : '# Netscape HTTP Cookie File —— 一整份 cookies.txt，或 SID=…; HSID=…'}
                         spellcheck="false"
@@ -783,10 +800,27 @@
                     <div class="mt-5">
                       <div class="flex items-center justify-between">
                         <label for="bili-cookie" class="label-meta">Cookie</label>
-                        <span class="text-meta {settings.bilibili.hasCookie ? 'text-sage' : 'text-dim'}">
-                          {settings.bilibili.hasCookie ? '已配置' : '未配置'}
+                        <span
+                          class="text-meta {settings.bilibili.cookieBroken
+                            ? 'text-brick'
+                            : settings.bilibili.hasCookie
+                              ? 'text-sage'
+                              : 'text-dim'}"
+                        >
+                          {settings.bilibili.cookieBroken
+                            ? '存了但解不开'
+                            : settings.bilibili.hasCookie
+                              ? '已配置'
+                              : '未配置'}
                         </span>
                       </div>
+                      {#if settings.bilibili.cookieBroken}
+                        <p class="mt-1 text-meta text-brick">
+                          Cookie 在库里，但服务端现在这把 APP_ENCRYPTION_KEY
+                          解不开它（密钥换过，或启动时被环境变量盖掉了）。重填没用——先用当初那把密钥重启服务；
+                          确实找不回密钥就重填一次，旧的那条已经废了。
+                        </p>
+                      {/if}
                       <p class="mt-1 text-meta text-dim">
                         不填也能看，但最高只有 720P（未登录时 B 站只给 480P 的 DASH 和 720P 的单文件）。
                         1080P 必须登录：整段 Cookie 头（至少含 <span class="text-muted">SESSDATA</span>）、
@@ -797,7 +831,7 @@
                       <textarea
                         id="bili-cookie"
                         class="field mt-2 h-24 resize-y font-mono text-meta"
-                        placeholder={settings.bilibili.hasCookie
+                        placeholder={settings.bilibili.hasCookie || settings.bilibili.cookieBroken
                           ? '已保存 · 留空表示不修改'
                           : 'SESSDATA=xxxxxx%2Cyyyyyy%2C…; bili_jct=…; DedeUserID=…'}
                         spellcheck="false"

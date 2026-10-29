@@ -1,8 +1,23 @@
 package httpapi
 
 import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mario/myporn/internal/config"
+	"github.com/mario/myporn/internal/events"
+	"github.com/mario/myporn/internal/imgcache"
+	"github.com/mario/myporn/internal/platform"
+	"github.com/mario/myporn/internal/secret"
+	"github.com/mario/myporn/internal/store"
 )
 
 // 用户实际粘过的三种形状都要认。第 3 种（cookies.txt）以前会被拆成两百多个假字段，
@@ -86,4 +101,83 @@ func TestNormalizeBiliCookieRejects(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 库里有密文、但服务端这把密钥解不开时，接口必须给出 cookieBroken，
+// 而不是像「没配」那样 hasCookie=false 了事。
+//
+// 真人踩过（2026-10-29）：服务被另一套 APP_ENCRYPTION_KEY 起过一次，库里 2336 字节的
+// bili_cookie 就解不开了，页面显示「没填 B 站 Cookie」，用户以为要重配一遍。
+func TestBrokenSecretIsNotReportedAsMissing(t *testing.T) {
+	box := newTestSecretBox(t)    // 服务端现在这把
+	writer := newTestSecretBox(t) // 当初写库那把（另一把密钥 = 换过密钥的现场）
+
+	tmp := t.TempDir()
+	st, err := store.Open(filepath.Join(tmp, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.SetSecret(writer, "bili_cookie", "SESSDATA=abc%2C1%2Cxyz; DedeUserID=1"); err != nil {
+		t.Fatal(err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.Config{DataDir: tmp, LibraryRoot: filepath.Join(tmp, "media")}
+	srv := New(cfg, st, platform.NewRegistry(), nil, events.NewHub(), nil, box, log, nil,
+		imgcache.New(t.TempDir(), nil, "", log))
+
+	// 设置接口：未配置 + 解不开，两个标志位都要对。
+	rec := httptest.NewRecorder()
+	srv.handleGetSettings(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	var settings struct {
+		Bilibili struct {
+			HasCookie    bool `json:"hasCookie"`
+			CookieBroken bool `json:"cookieBroken"`
+		} `json:"bilibili"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &settings); err != nil {
+		t.Fatalf("解析设置: %v (%s)", err, rec.Body.String())
+	}
+	if settings.Bilibili.HasCookie || !settings.Bilibili.CookieBroken {
+		t.Fatalf("应 hasCookie=false / cookieBroken=true，得到 %+v", settings.Bilibili)
+	}
+
+	// 健康检查也要带出来：/bilibili 页的横幅就是按它分支的。
+	rec = httptest.NewRecorder()
+	srv.handleBiliHealth(rec, httptest.NewRequest(http.MethodGet, "/api/bilibili/health", nil))
+	var health struct {
+		HasCookie    bool `json:"hasCookie"`
+		CookieBroken bool `json:"cookieBroken"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
+		t.Fatalf("解析健康检查: %v (%s)", err, rec.Body.String())
+	}
+	if health.HasCookie || !health.CookieBroken {
+		t.Fatalf("健康检查应 hasCookie=false / cookieBroken=true，得到 %+v", health)
+	}
+
+	// 换成当初那把密钥：同一个库立刻恢复正常（说明问题在密钥，不在数据）。
+	srv.box = writer
+	rec = httptest.NewRecorder()
+	srv.handleGetSettings(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if !settings.Bilibili.HasCookie || settings.Bilibili.CookieBroken {
+		t.Fatalf("换回原作者密钥后应 hasCookie=true / cookieBroken=false，得到 %+v", settings.Bilibili)
+	}
+}
+
+func newTestSecretBox(t *testing.T) *secret.Box {
+	t.Helper()
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	box, err := secret.New(base64.StdEncoding.EncodeToString(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return box
 }

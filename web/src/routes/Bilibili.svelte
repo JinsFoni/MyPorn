@@ -248,8 +248,24 @@
 
 <div class="flex flex-col gap-4">
 
+  <!-- 存了 Cookie 但解不开：这是服务端的密钥问题，不是「没配置」。
+       2026-10-29 踩过：服务被另一把 APP_ENCRYPTION_KEY 起过一次，库里 2336 字节的
+       bili_cookie 再也解不开，页面却显示「没填 Cookie」，用户以为要重配一遍。 -->
+  {#if health && !health.hasCookie && health.cookieBroken}
+    <div class="flex items-start gap-2 rounded-xl bg-panel px-3 py-2 text-meta text-muted">
+      <span class="mt-0.5 text-brick">●</span>
+      <p>
+        库里有 Cookie，但服务端这把 APP_ENCRYPTION_KEY 解不开它（密钥换过，或被环境变量盖掉了）。
+        重填之前先把服务端密钥修回当初那把；找不到就重填一次，旧的那条已经废了。
+        <button type="button" class="underline underline-offset-2" onclick={() => ui.openSettings('bilibili')}>
+          重新填
+        </button>
+      </p>
+    </div>
+  {/if}
+
   <!-- 未登录：这不是故障，是 B 站的规则（未登录只给 720P / 480P）。 -->
-  {#if health && !health.hasCookie}
+  {#if health && !health.hasCookie && !health.cookieBroken}
     <div class="flex items-start gap-2 rounded-xl bg-panel px-3 py-2 text-meta text-muted">
       <span class="mt-0.5 text-dim">●</span>
       <p>

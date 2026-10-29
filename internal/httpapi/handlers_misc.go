@@ -14,6 +14,7 @@ import (
 	"github.com/mario/myporn/internal/library"
 	"github.com/mario/myporn/internal/model"
 	"github.com/mario/myporn/internal/social/igram"
+	"github.com/mario/myporn/internal/store"
 )
 
 // socialSyncHours 把设置里的字符串夹到合理区间（1–48 小时）。
@@ -74,8 +75,13 @@ type settingsDTO struct {
 //
 // 为什么要 Cookie：未登录时 B 站只肯给 720P（durl）和 480P（dash），
 // 1080P 起必须登录。Cookie 与 YouTube 那套一样只写不读，只回答「配没配」。
+//
+// CookieBroken 是第三态：存着，但用当前 APP_ENCRYPTION_KEY 解不开。
+// 没有它，界面只能把「解不开」当「没配」显示，用户就会问「我明明配过为什么又让我配」
+// （2026-10-29 的真实投诉：库里 2336 字节密文好好在那，就是解不开）。
 type bilibiliDTO struct {
-	HasCookie bool `json:"hasCookie"`
+	HasCookie    bool `json:"hasCookie"`
+	CookieBroken bool `json:"cookieBroken"`
 }
 
 // bilibiliPatch 传 "" 表示清空 Cookie。
@@ -83,10 +89,22 @@ type bilibiliPatch struct {
 	Cookie *string `json:"cookie"`
 }
 
+// secretState 把「配没配」拆成两件事：有值 / 有值但解不开。
+//
+// 解不开绝不能当成没配——那会让用户白白再填一遍，而问题在服务端（密钥）。
+func (s *Server) secretState(key string) (has, broken bool) {
+	st, err := s.st.SecretState(s.box, key)
+	if err != nil {
+		s.log.Warn("读取密钥状态失败", "key", key, "err", err)
+		return false, false
+	}
+	return st == store.SecretOK, st == store.SecretWrongKey
+}
+
 // hasBiliCookie 只回答「配没配」，不回传明文。
 func (s *Server) hasBiliCookie() bool {
-	v, err := s.st.GetSecret(s.box, "bili_cookie")
-	return err == nil && strings.TrimSpace(v) != ""
+	has, _ := s.secretState("bili_cookie")
+	return has
 }
 
 // normalizeBiliCookie 把用户粘进来的各种形状整理成一条 Cookie 头。
@@ -228,6 +246,8 @@ type youtubeDTO struct {
 	Format        string `json:"format"`
 	YtDlpPath     string `json:"ytdlpPath"`
 	HasCookies    bool   `json:"hasCookies"`
+	// CookiesBroken 同 bilibiliDTO.CookieBroken：存着但解不开，别当没配。
+	CookiesBroken bool `json:"cookiesBroken"`
 }
 
 // youtubePatch 是设置里可以改的 YouTube 项；Cookies 传 "" 表示清空。
@@ -286,8 +306,8 @@ func youtubeInt(raw string, def, min, max int) int {
 
 // hasYtCookies 只回答「配没配」，不回传明文。
 func (s *Server) hasYtCookies() bool {
-	v, err := s.st.GetSecret(s.box, "yt_cookies")
-	return err == nil && strings.TrimSpace(v) != ""
+	has, _ := s.secretState("yt_cookies")
+	return has
 }
 
 type olDTO struct {
@@ -317,6 +337,9 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 		defaultLibID = def.ID
 	}
 	ffmpegOK := s.runner != nil && s.runner.Encoder().Check(context.Background()) == nil
+	// 三态读一遍：存着能解开（has）/ 存着解不开（broken）。解不开不能显示成「未配置」。
+	hasYt, brokenYt := s.secretState("yt_cookies")
+	hasBili, brokenBili := s.secretState("bili_cookie")
 	return settingsDTO{
 		SyncIntervalHours: syncHours,
 		GlobalProxy:       get("global_proxy", s.cfg.GlobalProxy),
@@ -350,9 +373,10 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 			BackfillLimit: youtubeInt(get("yt_backfill_limit", "200"), 200, 10, 2000),
 			Format:        get("yt_format", ""),
 			YtDlpPath:     get("ytdlp_path", ""),
-			HasCookies:    s.hasYtCookies(),
+			HasCookies:    hasYt,
+			CookiesBroken: brokenYt,
 		},
-		Bilibili: bilibiliDTO{HasCookie: s.hasBiliCookie()},
+		Bilibili: bilibiliDTO{HasCookie: hasBili, CookieBroken: brokenBili},
 	}
 }
 

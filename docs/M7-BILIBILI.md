@@ -373,6 +373,35 @@ PCDN 不是永远慢（单条 30 MB range 实测 7.29 MB/s，跟官方镜像 7.5
 一次实测写满 649 MB 后 3 分半零字节、连接没断、ffmpeg 无 CPU。所以除了排序，输入侧还挂了
 `-rw_timeout 30000000 -reconnect 1 -reconnect_streamed 1 -reconnect_on_network_error 1`。
 
+## 7.10 「明明配过 Cookie，界面又让我重配」（2026-10-29 实测修掉）
+
+症状：设置里显示「未配置 Cookie」，/bilibili 顶部横幅提示去填一个。但库里那条 `bili_cookie`
+好好地待在 `settings` 表里（`encrypted=1`，2336 字节，当天 06:23 UTC 写的）。
+
+量到的事实：
+
+| 步骤 | 结果 |
+|---|---|
+| `SELECT length(value) FROM settings WHERE key='bili_cookie'` | 2336 字节，`encrypted=1` |
+| 用仓库 `.env.local` 里的 `APP_ENCRYPTION_KEY` 解它 | `cipher: message authentication failed` |
+| 让**当时正在跑的那个服务**新写一条密钥，再用同一把密钥解 | 同样解不开 |
+| 启动日志（改完之后加的） | `ERROR 已存的 Cookie/Token … 解不开 fields=bili_cookie 当前密钥指纹=nfrgtL7X 写库时用的指纹=""` |
+
+结论：**不是没配，是解不开**——库里的密文是另一把 `APP_ENCRYPTION_KEY` 写的。这条路径
+只有在 AES-GCM 验签失败时才出现，最可能的两种来路：密钥换过；或者启动时的 shell 里残留
+`APP_ENCRYPTION_KEY`（`config.LoadDotEnv` 不覆盖已存在的环境变量，于是 `.env.local` 被静默盖掉）。
+
+三处改动（都为了「别再让人白填一遍」）：
+
+1. `secret.Box.Decrypt` 把验签失败包成 `secret.ErrWrongKey`，并给出 `Fingerprint()`
+   （密钥 sha256 前 6 字节，可写日志、不可还原）；
+2. `store.SecretState` 变成三态（`Absent` / `OK` / `WrongKey`），`SetSecret` 顺手记
+   `secret_key_fp`，启动时 `reportKeyState` 比对并打日志；
+3. 接口加 `cookieBroken`（`/api/settings` 的 `bilibili`、`/api/bilibili/health`），
+   前端三处（/bilibili 横幅、管理 → B 站 健康行、设置 → B 站）都按它显示「存了但解不开」。
+
+注意：密文用 AES-GCM，密钥丢了**不可能**恢复。这条记录只能重填一次（重填时会用当前密钥加密）。
+
 ## 8. 已知限制 / 取舍
 
 1. **多 P 投稿只取第 1 个 `cid`**。合集型投稿（一部视频挂几十个分 P）在墙上只出现一条，点开播的是第 1 P。
