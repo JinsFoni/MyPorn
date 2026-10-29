@@ -876,6 +876,20 @@ GET /api/yt/seg/{sid}/{n}
 会话寿命跟着上游的 `expire` 走，另加 10 分钟宽限（播放器可能攥着上一版清单）；
 另有上限 64 个会话、满了按 FIFO 淘汰。`handleYtStreamSeg` 被算作长连接接口。
 
+```
+GET /api/yt/videos/{id}/file[?q=高度][&status=1]
+→ 200 video/mp4 (Range/206)        4K 的合流产物（`<video>` 原生播放）
+→ 200 {state,percent,elapsedSec}   `status=1`：进度，前端轮询到 ready 再拿文件
+→ 502 mux_failed | 504 mux_timeout 合流失败/超时（失败后会自动换一批地址再试一次）
+```
+
+4K（2160p）不走 HLS：YouTube 的 HLS 里这一档只有 VP9 28.2 Mbps，而 DASH 的 AV1 只要
+13.5 Mbps，且原生 `<video>` 绕开了 MSE 上每 5–30 秒一次的 VP9 4K 解码崩溃。
+服务端把「AV1 画面 + AAC 音轨」用 ffmpeg `-c copy` 合成一份 mp4 落盘缓存
+（`yt-<videoID>-2160p.mp4`，实测 540 MB / 4 分钟，之后秒开、Range 拖动全支持）。
+`/stream` 返回的画质列表里这一档带 `"progressive": true`，`bandwidth`/`codecs` 报的是 AV1 那条。
+细节与踩过的坑见 `docs/M6-YOUTUBE.md` §14.10。
+
 **为什么不用 iframe**：一批版权音乐视频在 `youtube-nocookie.com/embed/…` 里直接显示
 「此视频不能观看」（用一张裸 HTML 页面复现过，跟本应用无关），而服务端代理出来能正常播。
 详情见 `docs/M6-YOUTUBE.md` §14。

@@ -573,3 +573,51 @@ YouTube 原站点同一台机器流畅，说明链路够、也说明问题在我
 - **YouTube 的 4K 在 HLS 里只有 VP9，没有 AV1**：master 的 2160p 变体是 `vp09.00.51.08` 28.2 Mbps；
   DASH（`protocol=https`）才有 `av01.0.13M.08` 2160p60 **13 461 975 bps**（刚好一半）。
   也就是说链路余量只有 1.5–2 倍，想再稳一点的正路是补 AV1/DASH，不是继续调缓冲。
+
+### 14.10 4K 换成原生播放（AV1 + DASH），MSE 那条路不再碰
+
+§14.9 的三处修完之后 4K 还是卡（用户 2026-10-29 第二次反馈）。复测确认卡顿有两个来源，
+而两个都不是「再把缓冲调大」能解决的：
+
+| 观测量（YFsMnJEbV1U，321 s，1440×900 窗口） | 数值 |
+|---|---|
+| HLS 里 2160p 唯一那一档 | `vp09.00.51.08`，**28 220 650 bps**（1.06 GB）→ 要 3.5 MB/s 才跟得上 |
+| 本机单连接实测 | 3.5–8.4 MB/s（余量 1–2 倍，缓冲攒不起来） |
+| 改前 40 秒采样 | **卡 13 次**，`currentTime` 钉在 32.39、`buffered` 到 32.4 就断 |
+| DASH 的 AV1 2160p（itag 401） | `av01.0.13M.08`，**13 461 975 bps**（540 MB）→ 只要一半带宽 |
+| 改后 50 秒采样（原生 `<video>`） | `currentTime` 0.97 → 50.18（每秒整 1 s）、**0 次卡顿**、0 条媒体错误、`readyState` 恒 4 |
+
+另一个来源是 MSE 本身：这台机器的 VideoToolbox 在 MSE 上放 VP9 4K 每 5–30 秒崩一次
+（`PIPELINE_STATUS_ERROR` / `PIPELINE_ERROR_DECODE`，见 §14.9 的自愈补丁），而同一份字节用原生
+`<video>` 播放零错误。所以结论是**绕开 MSE**，而不是继续加自愈次数。
+
+做法（复用 B 站 4K 那条现成的合流缓存 `internal/muxcache`）：
+
+1. `ytsub.ResolveStream` 顺带从 `formats[]` 里挑出「只有画面」的 AV1 mp4 直链（+ 一条 AAC 音轨，
+   实测 itag 140 / 129 kbps / 5.2 MB），存进 `DashTrack`。只认 `av01* + mp4 + https + aac`：
+   VP9 那条是 webm 且 26.3 Mbps，码率翻倍没有意义。
+2. `GET /api/yt/videos/{id}/file?q=2160` 用 ffmpeg `-c copy` 把两条流合一份 mp4 落盘缓存
+   （`.tmp/run/data/mux/yt-<videoID>-2160p.mp4`），再按普通文件发——Range/206、拖进度条全都白拿。
+   `?status=1` 立刻回 `{state,percent,elapsedSec}`，前端轮询到 ready 才把地址交给 `<video>`。
+3. 画质菜单里这一档报的是**实际要播的那条**（AV1 13.5 Mbps），不是 HLS 的 VP9 28.2 Mbps，
+   并且带 `progressive: true`；前端据此走 `engine="native"`。
+4. 只有 2160p 走这条路（`h >= 2160`）；1440p 及以下的 VP9 码率在实测带宽下还跟得上，
+   没必要多等一次合流。
+
+实测合流耗时（同一台机器、同一时段）：**545 735 981 字节 / 4 分 0.5 秒**（单连接 ≈2.27 MB/s）。
+第一次点开 4K 要等这么久，所以等待位上写了百分比 + 「不想等？先看 1440p」的按钮；
+合好之后同一档秒开（缓存 TTL 7 天）。
+
+#### 一个必须记住的坑：yt-dlp 要解 n 挑战，否则 4K 地址是「半残」的
+
+不带 `--remote-components ejs:github` 时，AV1 画面与 m4a 音轨拿到的地址**头几 MB 能下、随后一律 403**
+（yt-dlp 自己也在 1.9% 处 `HTTP Error 403`，ffmpeg 直接 403，curl 302 跟过去还是 403）。
+本机有 deno，求解脚本从 yt-dlp-ejs 的 GitHub 拉一份（之后走缓存），同一个 itag 401 地址就能连续下完 540 MB。
+所以 `ytsub.commonArgs` 一律带这个参数；老版本 yt-dlp 不认它时，`run`/`Download` 会认出
+`unrecognized arguments` 并自动重跑一遍不带它的命令（`rcBad` 置位后永久不再带，免得把整个 YouTube 功能弄挂）。
+
+同时记一笔**风控用量的边界**：连续解析十几次之后，同一批地址会在几分钟内全部 403
+（冷却约 6 分钟后恢复；更换解析会换一批 CDN 边，但撞上 IP 级限流时换哪条都一样）。
+排查时别把「刚 403、过一会儿又好了」当成代码 bug——判断依据是**同一条地址的 403 是否立刻出现**，
+而不是「有没有 403」。因此合流失败时服务端会丢掉解析缓存重试一次（`ytstream.Manager.Forget`），
+用户点「重试」也会清掉 5 分钟的失败备忘（`muxcache.Cache.Clear`）。

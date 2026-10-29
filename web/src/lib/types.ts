@@ -819,6 +819,14 @@ export interface YtStreamQuality {
   label: string;
   bandwidth: number;
   codecs: string;
+  /**
+   * 这一档不走 HLS/MSE，而是服务端合流成 mp4 交给原生 `<video>`。
+   *
+   * 目前只有 2160p 为 true：HLS 里 4K 只有 VP9 28.2 Mbps（实测 40 秒卡 13 次），
+   * 而 DASH 的 AV1 只有 13.5 Mbps，原生播放还绕开了 MSE 上每 5~30 秒一次的 4K 解码崩溃。
+   * 代价是第一次要等整条流下完才能起播（540 MB，1~3 分钟），之后落盘缓存秒开。
+   */
+  progressive?: boolean;
 }
 
 /** 站内在线播放的解析结果：一个 HLS 地址 + 可选画质 */

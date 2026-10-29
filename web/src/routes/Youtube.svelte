@@ -22,9 +22,22 @@
   import { privacy } from '../lib/privacy.svelte';
   import { ui } from '../lib/ui.svelte';
   import { patchQuery, router, setPageTitle } from '../lib/router.svelte';
-  import { formatBandwidth, formatCount, formatDateTime, relativeTime } from '../lib/format';
-  import { HLS_TYPE, codecFamily, type QualityOption } from '../lib/player';
-  import type { YtChannel, YtHealth, YtResolve, YtStreamInfo, YtVideo } from '../lib/types';
+  import {
+    formatBandwidth,
+    formatBytes,
+    formatCount,
+    formatDateTime,
+    relativeTime,
+  } from '../lib/format';
+  import { HLS_TYPE, MP4_TYPE, codecFamily, type QualityOption } from '../lib/player';
+  import type {
+    YtChannel,
+    YtHealth,
+    YtResolve,
+    YtStreamInfo,
+    YtStreamQuality,
+    YtVideo,
+  } from '../lib/types';
 
   type Mode = 'all' | 'unseen' | 'saved';
 
@@ -90,6 +103,20 @@
   let useEmbed = $state(false);
   /** 重试用：变一下就重建播放器 */
   let streamAttempt = $state(0);
+  /**
+   * 4K 那一档的「服务端合流」等待中状态（`quality.progressive`）。
+   *
+   * 为什么要等：YouTube 的 HLS 里 2160p 只有 VP9 28.2 Mbps（1.06 GB），实测 40 秒卡 13 次；
+   * 换成 DASH 的 AV1 只要 13.5 Mbps，但音画是分开的两条流，得先由服务端合成一份 mp4
+   * （540 MB，实测 4 分 0.5 秒）。这段时间画面上给百分比，不然用户只会得出「这档放不了」。
+   */
+  let prep = $state<{ height: number; percent: number; elapsedSec: number; bytes: number } | null>(
+    null,
+  );
+  /** 合流产物已就绪：这时才把 /file 地址交给播放器（在那之前那个请求会挂好几分钟） */
+  let fileReady = $state(false);
+  /** 切档要停掉上一次的轮询 */
+  let prepToken = 0;
   /**
    * 已经拿到的解析结果（悬停预热的那份）。一次点击原来要等 yt-dlp 4~5 秒，
    * 悬停/聚焦时就先要过来，点下去时通常已经是热缓存。
@@ -292,6 +319,9 @@
     useEmbed = false;
     streamHeight = null;
     selectedQualityId = null;
+    prep = null;
+    fileReady = false;
+    prepToken += 1;
     setPageTitle(video.title);
     if (!video.seen) void markSeen([video.id]);
     // 深度回填来的条目没有发布时间：点开时单独补一条（4 秒），不批量拉
@@ -338,6 +368,10 @@
       await import('@videojs/html/media/hlsjs-video');
       stream = cachedStream(video) ?? (await api.ytStream(video.id));
       selectedQualityId = qualityIdFor(stream, null);
+      // 默认档是 4K（progressive）的话，解析一回来就开始合流，把等待压在前面
+      const info = stream;
+      const first = qualityAt(info, null);
+      if (info && first?.progressive === true) void prepareFile(info, first.height);
     } catch (err) {
       streamError = messageFor(err);
     } finally {
@@ -352,10 +386,91 @@
     return `${h}p`;
   }
 
-  /** 当前片源地址：切画质就是换 ?q=。 */
+  /** 取某一档（null = 默认最高）。 */
+  function qualityAt(info: YtStreamInfo | null, height: number | null): YtStreamQuality | null {
+    if (!info || info.qualities.length === 0) return null;
+    const h = height ?? info.default;
+    return info.qualities.find((q) => q.height === h) ?? null;
+  }
+
+  /** 当前这一档（决定走不走原生播放）。 */
+  const activeQuality = $derived(qualityAt(stream, streamHeight));
+  /** 这一档要不要服务端先合流（目前只有 2160p）。 */
+  const usesNative = $derived(activeQuality?.progressive === true);
+
+  /** HLS 地址：切画质就是换 ?q=。 */
   const streamSrc = $derived(
     stream ? (streamHeight ? `${stream.src}?q=${streamHeight}` : stream.src) : '',
   );
+  /** 原生地址：合流产物就绪之前是空串（空串时不渲染播放器，改画合流进度）。 */
+  const nativeSrc = $derived(
+    usesNative && fileReady && detail && activeQuality
+      ? `/api/yt/videos/${detail.id}/file?q=${activeQuality.height}`
+      : '',
+  );
+  const playbackSrc = $derived(usesNative ? nativeSrc : streamSrc);
+  const playbackType = $derived(usesNative ? MP4_TYPE : HLS_TYPE);
+  const playbackEngine = $derived<'hls' | 'native'>(usesNative ? 'native' : 'hls');
+
+  /** 画面上那行进度说明：只在等的时候有字（见 VideoLoading 的 detail 注释）。 */
+  const prepDetail = $derived.by(() => {
+    if (!prep) return null;
+    const size = prep.bytes > 0 ? `约 ${formatBytes(prep.bytes)} · ` : '';
+    return `${size}已下 ${String(Math.round(prep.percent))}% · 等 ${String(prep.elapsedSec)} 秒 · 合好之后这一档秒开`;
+  });
+
+  /**
+   * 等 4K 那一档合好（轮询进度），ready 之后把 /file 交给播放器。
+   *
+   * 失败要么写进 playError（给重试按钮），要么画在等待位上——都没必要把整块播放区
+   * 丢给一行错误文字：用户切到 1440p 就立刻能看。
+   */
+  async function prepareFile(info: YtStreamInfo, height: number): Promise<void> {
+    const v = detail;
+    if (!v) return;
+    const token = ++prepToken;
+    fileReady = false;
+    const q = qualityAt(info, height);
+    const bytes = q && q.bandwidth > 0 ? (q.bandwidth / 8) * info.durationSec : 0;
+    for (;;) {
+      let status;
+      try {
+        status = await api.ytFileStatus(v.id, height);
+      } catch (err) {
+        if (token === prepToken) {
+          prep = null;
+          playError = messageFor(err);
+        }
+        return;
+      }
+      if (token !== prepToken) return;
+      if (status.state === 'ready') {
+        prep = null;
+        fileReady = true;
+        return;
+      }
+      if (status.state === 'failed') {
+        prep = null;
+        playError = `4K 这一档准备失败：${status.error ?? '未知原因'}。可以点重试，或者先切到低一档看。`;
+        return;
+      }
+      prep = {
+        height,
+        percent: status.percent,
+        elapsedSec: status.elapsedSec,
+        bytes,
+      };
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+  }
+
+  /** 等太久时给一条退路：切到最高一档不需要合流的画质。 */
+  const fallbackQuality = $derived(stream?.qualities.find((q) => !q.progressive) ?? null);
+
+  function switchToFallback(): void {
+    if (!fallbackQuality) return;
+    applyQuality(fallbackQuality.label);
+  }
 
   const qualityOptions = $derived<QualityOption[]>(
     (stream?.qualities ?? []).map((q) => ({
@@ -384,9 +499,17 @@
 
   function applyQuality(id: string): void {
     const height = Number.parseInt(id, 10);
-    streamHeight = Number.isFinite(height) && height > 0 ? height : null;
+    const next = Number.isFinite(height) && height > 0 ? height : null;
+    streamHeight = next;
     selectedQualityId = id;
     playError = '';
+    // 换档一律先停掉上一档的等待；切进 4K 才重新起一轮合流
+    prepToken += 1;
+    prep = null;
+    fileReady = false;
+    const info = stream;
+    const q = info ? qualityAt(info, next) : null;
+    if (info && q?.progressive === true) void prepareFile(info, q.height);
   }
 
   function retryStream(): void {
@@ -396,6 +519,9 @@
     streamAttempt += 1;
     stream = null;
     streamError = '';
+    prep = null;
+    fileReady = false;
+    prepToken += 1;
     if (detail) void loadStream(detail);
   }
 
@@ -749,13 +875,13 @@
           allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen"
           allowfullscreen
         ></iframe>
-      {:else if stream}
+      {:else if stream && playbackSrc}
         {#key streamAttempt}
           <div class="overflow-hidden rounded-xl bg-black">
             <VideoPlayer
-              src={streamSrc}
-              type={HLS_TYPE}
-              engine="hls"
+              src={playbackSrc}
+              type={playbackType}
+              engine={playbackEngine}
               poster={v.posterUrl || v.thumbUrl}
               posterFallback={v.thumbUrl}
               title={v.title}
@@ -785,6 +911,37 @@
             </VideoPlayer>
           </div>
         {/key}
+      {:else if stream}
+        <!-- 4K 那一档在等服务端合流：540 MB 要下完才起播，所以这里明确报进度，
+             并给一条「先看 1440p」的退路（它不是降级陷阱：切档随时可以再切回来）。 -->
+        <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-black">
+          <VideoLoading
+            poster={v.posterUrl || v.thumbUrl}
+            posterFallback={v.thumbUrl}
+            kind="poster"
+            label="正在准备 4K"
+            detail={prepDetail}
+          />
+          {#if playError}
+            <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center">
+              <p class="max-w-md text-ui text-fg/90">{playError}</p>
+              <div class="flex flex-wrap items-center justify-center gap-2">
+                <button type="button" class="btn" onclick={retryStream}>重试</button>
+                {#if fallbackQuality}
+                  <button type="button" class="btn btn-primary" onclick={switchToFallback}>
+                    先看 {fallbackQuality.label}
+                  </button>
+                {/if}
+              </div>
+            </div>
+          {:else if fallbackQuality}
+            <div class="absolute inset-x-0 bottom-3 flex justify-center">
+              <button type="button" class="btn btn-ghost" onclick={switchToFallback}>
+                不想等？先看 {fallbackQuality.label}
+              </button>
+            </div>
+          {/if}
+        </div>
       {:else}
         <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-black">
           {#if streamLoading}

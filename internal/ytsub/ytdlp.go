@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mario/myporn/internal/social"
@@ -51,6 +52,10 @@ type YtDlp struct {
 	cookies  func() string
 	format   func() string
 	log      *slog.Logger
+
+	// rcBad 记住「这个版本的 yt-dlp 不认 --remote-components」（老版本带上就整个跑不动）。
+	// 第一次撞上 unrecognized arguments 就地置位，然后自动重跑一遍不带它的命令。
+	rcBad atomic.Bool
 }
 
 // NewYtDlp 构造调用器。pathFor 每次现取（设置页可改），返回空串时从 PATH 里找 yt-dlp。
@@ -363,6 +368,9 @@ func (y *YtDlp) Download(ctx context.Context, req DownloadRequest) (string, erro
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
+		if unknownRemoteComponents(errBuf.String()) && y.rcBad.CompareAndSwap(false, true) {
+			return y.Download(ctx, req) // 老版本 yt-dlp：去掉那个参数重跑一次
+		}
 		return "", y.mapError(waitErr, errBuf.String())
 	}
 
@@ -438,7 +446,7 @@ func (y *YtDlp) cookieText() string {
 	return y.cookies()
 }
 
-// commonArgs 是每次调用都要带上的动态参数（代理）。
+// commonArgs 是每次调用都要带上的动态参数（代理 + 挑战求解）。
 func (y *YtDlp) commonArgs() []string {
 	args := []string{}
 	if y.proxyFor != nil {
@@ -446,7 +454,37 @@ func (y *YtDlp) commonArgs() []string {
 			args = append(args, "--proxy", p)
 		}
 	}
+	// 解 n 挑战的求解脚本（yt-dlp-ejs）。
+	//
+	// 2026-10-29 实测，视频 YFsMnJEbV1U：不带这个参数时，4K 的 AV1 画面（itag 401）
+	// 与 m4a 音轨拿到的都是「半残」地址——头几 MB 能下，随后一律 403
+	// （yt-dlp 自己也在 1.9% 处 HTTP 403，ffmpeg 直接 403，curl 拿到 302 但跟过去就 403）。
+	// 带上之后同样两条地址能连续下完 540 MB + 5 MB，拼出的 mp4 音画俱全。
+	// 求解脚本首次运行时从 yt-dlp-ejs 的 GitHub 拉一份（之后走缓存），本机的 deno 提供运行时；
+	// 没有 JS 运行时的话 yt-dlp 只会打一条 warning，行为与不加此参数一致，不会把功能弄坏。
+	if y.remoteComponentsArg() != nil {
+		args = append(args, "--remote-components", "ejs:github")
+	}
 	return args
+}
+
+// remoteComponentsArg 报告能不能带 --remote-components（撞过 unrecognized arguments 就永久关掉）。
+func (y *YtDlp) remoteComponentsArg() []string {
+	if y.rcBad.Load() {
+		return nil
+	}
+	return []string{"--remote-components", "ejs:github"}
+}
+
+// unknownRemoteComponents 判断这条 stderr 是不是「这个版本的 yt-dlp 不认 --remote-components」。
+// 老版本（2025.11 之前）没有这个参数，如果不认还硬带着，整个 YouTube 功能都会报错。
+func unknownRemoteComponents(stderr string) bool {
+	s := strings.ToLower(stderr)
+	if !strings.Contains(s, "remote-components") {
+		return false
+	}
+	return strings.Contains(s, "unrecognized") || strings.Contains(s, "no such option") ||
+		strings.Contains(s, "invalid option") || strings.Contains(s, "not found")
 }
 
 // command 建子进程：取消时先 SIGINT（yt-dlp 会体面收尾、留住 .part），超时再强杀。
@@ -472,7 +510,24 @@ func (y *YtDlp) run(ctx context.Context, bin string, args ...string) (string, st
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	err := cmd.Run()
+	if err != nil && unknownRemoteComponents(errBuf.String()) && y.rcBad.CompareAndSwap(false, true) {
+		// 老版本 yt-dlp：去掉这个参数重跑一遍（rcBad 已经置位，不会再带上）。
+		return y.run(ctx, bin, withoutRemoteComponents(args)...)
+	}
 	return out.String(), errBuf.String(), err
+}
+
+// withoutRemoteComponents 从参数里摘掉 "--remote-components ejs:github"。
+func withoutRemoteComponents(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--remote-components" {
+			i++ // 顺便跳过它的值
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
 
 // cookiesArg 在有 Cookie 时把内容写进工作目录的临时文件（0600），用完即删。

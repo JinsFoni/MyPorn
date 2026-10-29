@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,22 +23,51 @@ type StreamInfo struct {
 	Title       string
 	DurationSec int
 	MasterURL   string
+	// Tracks 是 DASH 那条线上的「单独一条画面」：4K 走它，理由见 DashTrack。
+	Tracks []DashTrack
 	// ExpiresAt 是清单地址里的 expire=（签名寿命，实测 6 小时）。
 	// 到点后所有分片都会 403，所以会话要跟着这个时间收摊，不能当永久地址缓存。
 	ExpiresAt time.Time
 }
 
+// DashTrack 是一条「只有画面」的 DASH 直链（加上一条共用的音轨），
+// 服务端用 ffmpeg -c copy 合成一份 mp4 再给浏览器原生播。
+//
+// 为什么 4K 非它不可（2026-10-29 实测，视频 YFsMnJEbV1U / 321 秒）：
+//   - HLS 里 2160p 只有 VP9 一档，28.2 Mbps（1.06 GB）——实测单连接 3.5~8.4 MB/s，
+//     这条流要 3.5 MB/s 才勉强跟得上，缓冲永远攒不起来，40 秒内卡 13 次；
+//   - DASH 里有 AV1 2160p：13.5 Mbps（540 MB），只要一半带宽；
+//   - 而且走原生 <video> 就绕开了 MSE：这台机器的 VideoToolbox 在 MSE 上放 VP9 4K
+//     会每 5~30 秒崩一次（PIPELINE_ERROR_DECODE），同一份字节用原生播放却零错误。
+type DashTrack struct {
+	Height      int    // 画面高度（2160 = 4K）
+	Codecs      string // av01.0.13M.08 这类 codecs 串
+	Bandwidth   int64  // bps
+	VideoURL    string
+	AudioURL    string // 共用一条音轨（AAC / m4a）
+	AudioCodecs string
+}
+
 // streamProbe 只取 -j 输出里用得上的几个字段。
 type streamProbe struct {
-	ID       string   `json:"id"`
-	Title    string   `json:"title"`
-	Duration *float64 `json:"duration"`
-	Formats  []struct {
-		FormatID    string `json:"format_id"`
-		Protocol    string `json:"protocol"`
-		ManifestURL string `json:"manifest_url"`
-		Height      int    `json:"height"`
-	} `json:"formats"`
+	ID       string         `json:"id"`
+	Title    string         `json:"title"`
+	Duration *float64       `json:"duration"`
+	Formats  []streamFormat `json:"formats"`
+}
+
+// streamFormat 是 formats[] 里的一行（只留这里用得上的字段）。
+type streamFormat struct {
+	FormatID    string  `json:"format_id"`
+	Protocol    string  `json:"protocol"`
+	ManifestURL string  `json:"manifest_url"`
+	Height      int     `json:"height"`
+	Ext         string  `json:"ext"`
+	VCodec      string  `json:"vcodec"`
+	ACodec      string  `json:"acodec"`
+	Tbr         float64 `json:"tbr"` // 总码率 kbps（画面那条只有画面）
+	AbR         float64 `json:"abr"` // 音轨码率 kbps
+	URL         string  `json:"url"`
 }
 
 // ResolveStream 解析一条视频的 HLS master 地址。
@@ -75,6 +105,7 @@ func (y *YtDlp) ResolveStream(ctx context.Context, videoID string) (StreamInfo, 
 		}
 		break
 	}
+	info.Tracks = dashTracks(p.Formats)
 	if info.MasterURL == "" {
 		return StreamInfo{}, social.Upstream("这条视频没有可用的 HLS 清单（直播/会员专属/分区限制时会出现）", nil)
 	}
@@ -116,4 +147,53 @@ func parseEpoch(s string) int64 {
 		return 0
 	}
 	return sec
+}
+
+// dashTracks 从 formats[] 里挑出「只有画面」的 mp4 直链，按高度去重（同高度取码率最高那条）。
+//
+// 只认 AV1 + mp4 + https：AV1 装在 MP4 里能被 VideoToolbox 硬解（实测 4K 60fps 60 秒只掉 2 帧），
+// 而 VP9 那条是 webm、26.3 Mbps / 1.06 GB，码率翻倍没有任何好处。
+// 音轨只认 AAC（m4a）：要 -c copy 塞进 mp4，opus 那条属于 webm（实测 itag 140：
+// mp4a.40.2 / 129 kbps / 5.2 MB，体积可以忽略）。
+func dashTracks(formats []streamFormat) []DashTrack {
+	audioURL, audioCodecs := "", ""
+	bestABR := 0.0
+	for _, f := range formats {
+		if !strings.HasPrefix(f.ACodec, "mp4a") || f.VCodec != "none" || f.Ext != "m4a" || f.URL == "" {
+			continue
+		}
+		if f.AbR > bestABR {
+			bestABR, audioURL, audioCodecs = f.AbR, f.URL, f.ACodec
+		}
+	}
+	if audioURL == "" {
+		return nil // 没有 AAC 音轨就别谈原生播放了，让上层退回 HLS
+	}
+
+	byHeight := map[int]DashTrack{}
+	for _, f := range formats {
+		if !strings.HasPrefix(f.VCodec, "av01") || f.ACodec != "none" || f.Ext != "mp4" {
+			continue
+		}
+		if f.Protocol != "https" || f.URL == "" || f.Height <= 0 {
+			continue
+		}
+		t := DashTrack{
+			Height:      f.Height,
+			Codecs:      f.VCodec,
+			Bandwidth:   int64(f.Tbr * 1000),
+			VideoURL:    f.URL,
+			AudioURL:    audioURL,
+			AudioCodecs: audioCodecs,
+		}
+		if prev, ok := byHeight[f.Height]; !ok || t.Bandwidth > prev.Bandwidth {
+			byHeight[f.Height] = t
+		}
+	}
+	out := make([]DashTrack, 0, len(byHeight))
+	for _, t := range byHeight {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Height > out[j].Height })
+	return out
 }

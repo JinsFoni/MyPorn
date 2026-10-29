@@ -172,6 +172,16 @@ func (c *Cache) Snapshot(key string) Snapshot {
 	return Snapshot{State: StateIdle}
 }
 
+// Clear 抹掉某个 key 的失败记录，让下一次 Begin/Ensure 能重新试一遍。
+//
+// 5 分钟的失败备忘是给「刚失败、用户刷新一眼」用的；但用户主动点「重试」时，
+// 拿着同一条错误再等 5 分钟没有任何意义——那是把重试按钮变成了装饰。
+func (c *Cache) Clear(key string) {
+	c.mu.Lock()
+	delete(c.failures, key)
+	c.mu.Unlock()
+}
+
 // Ensure 保证某个 key 的成品已就绪，返回它的绝对路径。
 //
 // produce 只在真的要合流时被调用，用来（重新）解析两条流的地址——签名地址会过期，

@@ -89,12 +89,20 @@ func New(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg 
 		if err != nil {
 			return ytstream.Upstream{}, err
 		}
+		tracks := make([]ytstream.Track, 0, len(info.Tracks))
+		for _, t := range info.Tracks {
+			tracks = append(tracks, ytstream.Track{
+				Height: t.Height, Codecs: t.Codecs, Bandwidth: t.Bandwidth,
+				VideoURL: t.VideoURL, AudioURL: t.AudioURL, AudioCodecs: t.AudioCodecs,
+			})
+		}
 		return ytstream.Upstream{
 			VideoID:     info.VideoID,
 			Title:       info.Title,
 			DurationSec: info.DurationSec,
 			MasterURL:   info.MasterURL,
 			ExpiresAt:   info.ExpiresAt,
+			Tracks:      tracks,
 		}, nil
 	}, log)
 	return s
@@ -223,6 +231,9 @@ func (s *Server) Routes() http.Handler {
 			// 站内在线播放：清单（改写成会话地址）+ 画质清单 + 会话取物口。
 			pr.Get("/yt/videos/{id}/stream", s.handleYtStreamInfo)
 			pr.Get("/yt/videos/{id}/stream.m3u8", s.handleYtStreamMaster)
+			// 4K 的原生播放：服务端把 DASH 的 AV1 画面 + AAC 音轨合成一份 mp4（ffmpeg -c copy），
+			// 落盘缓存后按普通文件发。?status=1 立刻回进度 JSON，其余情况直接发文件（Range 照常）。
+			pr.Get("/yt/videos/{id}/file", s.handleYtFile)
 			pr.Get("/yt/seg/{sid}/{n}", s.handleYtStreamSeg)
 			pr.Get("/yt/health", s.handleYtHealth)
 			// 补「时间未知」：现场统计 + 排一个 yt_meta 任务（走观看页，不用 yt-dlp）。

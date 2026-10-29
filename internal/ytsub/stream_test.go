@@ -86,3 +86,102 @@ func TestExpireFromURL(t *testing.T) {
 		t.Fatalf("expire 非数字时应返回零值，得到 %v", got)
 	}
 }
+
+// 4K 走 DASH 那条线的挑法：只认 AV1 + mp4 + https，音轨只认 AAC（m4a）。
+// 形状照 2026-10-29 的真实 -j 输出裁（YFsMnJEbV1U）。
+func TestResolveStreamPicksAV1Track(t *testing.T) {
+	const fake = `#!/bin/sh
+cat <<'JSON'
+{"id":"YFsMnJEbV1U","title":"4K","duration":321,
+ "formats":[
+  {"format_id":"628","protocol":"m3u8_native","height":2160,"ext":"mp4","vcodec":"vp09.00.51.08","acodec":"none","tbr":28220.65,
+   "manifest_url":"https://manifest.googlevideo.com/api/manifest/hls_variant/expire/4070908800/id/x/index.m3u8"},
+  {"format_id":"315","protocol":"https","height":2160,"ext":"webm","vcodec":"vp9","acodec":"none","tbr":26340.159,"url":"https://rr1---x.googlevideo.com/videoplayback?itag=315"},
+  {"format_id":"401","protocol":"https","height":2160,"ext":"mp4","vcodec":"av01.0.13M.08","acodec":"none","tbr":13461.975,"url":"https://rr1---x.googlevideo.com/videoplayback?itag=401"},
+  {"format_id":"137","protocol":"https","height":1080,"ext":"mp4","vcodec":"avc1.640028","acodec":"none","tbr":6234.34,"url":"https://rr1---x.googlevideo.com/videoplayback?itag=137"},
+  {"format_id":"251","protocol":"https","ext":"webm","vcodec":"none","acodec":"opus","abr":99.278,"url":"https://rr1---x.googlevideo.com/videoplayback?itag=251"},
+  {"format_id":"140","protocol":"https","ext":"m4a","vcodec":"none","acodec":"mp4a.40.2","abr":129.501,"url":"https://rr1---x.googlevideo.com/videoplayback?itag=140"},
+  {"format_id":"139","protocol":"https","ext":"m4a","vcodec":"none","acodec":"mp4a.40.5","abr":48.814,"url":"https://rr1---x.googlevideo.com/videoplayback?itag=139"}
+ ]}
+JSON
+`
+	path := writeFakeScript(t, fake)
+	dlp := NewYtDlp(func() string { return path }, func() string { return "" },
+		func() string { return "" }, func() string { return "" }, nil)
+
+	info, err := dlp.ResolveStream(context.Background(), "YFsMnJEbV1U")
+	if err != nil {
+		t.Fatalf("ResolveStream 失败: %v", err)
+	}
+	// VP9（webm）和 H.264 都不该出现在这张表里：前者码率翻倍，后者 4K 没有。
+	if len(info.Tracks) != 1 {
+		t.Fatalf("应该只挑出 1 条 AV1 直链，得到 %d 条: %+v", len(info.Tracks), info.Tracks)
+	}
+	tr := info.Tracks[0]
+	if tr.Height != 2160 || !strings.Contains(tr.Codecs, "av01") {
+		t.Fatalf("挑错了档位: %+v", tr)
+	}
+	if !strings.Contains(tr.VideoURL, "itag=401") {
+		t.Fatalf("画面地址不是 AV1 那条: %q", tr.VideoURL)
+	}
+	// 音轨取码率最高的 AAC（itag 140 / 129 kbps），不能拿 opus 那条。
+	if !strings.Contains(tr.AudioURL, "itag=140") || tr.AudioCodecs != "mp4a.40.2" {
+		t.Fatalf("音轨挑错了: %q %q", tr.AudioURL, tr.AudioCodecs)
+	}
+	if tr.Bandwidth != 13461975 {
+		t.Fatalf("码率 = %d，想要 13461975（13.46 Mbps）", tr.Bandwidth)
+	}
+}
+
+// 没有 AAC 音轨时不要硬凑：上层会退回 HLS（合流只认 mp4 容器里的 AAC）。
+func TestDashTracksWithoutAAC(t *testing.T) {
+	tracks := dashTracks([]streamFormat{
+		{FormatID: "401", Protocol: "https", Height: 2160, Ext: "mp4", VCodec: "av01.0.13M.08", ACodec: "none", Tbr: 13461.975, URL: "https://x/v"},
+		{FormatID: "251", Protocol: "https", Ext: "webm", VCodec: "none", ACodec: "opus", AbR: 99.278, URL: "https://x/a"},
+	})
+	if len(tracks) != 0 {
+		t.Fatalf("只有 opus 音轨时不该给出直链，得到 %+v", tracks)
+	}
+}
+
+// 老版本 yt-dlp 不认 --remote-components：应当自动去掉它重跑，而不是整个功能报错。
+func TestRunRetriesWithoutRemoteComponents(t *testing.T) {
+	const fake = `#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "--remote-components" ]; then
+    echo "yt-dlp: error: unrecognized arguments: --remote-components ejs:github" >&2
+    exit 2
+  fi
+done
+echo "json output"
+`
+	path := writeFakeScript(t, fake)
+	dlp := NewYtDlp(func() string { return path }, func() string { return "" },
+		func() string { return "" }, func() string { return "" }, nil)
+
+	out, _, err := dlp.run(context.Background(), path, dlp.commonArgs()...)
+	if err != nil {
+		t.Fatalf("应该自动降级重跑成功，得到错误: %v", err)
+	}
+	if !strings.Contains(out, "json output") {
+		t.Fatalf("重跑没拿到输出: %q", out)
+	}
+	if !dlp.rcBad.Load() {
+		t.Fatal("撞过 unrecognized arguments 之后应当记住不再带这个参数")
+	}
+	if len(dlp.commonArgs()) != 0 {
+		t.Fatalf("置位后 commonArgs 不该再带上它: %v", dlp.commonArgs())
+	}
+}
+
+func TestUnknownRemoteComponents(t *testing.T) {
+	if !unknownRemoteComponents("yt-dlp: error: unrecognized arguments: --remote-components ejs:github") {
+		t.Fatal("应当认出 unrecognized arguments")
+	}
+	if unknownRemoteComponents("ERROR: unable to download video data: HTTP Error 403") {
+		t.Fatal("403 不该被当成「不认参数」")
+	}
+	if got := withoutRemoteComponents([]string{"-j", "--remote-components", "ejs:github", "URL"}); len(got) != 2 {
+		t.Fatalf("摘除后应剩 2 个参数: %v", got)
+	}
+}

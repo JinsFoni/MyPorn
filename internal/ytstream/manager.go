@@ -26,6 +26,24 @@ type Upstream struct {
 	DurationSec int
 	MasterURL   string
 	ExpiresAt   time.Time
+	// Tracks 是 DASH 那条线上的「只有画面」直链（含共用音轨），4K 走它原生播放。
+	// 字段照 ytsub.DashTrack 抄一份：这个包只管地址簿，不去 import 解析器。
+	Tracks []Track
+}
+
+// Track 是一条只有画面的 DASH 直链 + 共用音轨地址。
+//
+// 为什么 4K 要换这条路（2026-10-29 实测，视频 YFsMnJEbV1U / 321 秒）：
+// HLS 的 2160p 只有 VP9 28.2 Mbps（1.06 GB），单连接实测 3.5~8.4 MB/s，缓冲攒不起来，
+// 40 秒内卡 13 次；而 DASH 的 AV1 2160p 只有 13.5 Mbps（540 MB），且原生 <video> 播放
+// 绕开了 MSE——这台机器的 VideoToolbox 在 MSE 上放 VP9 4K 会每 5~30 秒崩一次。
+type Track struct {
+	Height      int
+	Codecs      string
+	Bandwidth   int64
+	VideoURL    string
+	AudioURL    string
+	AudioCodecs string
 }
 
 // ResolveFunc 解析一条视频的上游地址（真实现是 ytsub.YtDlp.ResolveStream）。
@@ -93,6 +111,17 @@ type inflightCall struct {
 // 同一条视频同时只跑一次解析。这不是锦上添花：悬停预热、弹窗里的信息请求、
 // 播放器拉的清单会挤在同一两秒里发出，没有去重就会并发起三四个 yt-dlp 子进程，
 // 每个 4 秒，互相抢 CPU 和 YouTube 的连接，最后谁都慢。
+// Forget 丢掉一条视频的解析缓存，逼下一次 Upstream 重跑 yt-dlp。
+//
+// 用在**合流失败**之后：googlevideo 的地址是「签名 + 绑定出口 IP」的，签名本身没过期、
+// 但某些 CDN 节点会直接回 403（实测 sn-qja5m5-5b 这种边，同一份地址重试几次都是 403），
+// 换一次解析就换一批节点，通常就好了。不丢掉缓存的话，用户点几次「重试」都撞同一堵墙。
+func (m *Manager) Forget(videoID string) {
+	m.mu.Lock()
+	delete(m.ups, videoID)
+	m.mu.Unlock()
+}
+
 func (m *Manager) Upstream(ctx context.Context, videoID string) (Upstream, error) {
 	m.mu.Lock()
 	if c, ok := m.ups[videoID]; ok && m.now().Sub(c.at) < resolveTTL && m.now().Before(c.up.ExpiresAt.Add(-time.Minute)) {
