@@ -190,6 +190,19 @@ type FeedQuery struct {
 	// 它有自己的页面（/bilibili），不该在追艺人的流里混着。
 	Platform        string
 	ExcludePlatform string
+	// SubscribedOnly 只出「所属艺人还在订阅里」的片，B 站墙用（见 liveSubFilter）。
+	SubscribedOnly bool
+}
+
+// liveSubFilter 生成「这条片所属的艺人里，至少还有一位在订阅里」这个条件；idExpr 是影片 id 的列（如 "v.id"）。
+//
+// 为什么 B 站墙需要它：那边的投稿是同步时就落进 videos 的，取消订阅只软删 subscriptions 那一行，
+// 影片行还在。YouTube 不用这个条件——它在 store 里就是 yt_videos JOIN yt_channels，删频道自然消失。
+// 2026-10-29 实测没过滤的后果：管理页删掉「影视飓风」之后，墙上仍有它 219 条投稿、侧边栏未看角标照样数 209 条。
+func liveSubFilter(idExpr string) string {
+	return `EXISTS (SELECT 1 FROM video_performers vp
+		JOIN subscriptions su ON su.performer_id = vp.performer_id AND su.deleted_at IS NULL
+		WHERE vp.video_id = ` + idExpr + `)`
 }
 
 // ListFeed 按发布时间倒序做 keyset 分页。
@@ -217,6 +230,9 @@ func (s *Store) ListFeed(q FeedQuery) ([]*model.Video, string, error) {
 	if q.ExcludePlatform != "" {
 		where = append(where, "v.platform <> ?")
 		args = append(args, q.ExcludePlatform)
+	}
+	if q.SubscribedOnly {
+		where = append(where, liveSubFilter("v.id"))
 	}
 	if ts, id, ok := decodeCursor(q.Cursor); ok {
 		if ts == "" {

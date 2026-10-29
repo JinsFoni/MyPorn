@@ -74,6 +74,13 @@ func TestMarkBiliSeenScoped(t *testing.T) {
 	st := newTestStore(t)
 	a := mustPerformer(t, st, "bilibili", "1", "甲")
 	b := mustPerformer(t, st, "bilibili", "2", "乙")
+	// 两位都订阅着：未看口径只数「还在订阅里」的 UP 主（见 liveSubFilter）。
+	if _, err := st.CreateSubscription(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateSubscription(b, 0); err != nil {
+		t.Fatal(err)
+	}
 	mustVideo(t, st, "bilibili", "BV1", a)
 	mustVideo(t, st, "bilibili", "BV2", b)
 	mustVideo(t, st, "bilibili", "BV3", b)
@@ -179,6 +186,92 @@ func TestBiliStats(t *testing.T) {
 	}
 }
 
+// 取消订阅（软删）之后投稿要跟着下墙：墙、未看角标、管理页读数、下载未看片单全都要同口径，
+// 但库里那条影片和已落盘的文件不能动（重新订阅要能原样回来）。
+func TestUnsubscribedUpVideosLeaveWall(t *testing.T) {
+	st := newTestStore(t)
+	gone := mustPerformer(t, st, "bilibili", "946974", "影视飓风")
+	keep := mustPerformer(t, st, "bilibili", "372397103", "dprprince")
+	goneSub, err := st.CreateSubscription(gone, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateSubscription(keep, 0); err != nil {
+		t.Fatal(err)
+	}
+	vGone := mustVideo(t, st, "bilibili", "BV1gone", gone)
+	mustVideo(t, st, "bilibili", "BV1keep", keep)
+	// 已落盘一条：取消订阅不该把文件或库记录带走
+	libID := mustLibrary(t, st)
+	if err := st.SaveLibraryFile(&model.LibraryFile{
+		VideoID: vGone, LibraryID: libID, VideoPath: "/tmp/gone.mp4", VideoName: "gone.mp4",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	wall := func() []*model.Video {
+		t.Helper()
+		items, _, err := st.ListFeed(FeedQuery{Platform: "bilibili", SubscribedOnly: true, Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return items
+	}
+	if n := len(wall()); n != 2 {
+		t.Fatalf("订阅都在时墙上该有 2 条，实际 %d", n)
+	}
+	if n, _ := st.CountBiliUnseen(); n != 2 {
+		t.Fatalf("订阅都在时未看该是 2，实际 %d", n)
+	}
+
+	if err := st.SoftDeleteSubscription(goneSub); err != nil {
+		t.Fatal(err)
+	}
+
+	if items := wall(); len(items) != 1 || items[0].PlatformVideoID != "BV1keep" {
+		t.Fatalf("取消订阅后墙上只剩另一位 UP 主的，实际 %+v", items)
+	}
+	if n, err := st.CountBiliUnseen(); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatalf("未看角标该跟着降到 1，实际 %d", n)
+	}
+	stats, err := st.BiliStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Channels != 1 || stats.Videos != 1 || stats.Unseen != 1 || stats.Downloaded != 0 {
+		t.Fatalf("管理页读数没跟着降：%+v", stats)
+	}
+	ids, err := st.ListUnseenVideoIDs("bilibili", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("「下载未看」不该再排上已取消 UP 主的投稿，实际 %v", ids)
+	}
+
+	// 数据本身还在：影片行、已落盘的文件都没被删。
+	files, err := st.ListLibraryFilesByVideo(vGone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("已落盘的文件不该因为取消订阅消失，实际 %d 条", len(files))
+	}
+
+	// 重新订阅 → 原样回来（这就是软删而不是硬删的理由）。
+	if _, err := st.CreateSubscription(gone, 0); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(wall()); n != 2 {
+		t.Fatalf("重新订阅后该回到 2 条，实际 %d", n)
+	}
+	if n, _ := st.CountBiliUnseen(); n != 2 {
+		t.Fatalf("重新订阅后未看该回到 2，实际 %d", n)
+	}
+}
+
 // ---- 小工具 ----
 
 func mustPerformer(t *testing.T, st *Store, platform, pid, name string) int64 {
@@ -191,6 +284,29 @@ func mustPerformer(t *testing.T, st *Store, platform, pid, name string) int64 {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// 一个 UP 主都没有时读数必须是 0，不能报错：SUM(...) 在空集上返回 NULL，
+// 扫进 int 会「converting NULL to int is unsupported」，管理页就会显示「读取统计失败」。
+func TestBiliStatsEmpty(t *testing.T) {
+	st := newTestStore(t)
+	stats, err := st.BiliStats()
+	if err != nil {
+		t.Fatalf("空库取读数不该报错：%v", err)
+	}
+	if stats != (BiliStats{}) {
+		t.Fatalf("空库读数该全是 0，实际 %+v", stats)
+	}
+	// 有 UP 主但没订阅（投稿还在库里）：同样要能取，且影片数为 0。
+	up := mustPerformer(t, st, "bilibili", "946974", "影视飓风")
+	mustVideo(t, st, "bilibili", "BV1", up)
+	stats, err = st.BiliStats()
+	if err != nil {
+		t.Fatalf("有投稿但没订阅时取读数不该报错：%v", err)
+	}
+	if stats.Channels != 0 || stats.Videos != 0 || stats.Unseen != 0 {
+		t.Fatalf("没订阅时读数该全是 0，实际 %+v", stats)
+	}
 }
 
 func mustLibrary(t *testing.T, st *Store) int64 {

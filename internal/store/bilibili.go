@@ -124,11 +124,17 @@ func scanBiliChannel(sc interface{ Scan(...any) error }) (*BiliChannel, error) {
 }
 
 // BiliStats 汇总 UP 主数 / 收录数 / 未看数 / 已落盘数 / 出错数。
+//
+// 影片那三个数只算「还在订阅里」的 UP 主的投稿，和墙（/api/bilibili/videos）同一把尺子：
+// 取消订阅后如果读数还挂着那批片，会出现「未看 253、点进去一条都没有」这种自相矛盾的界面。
+//
+// 每一列都要 COALESCE：没有 UP 主（或没有投稿）时 SUM(...) 返回 NULL，扫进 int 会直接报
+// 「converting NULL to int is unsupported」——管理页就会显示「读取统计失败」（2026-10-29 实测，删空 UP 主后必现）。
 func (s *Store) BiliStats() (BiliStats, error) {
 	var st BiliStats
 	err := s.db.QueryRow(`
 		SELECT COUNT(*),
-		       SUM(CASE WHEN last_error <> '' THEN 1 ELSE 0 END)
+		       COALESCE(SUM(CASE WHEN last_error <> '' THEN 1 ELSE 0 END), 0)
 		  FROM subscriptions su JOIN performers p ON p.id = su.performer_id
 		 WHERE p.platform = 'bilibili' AND su.deleted_at IS NULL`).Scan(&st.Channels, &st.Errors)
 	if err != nil {
@@ -136,18 +142,20 @@ func (s *Store) BiliStats() (BiliStats, error) {
 	}
 	err = s.db.QueryRow(`
 		SELECT COUNT(*),
-		       SUM(CASE WHEN v.is_new = 1 THEN 1 ELSE 0 END),
-		       SUM(CASE WHEN lf.video_id IS NOT NULL THEN 1 ELSE 0 END)
+		       COALESCE(SUM(CASE WHEN v.is_new = 1 THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN lf.video_id IS NOT NULL THEN 1 ELSE 0 END), 0)
 		  FROM videos v
 		  LEFT JOIN (SELECT DISTINCT video_id FROM library_files) lf ON lf.video_id = v.id
-		 WHERE v.platform = 'bilibili'`).Scan(&st.Videos, &st.Unseen, &st.Downloaded)
+		 WHERE v.platform = 'bilibili' AND `+liveSubFilter("v.id")).Scan(&st.Videos, &st.Unseen, &st.Downloaded)
 	return st, err
 }
 
 // CountBiliUnseen 数「B 站还有多少条没点开过」——侧边栏角标用。
+// 口径同 BiliStats：取消订阅的 UP 主不算（否则角标点进去是空的）。
 func (s *Store) CountBiliUnseen() (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE platform = 'bilibili' AND is_new = 1`).Scan(&n)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM videos v
+		WHERE v.platform = 'bilibili' AND v.is_new = 1 AND `+liveSubFilter("v.id")).Scan(&n)
 	return n, err
 }
 
@@ -161,7 +169,8 @@ func (s *Store) MarkBiliSeen(performerID int64) (int, error) {
 				SELECT video_id FROM video_performers WHERE performer_id = ?)`, performerID); err != nil {
 			return 0, err
 		}
-	} else if _, err := s.db.Exec(`UPDATE videos SET is_new = 0 WHERE platform = 'bilibili'`); err != nil {
+	} else if _, err := s.db.Exec(`UPDATE videos SET is_new = 0
+		WHERE platform = 'bilibili' AND `+liveSubFilter("videos.id")); err != nil {
 		return 0, err
 	}
 	return s.CountBiliUnseen()
@@ -176,6 +185,10 @@ func (s *Store) ListUnseenVideoIDs(platform string, performerID int64, limit int
 		JOIN video_performers vp ON vp.video_id = v.id
 		WHERE v.platform = ? AND v.is_new = 1`
 	args := []any{platform}
+	if platform == "bilibili" {
+		// 「下载未看」不该把已经取消订阅的 UP 主的投稿拉下来。
+		q += ` AND ` + liveSubFilter("v.id")
+	}
 	if performerID > 0 {
 		q += ` AND vp.performer_id = ?`
 		args = append(args, performerID)

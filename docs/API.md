@@ -935,6 +935,11 @@ B 站没有自己的表：UP 主是 `performers` 的一行（`platform='bilibili
 
 `platform='bilibili'` 的影片，按发布时间倒序做 keyset 分页；`channelId` 是 **D1 的 `id`**（performers.id）。
 
+和 D1 同一把尺子：**只出「所属 UP 主还在订阅里」的投稿**。取消订阅是软删 `subscriptions.deleted_at`，
+投稿行不会跟着删（重新订阅要能原样回来），所以墙上、未看角标（D1 的 `stats.unseen`）、
+管理页读数、「下载未看」片单都用同一条 `liveSubFilter` 过滤（`internal/store/videos.go`）。
+「停用」（`enabled=false`）不影响可见性，只影响要不要再同步。
+
 ### D3. `POST /api/bilibili/seen`
 
 ```

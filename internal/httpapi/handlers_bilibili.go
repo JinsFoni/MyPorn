@@ -76,16 +76,21 @@ func (s *Server) handleListBiliChannels(w http.ResponseWriter, _ *http.Request) 
 }
 
 // handleListBiliVideos 是投稿墙：只出 platform='bilibili' 的影片，按发布时间倒序。
+//
+// SubscribedOnly：取消订阅的 UP 主的投稿也要一起下墙。B 站投稿是同步时就落库的，
+// 软删订阅不会带走 videos 那几行（重新订阅要能原样回来），所以这里必须显式过滤——
+// 否则管理页删掉一位 UP 主之后，墙上还挂着他几百条片子（2026-10-29 实测 219 条）。
 func (s *Server) handleListBiliVideos(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	channelID, _ := strconv.ParseInt(q.Get("channelId"), 10, 64)
 	items, next, err := s.st.ListFeed(store.FeedQuery{
-		PerformerID: channelID,
-		Cursor:      q.Get("cursor"),
-		Limit:       queryInt(r, "limit", 36),
-		OnlyNew:     q.Get("unseen") == "1",
-		Query:       q.Get("q"),
-		Platform:    platformBilibili,
+		PerformerID:    channelID,
+		Cursor:         q.Get("cursor"),
+		Limit:          queryInt(r, "limit", 36),
+		OnlyNew:        q.Get("unseen") == "1",
+		Query:          q.Get("q"),
+		Platform:       platformBilibili,
+		SubscribedOnly: true,
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())

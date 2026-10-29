@@ -234,12 +234,19 @@
   }
 
   async function removeBili(channel: BiliChannel): Promise<void> {
-    if (!window.confirm(`取消订阅「${channel.name}」？只删记录，已下载到本地库的视频不会动。`)) return;
+    if (
+      !window.confirm(
+        `取消订阅「${channel.name}」？它的投稿会一起从 B 站墙上撤下（重新订阅就能恢复），已下载到本地库的文件不会动。`,
+      )
+    )
+      return;
     biliBusyId = channel.id;
     try {
       await api.unsubscribe(channel.subscriptionId);
       live.toast('已取消订阅', 'success');
       await loadBili();
+      // 角标是「还在订阅里的 UP 主的未看投稿」，删掉一位就得跟着降，不然点进去是空的。
+      void live.refreshBiliUnseen();
     } catch (err) {
       live.toast(messageFor(err), 'error');
     } finally {
