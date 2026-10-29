@@ -23,11 +23,16 @@ var placeholderPNG = []byte{
 //   - w=<px>  显示宽度，交给图床自己缩放（只有 beeg 的图床认）
 //   - s=<px>  隐私模式要的小糊图：在本地缩到 s 像素宽、糊一遍再发
 func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
-	raw := strings.TrimSpace(r.URL.Query().Get("u"))
-	platformKey := r.URL.Query().Get("p")
+	q := r.URL.Query()
+	raw := strings.TrimSpace(q.Get("u"))
+	fallback := strings.TrimSpace(q.Get("f"))
+	platformKey := q.Get("p")
 
-	if smallWidth := smallWidthParam(r.URL.Query().Get("s")); smallWidth > 0 {
+	if smallWidth := smallWidthParam(q.Get("s")); smallWidth > 0 {
 		data, err := s.images.Small(r.Context(), platformKey, raw, smallWidth)
+		if err != nil && fallback != "" {
+			data, err = s.images.Small(r.Context(), platformKey, fallback, smallWidth)
+		}
 		if err != nil {
 			// 隐私模式的失败方式只能是「看不见」：发空白，绝不退回原图。
 			s.log.Warn("隐私模式小图生成失败，发空白占位", "url", raw, "err", err)
@@ -38,7 +43,12 @@ func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, ok := s.images.Bytes(r.Context(), platformKey, raw, r.URL.Query().Get("w"))
+	data, ok := s.images.Bytes(r.Context(), platformKey, raw, q.Get("w"))
+	if !ok && fallback != "" {
+		// `f=` 是后端自己说的兜底地址（见 dto.go 的 imgProxyChain），不是任意用户输入：
+		// 换一档尺寸名再抓一次，抓不到才发空白。
+		data, ok = s.images.Bytes(r.Context(), platformKey, fallback, q.Get("w"))
+	}
 	if !ok {
 		servePlaceholder(w)
 		return

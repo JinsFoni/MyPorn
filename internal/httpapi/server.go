@@ -225,6 +225,8 @@ func (s *Server) Routes() http.Handler {
 			pr.Get("/yt/videos/{id}/stream.m3u8", s.handleYtStreamMaster)
 			pr.Get("/yt/seg/{sid}/{n}", s.handleYtStreamSeg)
 			pr.Get("/yt/health", s.handleYtHealth)
+			// 补「时间未知」：现场统计 + 排一个 yt_meta 任务（走观看页，不用 yt-dlp）。
+			pr.Post("/yt/fill-dates", s.handleYtFillDates)
 			// 深链接 /youtube?v=<videoId> 用：墙上那一页未必包含这条
 			pr.Get("/yt/videos/lookup", s.handleYtVideoLookup)
 			pr.Get("/manage/youtube", s.handleManageYt)

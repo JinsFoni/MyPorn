@@ -388,7 +388,8 @@ export type JobType =
   | 'social_sync'
   | 'social_save'
   | 'yt_sync'
-  | 'yt_download';
+  | 'yt_download'
+  | 'yt_meta';
 export type JobStatus = 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'canceled';
 
 export interface Job {
@@ -882,4 +883,6 @@ export interface YtHealth {
   /** 超过 90 天：下载大概率 403 */
   stale: boolean;
   ffmpegOk: boolean;
+  /** 还没有发布时间的视频条数（墙上显示「补齐」那一条用） */
+  missingDates: number;
 }

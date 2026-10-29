@@ -474,3 +474,87 @@ func moveFile(src, dst string) error {
 	}
 	return os.Remove(src)
 }
+
+// ---- yt_meta：给「时间未知」的视频补发布时间 ----
+
+// ytMetaDefault 是一次补多少条。
+//
+// 一条一次普通 GET（实测 1.29MB 响应、1.5 秒），所以 500 条上限 ≈ 12 分钟；
+// 排在后台、可中断，跑完墙上的「时间未知」就没了。默认给足，让用户点一次就清干净。
+const ytMetaDefault = 500
+
+type ytMetaPayload struct {
+	Limit int `json:"limit"`
+}
+
+// EnqueueYtMeta 投递一次「补发布时间」；已经有在跑的就不重复投。
+func (r *Runner) EnqueueYtMeta(limit int) (int64, error) {
+	if limit <= 0 {
+		limit = ytMetaDefault
+	}
+	if active, err := r.st.HasActiveJobForTarget(model.JobTypeYtMeta, 0); err == nil && active {
+		return 0, nil
+	}
+	return r.st.Enqueue(model.JobTypeYtMeta, ytMetaPayload{Limit: limit}, 9)
+}
+
+// runYtMetaJob 逐条补发布时间。
+//
+// 为什么不用 yt-dlp：单条要起进程、实测 4.1 秒，补 200 条得十几分钟；
+// 观看页是一次 GET、1.5 秒，同样的三个字段（发布时间 / 播放量 / 时长）都在页面 JSON 里。
+// 拿不到就跳过那一条（视频可能已删除），不因为一条失败放弃整批。
+func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
+	var p ytMetaPayload
+	if j.Payload != "" {
+		if err := json.Unmarshal([]byte(j.Payload), &p); err != nil {
+			return fmt.Errorf("任务参数损坏")
+		}
+	}
+	rows, err := r.st.ListYtVideosMissingDate(p.Limit)
+	if err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		c.Progress(100, "没有缺发布时间的视频", 0, 0, 0)
+		return nil
+	}
+
+	client := r.httpClient("youtube")
+	filled, failed := 0, 0
+	for i, row := range rows {
+		if err := c.Check(); err != nil {
+			return err
+		}
+		c.Progress(float64(i)/float64(len(rows))*100,
+			fmt.Sprintf("补发布时间 %d/%d（已补 %d，跳过 %d）", i+1, len(rows), filled, failed), 0, 0, 0)
+
+		info, err := ytsub.WatchMeta(ctx, client, r.ytThrottle, row.VideoID)
+		if err != nil {
+			failed++
+			// 限流 / 被拦：后面的必然也失败，收工（已经补上的那条条都写库了）。
+			if k := social.KindOf(err); k == social.KindRateLimited || k == social.KindBlocked {
+				c.Progress(100, fmt.Sprintf("补发布时间被拦：%v", err), 0, 0, 0)
+				return nil
+			}
+			continue
+		}
+		var published *time.Time
+		if !info.PublishedAt.IsZero() {
+			published = &info.PublishedAt
+		}
+		if err := r.st.FillYtVideoMeta(row.ID, published, info.DateSource, info.DurationSec, info.Views); err != nil {
+			r.log.Warn("写回发布时间失败", "ytVideo", row.ID, "err", err)
+			failed++
+			continue
+		}
+		filled++
+	}
+	msg := fmt.Sprintf("补完 %d 条", filled)
+	if failed > 0 {
+		// 实测这 3 条重跑一次就补上了（首次连接偶发失败），所以别把话说死成「已删除」。
+		msg += fmt.Sprintf("，%d 条这次没拿到（可能已删除，也可能只是这次请求失败，可以再点一次）", failed)
+	}
+	c.Progress(100, msg, 0, 0, 0)
+	r.log.Info("补发布时间完成", "filled", filled, "failed", failed)
+	return nil
+}

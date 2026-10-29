@@ -263,6 +263,8 @@ const (
 	JobTypeYtSync = "yt_sync"
 	// JobTypeYtDownload 是 M6 YouTube 订阅：用 yt-dlp 下一条视频并落进本地库。
 	JobTypeYtDownload = "yt_download"
+	// JobTypeYtMeta 是 M6 YouTube 订阅：给「时间未知」的视频补发布时间（走观看页，不用 yt-dlp）。
+	JobTypeYtMeta = "yt_meta"
 )
 
 // Library 是一个本地媒体库（一个根目录）。

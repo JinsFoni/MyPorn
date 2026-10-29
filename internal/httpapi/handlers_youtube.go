@@ -86,8 +86,11 @@ func (s *Server) ytVideoDTO(v *store.YtVideoRow) ytVideoDTO {
 	return ytVideoDTO{
 		ID: v.ID, VideoID: v.VideoID, Title: v.Title,
 		URL:         "https://www.youtube.com/watch?v=" + v.VideoID,
-		ThumbURL:    imgProxy("youtube", firstNonEmptyStr(v.ThumbnailURL, ytsub.ThumbURL(v.VideoID, "mqdefault"))),
-		PosterURL:   imgProxy("youtube", ytsub.ThumbURL(v.VideoID, "maxresdefault")),
+		// 封面按 id 现拼，不用库里存的缩略图地址：i.ytimg 的尺寸就是 URL 里的文件名，
+		// 存下来那份是 mqdefault（320×180），在 4 列墙上（每张 ~316px、DPR2 要 632px）明显发糊。
+		// 主选 hq720（1280×720），老视频没有这一档（实测 jNQXAC9IVRw 返回 404）→ f= 兜到 mqdefault。
+		ThumbURL:  imgProxyChain("youtube", ytsub.ThumbURL(v.VideoID, "hq720"), ytsub.ThumbURL(v.VideoID, "mqdefault")),
+		PosterURL: imgProxyChain("youtube", ytsub.ThumbURL(v.VideoID, "maxresdefault"), ytsub.ThumbURL(v.VideoID, "hq720")),
 		EmbedURL:    "https://www.youtube-nocookie.com/embed/" + v.VideoID,
 		DurationSec: v.DurationSec, Views: v.Views, PublishedAt: rfc3339(v.PublishedAt),
 		DateKnown: v.PublishedAt != nil, IsLive: v.IsLive, Seen: v.Seen, Saved: v.Saved,
@@ -471,15 +474,21 @@ func (s *Server) handleManageYt(w http.ResponseWriter, r *http.Request) {
 // 「版本过期」是这个功能最常见的失败原因（实测 2026.07.04 全线 403，2026.10.26 正常），
 // 所以它必须是界面上能直接看到的信息，而不是藏在日志里。
 func (s *Server) handleYtHealth(w http.ResponseWriter, r *http.Request) {
-	dlp := s.ytDlp()
-	if dlp == nil {
-		writeJSON(w, http.StatusOK, ytsub.VersionInfo{})
-		return
+	var info ytsub.VersionInfo
+	if dlp := s.ytDlp(); dlp != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		info = dlp.Version(ctx)
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	info := dlp.Version(ctx)
-	writeJSON(w, http.StatusOK, info)
+	// 顺带把「有多少条没发布时间」带回去：墙上要靠它决定显不显示「补齐」那一条。
+	missing := 0
+	if n, err := s.st.CountYtVideosMissingDate(); err == nil {
+		missing = n
+	}
+	writeJSON(w, http.StatusOK, struct {
+		ytsub.VersionInfo
+		MissingDates int `json:"missingDates"`
+	}{VersionInfo: info, MissingDates: missing})
 }
 
 // ---- 内部工具 ----
@@ -514,4 +523,30 @@ func (s *Server) ytLibraryID(explicit int64) (int64, error) {
 		return 0, err
 	}
 	return lib.ID, nil
+}
+
+// handleYtFillDates 把「时间未知」的那批视频排进后台补发布时间（jobs 的 yt_meta）。
+//
+// 为什么会缺：深度回填走 yt-dlp 的 flat 列表，那个通道不给时间戳；RSS 只覆盖最近 15 条。
+// 所以墙上下半截（越老越靠后）全是「时间未知」。补一次以后就归一了。
+func (s *Server) handleYtFillDates(w http.ResponseWriter, r *http.Request) {
+	if s.runner == nil {
+		writeErr(w, http.StatusConflict, "no_runner", "后台任务没启动")
+		return
+	}
+	total, err := s.st.CountYtVideosMissingDate()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "统计缺发布时间的视频失败")
+		return
+	}
+	if total == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"jobId": 0, "total": 0})
+		return
+	}
+	jobID, err := s.runner.EnqueueYtMeta(0)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "排队补齐发布时间失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobId": jobID, "total": total})
 }

@@ -37,7 +37,7 @@
 | 下载 | **yt-dlp 生成 AV1 + AAC 单文件**，封装用 `-c copy` | §11-4：所有 av01 档位都是 video-only，唯一的单文件只剩 `itag 18`（AVC 360p）⇒ 想同时要 AV1 和音轨，必须封装一次；`-c copy` 实测 0.05 秒、码流不变 |
 | 失败主因 | **yt-dlp 版本过期**，不是解析难度 | §11-5：本机 2026.07.04（自称过期 90+ 天）对这个视频直接 403；换成 2026.10.26 一次成功 |
 | 入库 | 走现有 M2 四件套：`Probe` → `RenderName`/`BuildMoviePath` → `writeNFOFile` + `writeArtwork` → `SaveLibraryFile` | 现成代码，YouTube 只是「另一个 platform」 |
-| 图片 | 封面走 `/api/img`（缓存 + 隐私模式糊图）；统一用 `mqdefault.jpg`（320×180 无黑边）铺卡片，`maxresdefault` 做大图 | §11-6 |
+| 图片 | 封面走 `/api/img`（缓存 + 隐私模式糊图）；卡片用 `hq720.jpg`（1280×720）、海报用 `maxresdefault`，都带 `f=` 兜底（老视频没有这两档 → 退回 `mqdefault`） | §11-6 |
 | 错误语义 | 复用 `internal/social` 的 `rate_limited / blocked / stale_parser / not_found / upstream` | 三套脸的 UI 在 M5 已经做好了 |
 
 ### 2.2 已拍板（Q1–Q8）
@@ -146,11 +146,16 @@ INSERT OR IGNORE INTO platforms (key, name) VALUES ('youtube', 'YouTube');
 flat 模式 200 条里 **0 条**带时间戳（§11-3）。逐条完整解析要 4.1s/条（200 条≈14 分钟）且极易撞风控，**不做**。所以：
 
 1. 深度回填只补 `duration_sec` / `views` / `title`；
-2. `published_at` 留空，`date_source=''`，卡片上时间位置显示「较早」；
+2. `published_at` 留空，`date_source=''`，卡片上时间位置显示「时间未知」；
 3. RSS 覆盖到的那 15 条会被补上准确时间（`date_source='rss'`）；
-4. 用户点开某条历史 / 收藏某条时，**按需单条补一次**（`yt-dlp -J <watch url>`，4.1s，落进后台任务，不阻塞 UI）。
+4. 用户点开某条时按需单条补一次（`yt-dlp -J <watch url>`，4.1s，`date_source='watch'`）；
+5. **整批补**：`yt_meta` 任务 + 墙上的「有 N 条视频没有发布时间 · 补齐」那一条（见下）。
 
-收益是「一次回填 200 条只要 6 秒」，代价是「历史条目没日期」。这个取舍写在墙上就是：默认视图看新的，往回翻靠频道筛选 + 无限滚。
+**为什么整批补不走 yt-dlp**：单条要起进程、实测 4.1 秒，200 条就是 14 分钟。观看页是一次普通 GET——
+实测 1.29MB（`Accept-Encoding: gzip` 之后约 1/5）、1.5 秒，`"publishDate"` / `"viewCount"` / `"lengthSeconds"`
+全在页面 JSON 里（`internal/ytsub/watch.go`）。实测 27 条一轮 **45 秒**（≈1.7s/条，含限速），
+落库 `date_source='watch'`；其中 3 条首次偶发失败、再点一次就补上了，所以按钮留着不隐藏，
+失败文案也不写死成「已删除」。收益是「一次回填 200 条只要 6 秒」+「想起来补一次就全有日期了」。
 
 ### 5.4 失败语义
 
@@ -219,6 +224,7 @@ yt-dlp --no-playlist --newline --socket-timeout 20 --retries 3 --concurrent-frag
 | 深度回填 | `yt_sync`（`deep=true` 参数） | 1 | 添加频道时自动跑；管理页可手动重跑 |
 | 下载 | `yt_download` | 由现有下载并发控制 | §6 |
 | 单条补时间 | 不是任务：`POST /api/yt/videos/{id}/refresh` | — | 点开一条没有时间的视频时同步调一次（4 秒） |
+| 整批补时间 | `yt_meta` | 1 | 走观看页（`internal/ytsub/watch.go`），不依赖 yt-dlp；墙上「补齐」按钮 = `POST /api/yt/fill-dates` |
 
 调度沿用现有 scheduler；`enabled=0` 跳过。SSE 新增 `yt.new`（`{channelId, title, count}`），侧边栏未看角标复用 `live`。
 
@@ -227,7 +233,7 @@ yt-dlp --no-playlist --newline --socket-timeout 20 --retries 3 --concurrent-frag
 | 文件 | 内容 |
 |---|---|
 | `web/src/routes/Youtube.svelte` | 频道胶囊 + 16:9 网格 + `InfiniteList` + 嵌播弹层 |
-| `web/src/components/YtCard.svelte` | 封面（`mqdefault` 铺满 / `maxresdefault` 大图）、时长角标、两行标题、副行「频道 · 3 小时前 · 12.3 万次观看」、未看小圆点、未看状态下右上角下载按钮、直播标记 |
+| `web/src/components/YtCard.svelte` | 封面（`hq720` 铺满 / `maxresdefault` 大图，均带 `f=` 兜底）、时长角标、两行标题、副行「频道 · 3 小时前 · 12.3 万次观看」、未看小圆点、未看状态下右上角下载按钮、直播标记 |
 | `web/src/routes/Manage.svelte` | 新 tab `youtube`（结构照抄 moments 那块）+ 顶部四格总览 |
 | `web/src/routes/Moments.svelte` | 页顶加「动态 / YouTube」切换 |
 | `web/src/components/AppShell.svelte` | `NAV` 加一项 + `navIcon` 加 `youtube` + 未看角标 + `JOB_LABEL` 加 `yt_sync` / `yt_download` |
@@ -249,7 +255,8 @@ POST   /api/yt/videos/{id}/save               {saved:true|false}
 POST   /api/yt/videos/{id}/download           {libraryId} → 入队 yt_download
 POST   /api/yt/channels/{id}/download-unseen  {libraryId} → 整频道批量入队
 GET    /api/manage/youtube                    管理页总览
-GET    /api/yt/health                         yt-dlp 路径 / 版本 / 是否过期 / ffmpeg 可用
+GET    /api/yt/health                         yt-dlp 路径 / 版本 / 是否过期 / ffmpeg 可用 / missingDates（还缺多少条发布时间）
+POST   /api/yt/fill-dates                     → 入队 yt_meta（整批补发布时间），返回 {jobId, total}
 PUT    /api/settings                          + platformProxy.youtube / yt_* 五项
 GET    /api/yt/videos/{id}/stream             站内播放：解析结果 + 画质清单（§14）
 GET    /api/yt/videos/{id}/stream.m3u8[?q=]   改写后的单变体 master
@@ -326,21 +333,32 @@ yt-dlp -J --flat-playlist --playlist-end 200 https://www.youtube.com/channel/<UC
 
 ⇒ 设置里必须显示 yt-dlp 版本 + 过期提示；抓取失败时优先归因到版本而不是「站方改版」。
 
-### 11.6 封面
+### 11.6 封面（尺寸就写在文件名里，且有几档可能不存在）
 
-```
-https://i.ytimg.com/vi/<id>/hqdefault.jpg     → 200 image/jpeg  25KB (480×360，4:3 带黑边)
-https://i.ytimg.com/vi/<id>/maxresdefault.jpg → 200 image/jpeg 271KB
-```
+同一支视频的各档实测（`i.ytimg.com/vi/<id>/<name>.jpg`，四个 id 取样）：
 
-建议卡片用 `mqdefault.jpg`（320×180，16:9 无黑边），大图/海报用 `maxresdefault.jpg`。普通 JPEG，`/api/img` 链路（含隐私模式）零改造。
+| 档 | 分辨率 | 体积 | 备注 |
+|---|---|---|---|
+| `mqdefault` | 320×180 | 6.4–17.3KB | 16:9 无黑边，**永远有**（老视频也有），当兜底 |
+| `hqdefault` | 480×360 | 12.9–23.8KB | 4:3，两侧黑边，别铺 16:9 卡片 |
+| `sddefault` | 640×480 | 36–70KB | 4:3，同上 |
+| `hq720` | 1280×720 | 30–173KB | 16:9；**老视频 404**（`jNQXAC9IVRw` 上 `sddefault`/`hq720`/`maxres` 全 404，返回一张 120×90 灰图） |
+| `maxresdefault` | 1280×720 | 同 `hq720` | 有 720 源时两者字节完全相同 |
+
+结论：卡片用 `hq720`（墙上 2xl 断点 4 列、每张 360 CSS px，DPR2 要 720——1280 够且富余），
+海报用 `maxresdefault`。**两档都可能 404，而 `/api/img` 抓不到时只发 1×1 空白（HTTP 200，前端 `onerror` 发现不了）**，
+所以在代理层做兜底：DTO 拼地址时带 `f=<兜底地址>`，主地址抓不到就再抓 `f=`（卡片 → `mqdefault`，海报 → `hq720`）。
+实测：`hq720` 存在 → 200 / 137,875 字节 / 1280×720；`jNQXAC9IVRw` 的 `hq720` → 走 `f=` 拿到 8,710 字节 / 320×180（原来是一张 1×1）。
+
+顺带记一笔：`hq720.webp`（`i.ytimg.com/vi_webp/<id>/hq720.webp`）比 JPEG 小约 35%（6 个样本 67–88KB vs 109–140KB），
+没采用——隐私模式的糊图流水线要 `image.Decode`，WebP 得每次都落到 ffmpeg 子进程，为 35% 带宽换一条更慢的路径不划算。
 
 ## 12. 风险与取舍
 
 | 风险 | 说明 | 应对 |
 |---|---|---|
 | yt-dlp 版本 | 两周不升级就可能全线 403 | 界面显示版本 + 过期警告；`stale_parser` 文案直接指向升级 |
-| 深挖条目没日期 | flat 模式不给时间，逐条补太慢 | 接受；标题 + 时长 + 播放量够辨认，按需单条补 |
+| 深挖条目没日期 | flat 模式不给时间；走 yt-dlp 逐条补太慢（4.1s/条） | 走观看页批量补（1.5s/条，`yt_meta`），墙上一条提示 + 一个按钮 |
 | 首次回填 200 条上限 | 老频道历史远多于此 | 可配；管理页提供「再拉一批」（改 `--playlist-start` 续接） |
 | AV1 只有视频轨 | 必须封装一次 | 已是既定方案；`-c copy` 不损画质，产物单 mp4 兼容 Chrome / Firefox / Safari 17+ / Emby |
 | 高分辨率体积 | 8K AV1 90 秒就有 358 MB（实测），整频道批量下载很容易把盘吃满 | 不设高度上限（用户要「最高画质」）；`CheckSpace` 兜底 + 只做手动/整频道批量，不做全自动 |

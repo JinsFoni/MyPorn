@@ -701,7 +701,7 @@ POST /api/moments/cooldown
   "items": [{
     "id": 200, "videoId": "BRHJ7xD-bSU", "title": "WAITING 4 YOU (Official Video)",
     "url": "https://www.youtube.com/watch?v=BRHJ7xD-bSU",
-    "thumbUrl": "/api/img?…mqdefault…", "posterUrl": "/api/img?…maxresdefault…",
+    "thumbUrl": "/api/img?…hq720&f=…mqdefault…", "posterUrl": "/api/img?…maxresdefault&f=…hq720…",
     "embedUrl": "https://www.youtube-nocookie.com/embed/BRHJ7xD-bSU",
     "durationSec": 191, "views": 37000, "publishedAt": null, "dateKnown": false,
     "isLive": false, "seen": false, "saved": false, "downloaded": false,
@@ -714,6 +714,9 @@ POST /api/moments/cooldown
 
 排序 `COALESCE(published_at,'') DESC, id DESC`：**没有发布时间的排最后**（深度回填的条目就落在这里），
 所以首屏一定是最新的。`dateKnown=false` 时 `publishedAt` 为 `null`，前端显示「时间未知」。
+
+`thumbUrl` / `posterUrl` 里的 `f=` 是**代理层的兜底地址**：`i.ytimg` 的 `hq720` / `maxresdefault` 在老视频上会 404，
+而 `/api/img` 抓不到时只发 1×1 空白（HTTP 200，前端的 `onerror` 发现不了），所以主地址抓不到就再抓 `f=`。
 
 `downloaded` 表示这个库里已经有它的文件（`library_files` 存在），前端据此把按钮改成「再下一次」。
 
@@ -747,11 +750,23 @@ POST /api/moments/cooldown
 
 ```json
 { "path": "/opt/ytvenv/bin/yt-dlp", "found": true, "version": "2026.10.26",
-  "ageDays": 1, "stale": false, "ffmpegOk": true }
+  "ageDays": 1, "stale": false, "ffmpegOk": true, "missingDates": 27 }
 ```
+
+`missingDates` = 还没有发布时间的视频条数（墙上据此决定显不显示「有 N 条视频没有发布时间 · 补齐」那一条）。
 
 `stale` 的判据是版本日期超过 90 天。这个接口给的是「为什么下载会失败」的答案：
 实测 2026.07.04 版全线 403，2026.10.26 正常——所以版本号必须能在界面上看到。
+
+### C13b. `POST /api/yt/fill-dates`
+
+```json
+{} → 200 { "jobId": 85, "total": 27 }
+```
+
+排一个 `yt_meta` 任务，逐条打开观看页补发布时间（一次普通 GET，实测 1.5s/条，27 条 45 秒）。
+一条不缺时返回 `{ "jobId": 0, "total": 0 }`，同类型任务已在队列里时 `jobId=0`。
+跑完 SSE 会推 `job.updated`（`type=yt_meta, status=done`），墙上重拉并重新数 `missingDates`。
 
 ### C14. `GET /api/manage/youtube`
 

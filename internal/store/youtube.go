@@ -651,6 +651,46 @@ func (s *Store) FillYtVideoMeta(id int64, publishedAt *time.Time, dateSource str
 	return err
 }
 
+// YtVideoLite 是「只需要上游 id」的场景用的最小行（补发布时间、补时长）。
+type YtVideoLite struct {
+	ID        int64
+	VideoID   string // YouTube 的 11 位 id
+	ChannelID int64
+}
+
+// ListYtVideosMissingDate 列出还没有发布时间的视频（墙上的「时间未知」）。
+//
+// 为什么会有这种行：yt-dlp 的 flat 列表不给时间戳，深度回填回来的老条目全是空的；
+// RSS 那条通道只覆盖最近 15 条。补齐的办法见 jobs 里的 yt_meta（走观看页，一次 GET 一个）。
+func (s *Store) ListYtVideosMissingDate(limit int) ([]YtVideoLite, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := s.db.Query(`SELECT id, video_id, channel_id FROM yt_videos
+		WHERE COALESCE(published_at, '') = ''
+		ORDER BY id LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []YtVideoLite
+	for rows.Next() {
+		var v YtVideoLite
+		if err := rows.Scan(&v.ID, &v.VideoID, &v.ChannelID); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// CountYtVideosMissingDate 数一下还有多少条没发布时间（给墙上的提示条用）。
+func (s *Store) CountYtVideosMissingDate() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM yt_videos WHERE COALESCE(published_at, '') = ''`).Scan(&n)
+	return n, err
+}
+
 // ---- 游标 ----
 
 // YtCursor 是视频墙的 keyset 游标：(published_at, id)。

@@ -57,6 +57,7 @@
     social_save: '保存照片',
     yt_sync: '抓取 YouTube',
     yt_download: '下载 YouTube',
+    yt_meta: '补发布时间',
   };
 
   const activeHref = $derived(NAV.find((item) => item.isActive(router.path))?.href ?? '');
@@ -91,6 +92,10 @@
           if (job.status === 'done' && job.type === 'sync') {
             live.bumpFeed();
             live.toast('同步完成', 'success');
+          } else if (job.status === 'done' && job.type === 'yt_meta') {
+            // 补齐后墙上那些「时间未知」有了真实日期，排序也会变（越老越靠后）→ 重拉
+            live.bumpYt();
+            live.toast('发布时间补齐了', 'success');
           } else if (job.status === 'done' && (job.type === 'download' || job.type === 'yt_download')) {
             live.toast(job.type === 'yt_download' ? 'YouTube 已存进本地库' : '下载完成', 'success');
             live.bumpFeed();

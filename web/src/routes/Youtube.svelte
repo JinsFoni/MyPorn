@@ -39,6 +39,8 @@
   let channelsLoaded = $state(false);
   let channelsError = $state('');
   let health = $state<YtHealth | null>(null);
+  /** 补发布时间正在排队/执行（按钮转圈，避免连点排一串任务） */
+  let filling = $state(false);
 
   // ---- 筛选 ----
   // ---- 筛选（唯一真源是地址栏：?channel=<id>&mode=unseen|saved） ----
@@ -123,6 +125,28 @@
     }
   }
 
+  /**
+   * 补齐「时间未知」：排一个后台任务，一条一个普通 GET（观看页），跑完 SSE 会把墙重拉一遍。
+   * 为什么需要：深度回填走 yt-dlp 的 flat 列表，那个通道一个时间戳都不给，老条目全是未知。
+   */
+  async function fillDates(): Promise<void> {
+    if (filling) return;
+    filling = true;
+    try {
+      const res = await api.ytFillDates();
+      if (res.total === 0) {
+        live.toast('已经没有缺发布时间的视频了', 'success');
+        await loadHealth();
+        return;
+      }
+      live.toast(`正在补齐 ${String(res.total)} 条发布时间`, 'success');
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      filling = false;
+    }
+  }
+
   async function loadPage(cursor: string | null): Promise<{ items: YtVideo[]; nextCursor: string | null }> {
     const res = await api.ytVideos({
       cursor,
@@ -164,6 +188,9 @@
     seenVersion = v;
     wallKey += 1;
     void loadChannels();
+    // 补发布时间的任务跑完也走这条路（AppShell 里 yt_meta done → bumpYt），
+    // 顺手把「还缺多少条」重新数一遍。
+    void loadHealth();
   });
 
   // ---- 已看 / 收藏 ----
@@ -404,6 +431,8 @@
       const fresh = await api.ytRefresh(video.id);
       patchLocal(video.id, fresh);
       void loadChannels();
+      // 补上一条，顶上那行「N 条没有发布时间」的数字也要跟着减
+      if (fresh.dateKnown) void loadHealth();
     } catch {
       /* 补不到就算了，墙上照旧显示「时间未知」 */
     } finally {
@@ -534,6 +563,24 @@
           去升级
         </button>
       </p>
+    </div>
+  {/if}
+
+  <!-- 深度回填来的条目没有发布时间（yt-dlp 的 flat 列表不给）：一条条补，别让它一直显示「时间未知」 -->
+  {#if (health?.missingDates ?? 0) > 0}
+    <div class="flex items-center gap-2 rounded-xl bg-panel px-3 py-2 text-meta text-muted">
+      <span class="text-brick">●</span>
+      <p class="min-w-0 flex-1">
+        有 {String(health?.missingDates)} 条视频没有发布时间（深度回填只给了标题和时长）。
+      </p>
+      <button
+        type="button"
+        class="shrink-0 rounded-full px-3 py-1 text-meta text-muted transition-colors hover:bg-raise hover:text-fg disabled:opacity-50"
+        disabled={filling}
+        onclick={() => void fillDates()}
+      >
+        {filling ? '排队中…' : '补齐'}
+      </button>
     </div>
   {/if}
 

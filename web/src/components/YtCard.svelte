@@ -4,7 +4,7 @@
    *
    * 与影片卡（VideoCard）的差别：YouTube 的视频一律是 16:9，不做 3:4 竖版裁切；
    * 时间可能未知（深度回填走 yt-dlp flat，实测没有时间戳），所以「时间未知」是正常态，
-   * 不显示成错误、也不要显示 1970。
+   * 不显示成错误、也不要显示 1970。想让它有日期：点开单条会补，墙上的「补齐」整批补（jobs 的 yt_meta）。
    */
   import { imageUrl } from '../lib/img';
   import { formatCount, formatDuration, relativeTime } from '../lib/format';
@@ -25,7 +25,9 @@
   let { video, onOpen, onDownload, onWarm, downloading = false }: Props = $props();
 
   let thumbFailed = $state(false);
-  const thumb = $derived(imageUrl(video.thumbUrl, 480));
+  // 640：墙在 2xl 断点是 4 列（每张 ~316px CSS），DPR2 要 632px 才不糊。
+  // 上游给的是 hq720（1280×720），i.ytimg 不认 w=，所以这里只是把尺寸意图写清楚。
+  const thumb = $derived(imageUrl(video.thumbUrl, 640));
   const meta = $derived(
     [video.views > 0 ? `${formatCount(video.views)} 次观看` : '', timeLabel(video)]
       .filter((part) => part !== '')

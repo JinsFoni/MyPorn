@@ -190,7 +190,7 @@ make backend           # 先编译
 | 点 | 现状（2026-10-28 实测） | 改版后怎么发现 |
 |---|---|---|
 | 增量通道 | RSS `feeds/videos.xml?channel_id=UC…`：**固定 15 条**，含标题/发布时间/观看数/封面/简介，**没有时长、没有 Shorts 标记** | 首屏突然只有个位数或没有新条目 → 先看 RSS 是否还 200 |
-| 回填通道 | `yt-dlp -J --flat-playlist --playlist-end N`：200 条 5.8 秒，**时长 200/200 有、`timestamp` 0/200 没有** | 墙上全是「时间未知」→ 正常（这是 flat 的固有缺陷），点开单条会补 |
+| 回填通道 | `yt-dlp -J --flat-playlist --playlist-end N`：200 条 5.8 秒，**时长 200/200 有、`timestamp` 0/200 没有** | 墙上会出现「时间未知」→ flat 的固有缺陷：点开单条会补，墙上的「补齐」按钮整批补（观看页 1.5s/条） |
 | 单条补全 | `yt-dlp -J --no-playlist <watch?v=>`：4.1 秒，给 `timestamp` / `upload_date` / `description` / 时长 / 观看数 | 「查一下发布时间」一直失败 → yt-dlp 版本或出口 IP 出问题 |
 | 频道 id 解析 | 频道页 `"externalId":"UC…"` 或 `<link rel="canonical" href="…/channel/UC…">`。页里还有几十个别的 `"channelId":"UC…"`（推荐位），**只有这两处可信** | 订阅进来的频道名像是别人的 → 用了推荐位的 id |
 | 视频链接反查频道 | `watch?v=` 页里取 `"channelId"`，**必须再抓一次频道页**才能拿到频道名/头像（视频页的 `og:title` 是那条视频的） | 频道名是一串视频标题 → 少抓了第二步 |

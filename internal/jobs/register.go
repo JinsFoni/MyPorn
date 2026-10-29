@@ -27,6 +27,9 @@ func (r *Runner) RegisterDefaults() {
 			return r.settingInt("download_concurrency", r.cfg.MaxDownload)
 		}, r.runYtDownloadJob)
 	}
+	// 补发布时间只发普通 GET（观看页），不需要 yt-dlp，所以不受上面那个开关限制：
+	// 「装了 yt-dlp、但深度回填回来的老条目全没有时间」正是它存在的理由。并发固定 1，按 IP 限流。
+	r.Register(model.JobTypeYtMeta, func() int { return 1 }, r.runYtMetaJob)
 
 	if r.social != nil {
 		r.Register(model.JobTypeSocialSync, func() int { return 1 }, r.runSocialSyncJob)

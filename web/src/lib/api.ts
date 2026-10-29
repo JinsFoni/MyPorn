@@ -544,6 +544,13 @@ export const api = {
   ytHealth(): Promise<YtHealth> {
     return request<YtHealth>('/api/yt/health');
   },
+  /**
+   * 给「时间未知」的那批视频补发布时间：后台任务，一条一个普通 GET。
+   * total = 当前缺多少条；jobId = 0 表示本来就一条不缺。
+   */
+  ytFillDates(): Promise<{ jobId: number; total: number }> {
+    return request<{ jobId: number; total: number }>('/api/yt/fill-dates', { method: 'POST' });
+  },
   manageYt(): Promise<YtManageResponse> {
     return request<YtManageResponse>('/api/manage/youtube');
   },

@@ -20,6 +20,25 @@ func imgProxy(platform, raw string) string {
 	return "/api/img?" + q.Encode()
 }
 
+// imgProxyChain 与 imgProxy 相同，外加一个兜底地址（`f=`）：主地址抓不到时由代理再去抓兜底那张。
+//
+// 为什么要有：i.ytimg 的封面是纯 URL 规则，hq720 / maxresdefault 这两档老视频根本没有
+// （实测 jNQXAC9IVRw 上这两档都是 404，返回的是一张 120×90 的灰图），而 mqdefault 一直有。
+// 代理抓不到时原本只发 1×1 空白，前端拿到的是 200，靠 onerror 是发现不了的——所以兜底放在这一层做。
+func imgProxyChain(platform, raw, fallback string) string {
+	out := imgProxy(platform, raw)
+	if out == "" || fallback == "" {
+		return out
+	}
+	q := url.Values{}
+	q.Set("u", raw)
+	if platform != "" {
+		q.Set("p", platform)
+	}
+	q.Set("f", fallback)
+	return "/api/img?" + q.Encode()
+}
+
 func rfc3339(t *time.Time) any {
 	if t == nil {
 		return nil
