@@ -88,7 +88,7 @@ func (y *YtDlp) ResolveStream(ctx context.Context, videoID string) (StreamInfo, 
 
 // expireFromURL 从 googlevideo 的清单地址里取寿命（Unix 秒）。
 //
-// 两处都要看：googlevideo 的清单把 expire 写在**路径**里（/api/manifest/hls_variant/expire/1793159341/…），
+// 两处都要看：googlevideo 的清单把 expire 写在**路径**里（/api/manifest/hls_variant/expire/4070908800/…），
 // 只有分片地址才把它放进查询串。只认查询串的话会读不到寿命、退化成保守估算，
 // 于是每次都得重跑 yt-dlp。
 func expireFromURL(raw string) time.Time {
