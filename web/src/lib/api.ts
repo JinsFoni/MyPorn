@@ -540,17 +540,6 @@ export const api = {
   ytStream(videoId: number | string): Promise<YtStreamInfo> {
     return request<YtStreamInfo>(`/api/yt/videos/${id(videoId)}/stream`);
   },
-  /**
-   * 4K 那一档的合流进度（`progressive: true` 的画质）。
-   *
-   * 服务端要先把 AV1 画面 + AAC 音轨合成一份 mp4（540 MB / 1~3 分钟），
-   * 好了才把 `/api/yt/videos/{id}/file?q=` 交给 <video>——否则那个请求会挂好几分钟不回话。
-   */
-  ytFileStatus(videoId: number | string, height: number): Promise<RemuxStatus> {
-    return request<RemuxStatus>(
-      `/api/yt/videos/${id(videoId)}/file${qs({ q: height, status: 1 })}`,
-    );
-  },
   /** yt-dlp 能不能用、版本多新（「过期」是最常见的失败原因） */
   ytHealth(): Promise<YtHealth> {
     return request<YtHealth>('/api/yt/health');

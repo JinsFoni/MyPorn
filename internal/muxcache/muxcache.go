@@ -38,6 +38,15 @@ type Muxer interface {
 		totalSec int, onProgress func(percent float64)) error
 }
 
+// RangedMuxer 是可选增强：当两条直链都支持 Range 时，先分段并行下载到本地再合，
+// 比让 ffmpeg 单连接拉快好几倍（单连接受 CDN 单流限速，与链路带宽无关）。
+//
+// 实测 YFsMnJEbV1U 的 2160p AV1（540 MB）：ffmpeg 单连接 2.27 MB/s（4 分 0.5 秒）；
+// 分段并行见 library.fetchRanges 的注释。
+type RangedMuxer interface {
+	MuxRanged(ctx context.Context, src Source, outPath string, onProgress func(percent float64)) error
+}
+
 // Source 是一次合流的输入。
 type Source struct {
 	VideoURL string
@@ -46,6 +55,11 @@ type Source struct {
 	UA       string
 	// TotalSec 是片子时长（秒），只用来把合流进度换算成百分比；0 = 不报进度。
 	TotalSec int
+	// VideoBytes 是画面轨的字节数（DASH 的 clen），0 = 不知道。
+	// 只有它和 Workers 都合适时才会走 RangedMuxer 的分段下载。
+	VideoBytes int64
+	// Workers 是分段下载的并发数（<=1 表示不分段）。
+	Workers int
 }
 
 // State 是合流在外部看来的状态。
@@ -266,16 +280,21 @@ func (c *Cache) run(f *flight, key, path string, produce func(context.Context) (
 		if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
 			err = fmt.Errorf("创建合流缓存目录失败: %w", mkErr)
 		} else {
-			err = c.Muxer.RemuxTo(ctx, src.VideoURL, src.AudioURL, src.Referer, src.UA, path,
-				src.TotalSec, func(pct float64) {
-					if pct < 0 {
-						pct = 0
-					}
-					if pct > 99 {
-						pct = 99 // 100 留给「盘上已经有成品」这个确定状态
-					}
-					f.pct.Store(uint32(pct))
-				})
+			report := func(pct float64) {
+				if pct < 0 {
+					pct = 0
+				}
+				if pct > 99 {
+					pct = 99 // 100 留给「盘上已经有成品」这个确定状态
+				}
+				f.pct.Store(uint32(pct))
+			}
+			if rm, ok := c.Muxer.(RangedMuxer); ok && src.Workers > 1 {
+				err = rm.MuxRanged(ctx, src, path, report)
+			} else {
+				err = c.Muxer.RemuxTo(ctx, src.VideoURL, src.AudioURL, src.Referer, src.UA, path,
+					src.TotalSec, report)
+			}
 		}
 	}
 

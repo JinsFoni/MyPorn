@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +16,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/mario/myporn/internal/hls"
-	"github.com/mario/myporn/internal/muxcache"
 	"github.com/mario/myporn/internal/social"
 	"github.com/mario/myporn/internal/store"
 	"github.com/mario/myporn/internal/ytstream"
@@ -35,17 +33,16 @@ import (
 
 // ytQualityDTO 是画质菜单的一项。同一高度只报一条（取码率最高的那把）。
 //
-// Progressive = 这一档不走 HLS/MSE，而是服务端合流成 mp4 给 <video> 原生播。
-// 目前只有 2160p 会为 true（AV1 13.5 Mbps 对比 HLS 里唯一那档 VP9 28.2 Mbps，
-// 另外还绕开了 MSE 的 4K 解码崩溃，见 ytstream.Track 的注释）。
+// Dash = 这一档走 `/dash.m3u8`（AV1 分片 mp4 按 sidx 切成 HLS 分片，见 handlers_ytdash.go），
+// 目前只有 2160p 为 true：HLS 里那一档只有 VP9 28.2 Mbps，AV1 只要 13.46 Mbps。
 // 报上来的 Bandwidth/Codecs 也是**实际要播的那条**（AV1），不是 HLS 清单里的 VP9——
 // 菜单上写着 28.2 Mbps 却只下 13.5 Mbps，用户会以为哪里算错了。
 type ytQualityDTO struct {
-	Height      int    `json:"height"`
-	Label       string `json:"label"`
-	Bandwidth   int    `json:"bandwidth"`
-	Codecs      string `json:"codecs"`
-	Progressive bool   `json:"progressive"`
+	Height    int    `json:"height"`
+	Label     string `json:"label"`
+	Bandwidth int    `json:"bandwidth"`
+	Codecs    string `json:"codecs"`
+	Dash      bool   `json:"dash"`
 }
 
 // handleYtStreamInfo 打开播放弹窗时调一次：解析上游 + 报可选画质。
@@ -62,21 +59,22 @@ func (s *Server) handleYtStreamInfo(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	src, err := s.ytStreamSource(ctx, row)
 	if err != nil {
-		// 上游这会儿解析不出来（最常见：YouTube 的 IP 级风控，几分钟内 yt-dlp 拿不到地址），
-		// 但已经合好的 4K 成品还在盘上——那跟上游一点关系都没有，别陪它一起失败。
-		if q := s.cachedYtQualities(row.VideoID); len(q) > 0 {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"videoId": row.VideoID, "title": row.Title, "durationSec": row.DurationSec,
-				"src": "", "qualities": q, "default": q[0].Height, "expiresAt": "",
-				"cachedOnly": true,
-			})
-			return
-		}
 		writeSocialErr(w, err)
 		return
 	}
 	qualities := ytQualities(src.variants, src.tracks)
 	best, _ := hls.PickVariant(src.variants, 0)
+	// 顺手把 4K 那条「单文件 HLS」的会话也建起来（两次 Range 读文件头，几百毫秒），
+	// 这样前端随后要 dash.m3u8 / 第一条分片时都是现成的——起播时间能省下 2~4 秒。
+	if best.Height >= 2160 {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 25*time.Second)
+			defer cancel()
+			if _, err := s.ytDashSessionOf(ctx, row.VideoID, best.Height); err != nil {
+				s.log.Debug("4K 会话预热失败", "video", row.VideoID, "err", err)
+			}
+		}()
+	}
 	// 这里比播放器开口早一秒多（前端要等这个响应才渲染播放器），正好用来预热。
 	go s.warmYtVideo(context.WithoutCancel(r.Context()), row.VideoID, best, src.renditions)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -84,32 +82,12 @@ func (s *Server) handleYtStreamInfo(w http.ResponseWriter, r *http.Request) {
 		"title":       row.Title,
 		"durationSec": src.up.DurationSec,
 		"src":         fmt.Sprintf("/api/yt/videos/%d/stream.m3u8", row.ID),
-		"qualities":   qualities,
-		"default":     best.Height,
-		"expiresAt":   src.up.ExpiresAt.UTC().Format(time.RFC3339),
+		// 4K 走这条：AV1 分片 mp4 按 sidx 切成 HLS 分片（见 handlers_ytdash.go）
+		"dash":      fmt.Sprintf("/api/yt/videos/%d/dash.m3u8", row.ID),
+		"qualities": qualities,
+		"default":   best.Height,
+		"expiresAt": src.up.ExpiresAt.UTC().Format(time.RFC3339),
 	})
-}
-
-// cachedYtQualities 把盘上已经合好的成品折成画质菜单（按高度降序）。
-//
-// 只用来兜「上游解析失败」那一种情况：菜单里只剩这些原生播放的档，HLS 那条路没有地址。
-// 码率/编码不报（成品就是成品，菜单里只需要档位名），前端照旧按 progressive 走 /file。
-func (s *Server) cachedYtQualities(videoID string) []ytQualityDTO {
-	if s.mux == nil {
-		return nil
-	}
-	prefix := "yt-" + videoID + "-"
-	out := []ytQualityDTO{}
-	for _, key := range s.mux.KeysWithPrefix(prefix) {
-		raw := strings.TrimSuffix(strings.TrimPrefix(key, prefix), "p")
-		h, err := strconv.Atoi(raw)
-		if err != nil || h <= 0 {
-			continue
-		}
-		out = append(out, ytQualityDTO{Height: h, Label: strconv.Itoa(h) + "p", Progressive: true})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Height > out[j].Height })
-	return out
 }
 
 // handleYtStreamMaster 出「只有一档画质」的 master 清单。
@@ -491,9 +469,11 @@ func ytQualities(variants []hls.StreamVariant, tracks []ytstream.Track) []ytQual
 			Bandwidth: v.Bandwidth, Codecs: hls.PickVideoCodec(v.Codecs),
 		}
 		if t, ok := trackAt[h]; ok && h >= 2160 {
+			// 2160p 走「单文件 HLS」（AV1 分片 mp4 按 sidx 切分片），码率和编码按实际要播的报：
+			// HLS 里那一档是 VP9 28.2 Mbps，而 AV1 只有 13.46 Mbps，菜单必须写后者。
 			q.Bandwidth = int(t.Bandwidth)
 			q.Codecs = hls.PickVideoCodec(t.Codecs)
-			q.Progressive = true
+			q.Dash = true
 		}
 		out = append(out, q)
 	}
@@ -508,113 +488,4 @@ func (s *Server) ytVideoByParam(r *http.Request) (*store.YtVideoRow, error) {
 		return nil, err
 	}
 	return s.st.GetYtVideo(id)
-}
-
-// handleYtFile 是 4K 的原生播放口：把 DASH 的「AV1 画面 + AAC 音轨」合成一份 mp4 再下发。
-//
-// 为什么不继续用 HLS/MSE（2026-10-29 实测，视频 YFsMnJEbV1U / 321 秒 / 2160p60）：
-//   - YouTube 的 HLS 里 2160p 只有 VP9 一档，28.2 Mbps / 1.06 GB。这条流要 3.5 MB/s 才跟得上，
-//     而本机单连接实测 3.5~8.4 MB/s —— 缓冲永远攒不起来，1440×900 窗口里 40 秒卡了 13 次；
-//   - 同一台机器的 VideoToolbox 在 MSE 上放 VP9 4K 会每 5~30 秒崩一次
-//     （PIPELINE_ERROR_DECODE），同一份字节用原生 <video> 却是零错误；
-//   - DASH 里有 AV1 2160p（itag 401）：13.5 Mbps / 540 MB，只要一半带宽，原生播放还能硬解。
-//
-// 于是走 B 站 4K 那条同样的路：ffmpeg -c copy 落盘缓存（`muxcache`），按普通文件发，
-// Range/拖动进度条全白拿；第一次要等整条流下完（540 MB，实测 1~3 分钟），之后秒开。
-// `?status=1` 立刻回进度 JSON（同 handleVideoRemux），前端轮询到 ready 再把地址交给 <video>。
-func (s *Server) handleYtFile(w http.ResponseWriter, r *http.Request) {
-	row, err := s.ytVideoByParam(r)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_request", "视频 id 不对")
-		return
-	}
-	height := queryInt(r, "q", 0)
-	if height <= 0 {
-		writeErr(w, http.StatusBadRequest, "bad_request", "缺少画质参数 q")
-		return
-	}
-	if s.mux == nil {
-		writeErr(w, http.StatusInternalServerError, "internal", "合流器不可用（需要 ffmpeg）")
-		return
-	}
-
-	key := fmt.Sprintf("yt-%s-%dp", row.VideoID, height)
-	produce := s.ytFileProducer(row, height)
-	if r.URL.Query().Get("status") != "" {
-		// 上一次失败了：用户再来要一次就是「重试」——把失败记录和解析缓存都丢掉重来，
-		// 否则会拿着 5 分钟内的同一条错误、同一批 403 地址再答一次。
-		if s.mux.Snapshot(key).State == muxcache.StateFailed {
-			s.mux.Clear(key)
-			if s.ytStream != nil {
-				s.ytStream.Forget(row.VideoID)
-			}
-		}
-		s.writeRemuxStatus(w, key, produce)
-		return
-	}
-
-	path, err := s.mux.Ensure(r.Context(), key, produce)
-	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		// 失败最常见的原因是「这条 CDN 边不给」，换一次解析会换一批节点，值得自动重试一次。
-		// （签名没过期也会 403：实测 sn-qja5m5-5b 这类边同一份地址重试几次都是 403。）
-		s.log.Warn("YouTube 合流失败，换一批地址重试", "video", row.VideoID, "height", height, "err", err)
-		if s.ytStream != nil {
-			s.ytStream.Forget(row.VideoID)
-		}
-		path, err = s.mux.Ensure(r.Context(), key, produce)
-	}
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		s.log.Warn("YouTube 合流失败", "video", row.VideoID, "height", height, "err", err)
-		if errors.Is(err, context.DeadlineExceeded) {
-			writeErr(w, http.StatusGatewayTimeout, "mux_timeout",
-				"这一档要整条流下载完才能合流，超过时限没下完（多半是 CDN 卡住了）。稍后重试会重新解析一条线路。")
-			return
-		}
-		writeErr(w, http.StatusBadGateway, "mux_failed", "合流失败: "+err.Error())
-		return
-	}
-	st, err := os.Stat(path)
-	if err != nil || st.Size() == 0 {
-		writeErr(w, http.StatusInternalServerError, "internal", "合流产物不见了")
-		return
-	}
-	w.Header().Set("Cache-Control", "private, max-age=3600")
-	// ServeFile 负责 Range / If-Range / 206：拖动进度条靠它。
-	http.ServeFile(w, r, path)
-}
-
-// ytFileProducer 组装这一档的两条流地址。只在真的要合流时才被调用：
-// 签名地址几小时就过期，缓存命中时不该再去问 YouTube。
-//
-// 过期这件事由 ytstream.Manager 兜着：Upstream() 只在 ExpiresAt−1 分钟之前返回缓存，
-// 之后重跑一次 yt-dlp。所以这里拿到的地址一定是新的。
-func (s *Server) ytFileProducer(row *store.YtVideoRow, height int) func(context.Context) (muxcache.Source, error) {
-	return func(ctx context.Context) (muxcache.Source, error) {
-		if s.ytStream == nil {
-			return muxcache.Source{}, social.Upstream("没有配置 yt-dlp，站内播放用不了", nil)
-		}
-		up, err := s.ytStream.Upstream(ctx, row.VideoID)
-		if err != nil {
-			return muxcache.Source{}, err
-		}
-		for _, t := range up.Tracks {
-			if t.Height != height {
-				continue
-			}
-			if t.VideoURL == "" || t.AudioURL == "" {
-				break
-			}
-			return muxcache.Source{
-				VideoURL: t.VideoURL,
-				AudioURL: t.AudioURL,
-				Referer:  "https://www.youtube.com/",
-				UA:       mediaUserAgent,
-				TotalSec: up.DurationSec,
-			}, nil
-		}
-		return muxcache.Source{}, fmt.Errorf("这一档（%dp）没有 AV1 直链，只能走 HLS 播放", height)
-	}
 }

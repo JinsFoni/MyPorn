@@ -820,13 +820,13 @@ export interface YtStreamQuality {
   bandwidth: number;
   codecs: string;
   /**
-   * 这一档不走 HLS/MSE，而是服务端合流成 mp4 交给原生 `<video>`。
+   * 这一档走「单文件 HLS」：AV1 分片 mp4 按 sidx 切成 HLS 分片发（`/dash.m3u8`）。
    *
-   * 目前只有 2160p 为 true：HLS 里 4K 只有 VP9 28.2 Mbps（实测 40 秒卡 13 次），
-   * 而 DASH 的 AV1 只有 13.5 Mbps，原生播放还绕开了 MSE 上每 5~30 秒一次的 4K 解码崩溃。
-   * 代价是第一次要等整条流下完才能起播（540 MB，1~3 分钟），之后落盘缓存秒开。
+   * 目前只有 2160p 为 true。HLS 清单里 4K 只有 VP9 28.2 Mbps（实测 40 秒卡 13 次），
+   * 而 DASH 的 AV1 只要 13.46 Mbps；分片放出来之后起播只要第一段（约 1.5 秒），
+   * 拖到哪取到哪，也不用先在服务端把整条流下完。
    */
-  progressive?: boolean;
+  dash?: boolean;
 }
 
 /** 站内在线播放的解析结果：一个 HLS 地址 + 可选画质 */
@@ -842,13 +842,8 @@ export interface YtStreamInfo {
   default: number;
   /** 上游签名到期时间（RFC3339） */
   expiresAt: string;
-  /**
-   * 上游这会儿解析不出来，只回来了「盘上已经合好的那几档」（目前就是 4K）。
-   *
-   * 出现的场合：YouTube 的 IP 级风控让 yt-dlp 连续几分钟拿不到地址。成品在盘上，
-   * 跟上游没关系，所以照样能原生播放——但换档要等它能解析。
-   */
-  cachedOnly?: boolean;
+  /** 4K 那条「单文件 HLS」的 master 地址（/api/yt/videos/{id}/dash.m3u8） */
+  dash?: string;
 }
 
 export interface YtVideosPage {

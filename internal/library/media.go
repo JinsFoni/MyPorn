@@ -5,13 +5,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mario/myporn/internal/muxcache"
 )
 
 // Encoder 封装 ffmpeg / ffprobe 调用。只做 remux 与图片缩放，永不做转码。
@@ -267,6 +271,86 @@ func (e *Encoder) RemuxTo(ctx context.Context, videoURL, audioURL, referer, ua, 
 		}
 	}
 	return e.remuxURLTo(ctx, []string{videoURL, audioURL}, referer, ua, outPath, "mp4", totalSec, wrapped)
+}
+
+// MuxRanged 先把画面/声音两条直链分段并行拉到本地，再本地 -c copy 合成一份 mp4。
+//
+// 只在直链支持 Range 且知道体积时才走这条（见 muxcache.RangedMuxer）：
+// 实测单连接 2.27 MB/s，而同一台机器 6 路并发能到 6.4–7.6 MB/s，
+// 4K 那一档「准备 4 分钟」里有一多半是在等单流限速。
+//
+// 进度按「已下载字节」算（0→95%），剩下 5% 留给本地 remux：
+// 本地 -c copy 只是搬字节，实测 540 MB 几秒钟，给 5% 是故意留宽。
+func (e *Encoder) MuxRanged(ctx context.Context, src muxcache.Source, outPath string,
+	onProgress func(percent float64)) error {
+
+	vpath := outPath + ".video.dash"
+	apath := outPath + ".audio.dash"
+	defer func() { _ = os.Remove(vpath) }()
+	defer func() { _ = os.Remove(apath) }()
+
+	client := &http.Client{Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConnsPerHost:   src.Workers + 2,
+		IdleConnTimeout:       60 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	}}
+
+	report := func(pct float64) {
+		if onProgress != nil {
+			onProgress(pct)
+		}
+	}
+
+	// 声音先下（几 MB，一两秒）：它的体积不知道的话没法算总进度。
+	aSize, err := probeSize(ctx, client, src.AudioURL, src.Referer, src.UA)
+	if errors.Is(err, errNoRange) {
+		return e.remuxDirect(ctx, src, outPath, onProgress)
+	}
+	if err != nil {
+		return fmt.Errorf("探测音轨体积失败: %w", err)
+	}
+	vSize := src.VideoBytes
+	if vSize <= 0 {
+		if vSize, err = probeSize(ctx, client, src.VideoURL, src.Referer, src.UA); err != nil {
+			return fmt.Errorf("探测画面体积失败: %w", err)
+		}
+	}
+	total := vSize + aSize
+
+	var audioDone int64
+	if err := fetchRanges(ctx, client, src.AudioURL, src.Referer, src.UA, apath, aSize, 2,
+		func(done, _ int64) {
+			audioDone = done
+			report(float64(done) / float64(total) * 95)
+		}); err != nil {
+		return fmt.Errorf("下载音轨失败: %w", err)
+	}
+
+	if err := fetchRanges(ctx, client, src.VideoURL, src.Referer, src.UA, vpath, vSize, src.Workers,
+		func(done, _ int64) {
+			report(float64(audioDone+done) / float64(total) * 95)
+		}); err != nil {
+		if errors.Is(err, errNoRange) {
+			return e.remuxDirect(ctx, src, outPath, onProgress)
+		}
+		return fmt.Errorf("下载画面失败: %w", err)
+	}
+	report(95)
+
+	// 本地合：Source 里的 UA/Referer 不用传，这里两条都是盘上的文件。
+	if err := e.remuxURLTo(ctx, []string{vpath, apath}, "", "", outPath, "mp4", 0,
+		func(pct float64, _ int64) { report(95 + pct*0.04) }); err != nil {
+		return err
+	}
+	report(99)
+	return nil
+}
+
+// remuxDirect 是老的单连接路：两条直链直接喂给 ffmpeg（上游不支持 Range 时用）。
+func (e *Encoder) remuxDirect(ctx context.Context, src muxcache.Source, outPath string,
+	onProgress func(percent float64)) error {
+	return e.RemuxTo(ctx, src.VideoURL, src.AudioURL, src.Referer, src.UA, outPath, src.TotalSec, onProgress)
 }
 
 // remuxInputFlags 是每条输入前面的那串参数。

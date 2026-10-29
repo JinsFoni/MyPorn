@@ -44,6 +44,9 @@ type Track struct {
 	VideoURL    string
 	AudioURL    string
 	AudioCodecs string
+	// VideoBytes / AudioBytes 是两条流的字节数，分段并行下载要用（0 = 不知道）。
+	VideoBytes int64
+	AudioBytes int64
 }
 
 // ResolveFunc 解析一条视频的上游地址（真实现是 ytsub.YtDlp.ResolveStream）。

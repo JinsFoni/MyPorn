@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,7 +18,6 @@ import (
 	"github.com/mario/myporn/internal/events"
 	"github.com/mario/myporn/internal/hls"
 	"github.com/mario/myporn/internal/imgcache"
-	"github.com/mario/myporn/internal/muxcache"
 	"github.com/mario/myporn/internal/platform"
 	"github.com/mario/myporn/internal/store"
 	"github.com/mario/myporn/internal/ytstream"
@@ -267,36 +265,15 @@ func TestYtQualitiesPrefersAV1TrackFor2160p(t *testing.T) {
 		t.Fatalf("画质档数 = %d，想要 3", len(got))
 	}
 	// Codecs 保留完整串（菜单里前端自己按 codecFamily 折成「AV1」）
-	if !got[0].Progressive || got[0].Bandwidth != 13461975 || got[0].Codecs != "av01.0.13M.08" {
-		t.Fatalf("2160p 应当按 AV1 报并且 progressive: %+v", got[0])
+	if !got[0].Dash || got[0].Bandwidth != 13461975 || got[0].Codecs != "av01.0.13M.08" {
+		t.Fatalf("2160p 应当按 AV1 报并且走 dash: %+v", got[0])
 	}
 	for _, q := range got[1:] {
-		if q.Progressive {
+		if q.Dash {
 			t.Fatalf("%s 不该走原生播放: %+v", q.Label, q)
 		}
 	}
 	if got[1].Bandwidth != 14143470 {
 		t.Fatalf("1440p 码率被改了: %+v", got[1])
-	}
-}
-
-// 上游解析不出来时，盘上已经合好的成品照样要能列出来（按高度降序）。
-func TestCachedYtQualities(t *testing.T) {
-	dir := t.TempDir()
-	for _, name := range []string{"yt-YFsMnJEbV1U-2160p.mp4", "yt-YFsMnJEbV1U-1440p.mp4", "yt-other-720p.mp4"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	s := &Server{mux: &muxcache.Cache{Dir: dir}}
-	got := s.cachedYtQualities("YFsMnJEbV1U")
-	if len(got) != 2 || got[0].Height != 2160 || got[1].Height != 1440 {
-		t.Fatalf("缓存档位不对: %+v", got)
-	}
-	if !got[0].Progressive || got[0].Label != "2160p" {
-		t.Fatalf("缓存档位应当标成 progressive: %+v", got[0])
-	}
-	if none := s.cachedYtQualities("nope"); len(none) != 0 {
-		t.Fatalf("没有缓存时应当是空的: %+v", none)
 	}
 }

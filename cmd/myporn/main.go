@@ -79,7 +79,13 @@ func main() {
 	)
 	flag.Parse()
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// 默认只打 Info；排查播放链路（分片耗时、预取命中、预热）时用 MYPORN_LOG_LEVEL=debug
+	// 打开 Debug，不用改代码重编——这类问题要在「真在播」的时候看日志，改代码就把现场弄没了。
+	logLevel := slog.LevelInfo
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("MYPORN_LOG_LEVEL")), "debug") {
+		logLevel = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)
 
 	// 把工作目录切到项目根，保证 ./data、./media 等相对路径稳定。

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -50,10 +51,21 @@ type Server struct {
 	// 子清单地址，所以预热和播放器必须用同一份原文，否则两边拿到的 URL 根本不一样。
 	ytMasterMu sync.Mutex
 	ytMaster   map[string]cachedYtSource
-	limiter    *loginLimiter
-	started    time.Time
-	clients    map[string]*http.Client // 平台出网客户端（图片代理 / 串流共用）
-	mu         sync.Mutex
+
+	// ytDash 是 4K「单文件 HLS」的会话表：每条会话只存两条流的 sidx 索引（几十 KB），
+	// 分片请求靠它把 Range 翻译成上游偏移。见 handlers_ytdash.go 的包注释。
+	ytDashMu sync.Mutex
+	ytDash   map[string]*ytDashSession
+	// ytDashConn 是上游分片连接的闸门（容量见 ytDashMaxConns）
+	ytDashConn chan struct{}
+	// ytDashBulk 是预取专用的闸门（容量见 ytDashBulkConns）
+	ytDashBulk chan struct{}
+	// ytCacheBytes 是预取缓存当前占用（上限见 ytDashCacheMax）
+	ytCacheBytes atomic.Int64
+	limiter      *loginLimiter
+	started      time.Time
+	clients      map[string]*http.Client // 平台出网客户端（图片代理 / 串流共用）
+	mu           sync.Mutex
 }
 
 func New(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg *social.Registry,
@@ -63,8 +75,11 @@ func New(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg 
 		cfg: cfg, st: st, reg: reg, social: socialReg, hub: hub, runner: runner, box: box, log: log,
 		px:     proxying.New(st, cfg),
 		static: static, images: images, limiter: newLoginLimiter(), started: time.Now(),
-		clients:  map[string]*http.Client{},
-		ytMaster: map[string]cachedYtSource{},
+		clients:    map[string]*http.Client{},
+		ytMaster:   map[string]cachedYtSource{},
+		ytDash:     map[string]*ytDashSession{},
+		ytDashConn: make(chan struct{}, ytDashMaxConns),
+		ytDashBulk: make(chan struct{}, ytDashBulkConns),
 	}
 	if runner != nil {
 		s.mux = muxcache.New(filepath.Join(cfg.DataDir, "mux"), runner.Encoder())
@@ -94,6 +109,7 @@ func New(cfg *config.Config, st *store.Store, reg *platform.Registry, socialReg 
 			tracks = append(tracks, ytstream.Track{
 				Height: t.Height, Codecs: t.Codecs, Bandwidth: t.Bandwidth,
 				VideoURL: t.VideoURL, AudioURL: t.AudioURL, AudioCodecs: t.AudioCodecs,
+				VideoBytes: t.VideoBytes, AudioBytes: t.AudioBytes,
 			})
 		}
 		return ytstream.Upstream{
@@ -231,9 +247,10 @@ func (s *Server) Routes() http.Handler {
 			// 站内在线播放：清单（改写成会话地址）+ 画质清单 + 会话取物口。
 			pr.Get("/yt/videos/{id}/stream", s.handleYtStreamInfo)
 			pr.Get("/yt/videos/{id}/stream.m3u8", s.handleYtStreamMaster)
-			// 4K 的原生播放：服务端把 DASH 的 AV1 画面 + AAC 音轨合成一份 mp4（ffmpeg -c copy），
-			// 落盘缓存后按普通文件发。?status=1 立刻回进度 JSON，其余情况直接发文件（Range 照常）。
-			pr.Get("/yt/videos/{id}/file", s.handleYtFile)
+			// 4K 的「单文件 HLS」：把 AV1 分片 mp4 按 sidx 切成 HLS 分片发（#EXT-X-MAP + BYTERANGE），
+			// 起播只要第一段、拖到哪取到哪。建不起来就 302 回上面的 VP9 清单。
+			pr.Get("/yt/videos/{id}/dash.m3u8", s.handleYtDashMaster)
+			pr.Get("/yt/dash/{sid}/{rest}", s.handleYtDashAny)
 			pr.Get("/yt/seg/{sid}/{n}", s.handleYtStreamSeg)
 			pr.Get("/yt/health", s.handleYtHealth)
 			// 补「时间未知」：现场统计 + 排一个 yt_meta 任务（走观看页，不用 yt-dlp）。

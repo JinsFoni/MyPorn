@@ -877,18 +877,29 @@ GET /api/yt/seg/{sid}/{n}
 另有上限 64 个会话、满了按 FIFO 淘汰。`handleYtStreamSeg` 被算作长连接接口。
 
 ```
-GET /api/yt/videos/{id}/file[?q=高度][&status=1]
-→ 200 video/mp4 (Range/206)        4K 的合流产物（`<video>` 原生播放）
-→ 200 {state,percent,elapsedSec}   `status=1`：进度，前端轮询到 ready 再拿文件
-→ 502 mux_failed | 504 mux_timeout 合流失败/超时（失败后会自动换一批地址再试一次）
+GET /api/yt/videos/{id}/dash.m3u8[?q=高度]
+→ 200 application/vnd.apple.mpegurl   「单文件 HLS」的 master（只有一档画质 + 音轨）
+→ 302 /api/yt/videos/{id}/stream.m3u8?q=  建不起来时（无 AV1 直链 / 不是分片 mp4 / sidx 读不出）
 ```
 
-4K（2160p）不走 HLS：YouTube 的 HLS 里这一档只有 VP9 28.2 Mbps，而 DASH 的 AV1 只要
-13.5 Mbps，且原生 `<video>` 绕开了 MSE 上每 5–30 秒一次的 VP9 4K 解码崩溃。
-服务端把「AV1 画面 + AAC 音轨」用 ffmpeg `-c copy` 合成一份 mp4 落盘缓存
-（`yt-<videoID>-2160p.mp4`，实测 540 MB / 4 分钟，之后秒开、Range 拖动全支持）。
-`/stream` 返回的画质列表里这一档带 `"progressive": true`，`bandwidth`/`codecs` 报的是 AV1 那条。
-细节与踩过的坑见 `docs/M6-YOUTUBE.md` §14.10。
+4K（2160p）不走 VP9 的 HLS：HLS 里这一档只有 VP9 `vp09.00.51.08` 28.2 Mbps，而 DASH 的 AV1
+（itag 401、`av01.0.13M.08`）只要 13.46 Mbps。AV1 那两条轨**本身就是分片 mp4**（`ftyp`+`moov`+`sidx`
++一串 `moof`+`mdat`），`sidx` 里逐段写着偏移/长度/时长，所以服务端直接把它当 HLS 发：
+`#EXT-X-MAP` 指头、57 条 `#EXT-X-BYTERANGE` 指段。起播只要第一段（8.84 MB），不是整份 540 MB。
+`/stream` 返回的画质列表里这一档带 `"dash": true`，`bandwidth`/`codecs` 报的是 AV1 那条。
+
+```
+GET /api/yt/dash/{sid}/{v|a}.m3u8        → 200 application/vnd.apple.mpegurl（子清单，全是 BYTERANGE）
+GET /api/yt/dash/{sid}/{v|a}-init.mp4    → 200 video/mp4（ftyp+moov）
+GET /api/yt/dash/{sid}/{v|a}.mp4?i=<n>   → 206 video/mp4（Range：偏移是**整份文件**的偏移）
+→ 410 session_expired                    会话没了/过期了：重新解析一次即可
+```
+
+`{sid}` 是随机会话号（16 字节 hex）。会话里存的是「上游签名地址 + sidx 索引」，所以浏览器
+看到的分片地址不带签名、也不带 googlevideo 域名。分片请求进来时服务端按偏移切 3 块并发向上游取
+（`Range` 透传），边到边发；每发完一段，后台再把后面 4 段合成一次大请求预取进内存。
+会话寿命跟着上游 `expire`，上限 64 个、满了 FIFO 淘汰。细节与实测数字见
+`docs/M6-YOUTUBE.md` §14.11。
 
 **为什么不用 iframe**：一批版权音乐视频在 `youtube-nocookie.com/embed/…` 里直接显示
 「此视频不能观看」（用一张裸 HTML 页面复现过，跟本应用无关），而服务端代理出来能正常播。

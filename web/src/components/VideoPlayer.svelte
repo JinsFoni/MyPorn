@@ -59,6 +59,15 @@
     onStarted?: () => void;
     /** 播放失败（含 hls.js 的不可恢复错误），交给页面自己的错误浮层处理 */
     onFailed?: (message: string) => void;
+    /**
+     * 进度回调（约每秒一次，只在真的走了 1 秒以上才报）。
+     *
+     * 用途：页面要「先放低一档、等 4K 合好再切过去」时，切过去会换引擎（hls → native）、
+     * 整个播放器重建，得靠这个回调把进度接住，再把 `startAt` 塞回来。
+     */
+    onTime?: (time: number, paused: boolean) => void;
+    /** 首次挂载时要从哪一秒开始（<=1 当作从头）；换片源的续播由播放器自己处理 */
+    startAt?: number;
     /** 盖在画面上方的页面级浮层（解析中 / 播放失败） */
     overlay?: Snippet;
   }
@@ -76,6 +85,8 @@
     onSelectQuality,
     onStarted,
     onFailed,
+    onTime,
+    startAt = 0,
     overlay,
   }: Props = $props();
 
@@ -118,6 +129,8 @@
 
   /** 换片源后要恢复的进度/播放状态 */
   let pendingSeek = 0;
+  /** 上一次报给 onTime 的秒数（用来节流成「一秒一条」） */
+  let lastReportedTime = 0;
   let pendingPlay = false;
   /** 首帧起播还没成功：HLS 引擎要等清单解析完才能 play，所以先挂个待播标记 */
   let wantPlay = false;
@@ -603,6 +616,8 @@
     }
     applySource(el, { src, type });
     if (!switching) {
+      // 首帧挂载：页面可能要求从某个位置起播（见 startAt 的注释）
+      if (Number.isFinite(startAt) && startAt > 1) pendingSeek = startAt;
       wantPlay = true;
       wantPlayTries = 0;
       // 立刻试一次（mp4 会马上起播）；HLS 这时引擎还没接上媒体，失败后由 kickPlay 重试
@@ -812,6 +827,11 @@
       if (s.started && !startedSent) {
         startedSent = true;
         onStarted?.();
+      }
+
+      if (onTime && Math.abs(s.currentTime - lastReportedTime) >= 1) {
+        lastReportedTime = s.currentTime;
+        onTime(s.currentTime, s.paused);
       }
 
       // 首次起播：媒体一就绪就催一次，剩下的交给 kickPlay 的定时重试

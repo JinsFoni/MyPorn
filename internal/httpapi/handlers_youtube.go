@@ -85,12 +85,12 @@ func (s *Server) ytChannelDTO(c *store.YtChannel) ytChannelDTO {
 func (s *Server) ytVideoDTO(v *store.YtVideoRow) ytVideoDTO {
 	return ytVideoDTO{
 		ID: v.ID, VideoID: v.VideoID, Title: v.Title,
-		URL:         "https://www.youtube.com/watch?v=" + v.VideoID,
+		URL: "https://www.youtube.com/watch?v=" + v.VideoID,
 		// 封面按 id 现拼，不用库里存的缩略图地址：i.ytimg 的尺寸就是 URL 里的文件名，
 		// 存下来那份是 mqdefault（320×180），在 4 列墙上（每张 ~316px、DPR2 要 632px）明显发糊。
 		// 主选 hq720（1280×720），老视频没有这一档（实测 jNQXAC9IVRw 返回 404）→ f= 兜到 mqdefault。
-		ThumbURL:  imgProxyChain("youtube", ytsub.ThumbURL(v.VideoID, "hq720"), ytsub.ThumbURL(v.VideoID, "mqdefault")),
-		PosterURL: imgProxyChain("youtube", ytsub.ThumbURL(v.VideoID, "maxresdefault"), ytsub.ThumbURL(v.VideoID, "hq720")),
+		ThumbURL:    imgProxyChain("youtube", ytsub.ThumbURL(v.VideoID, "hq720"), ytsub.ThumbURL(v.VideoID, "mqdefault")),
+		PosterURL:   imgProxyChain("youtube", ytsub.ThumbURL(v.VideoID, "maxresdefault"), ytsub.ThumbURL(v.VideoID, "hq720")),
 		EmbedURL:    "https://www.youtube-nocookie.com/embed/" + v.VideoID,
 		DurationSec: v.DurationSec, Views: v.Views, PublishedAt: rfc3339(v.PublishedAt),
 		DateKnown: v.PublishedAt != nil, IsLive: v.IsLive, Seen: v.Seen, Saved: v.Saved,

@@ -46,6 +46,10 @@ type DashTrack struct {
 	VideoURL    string
 	AudioURL    string // 共用一条音轨（AAC / m4a）
 	AudioCodecs string
+	// VideoBytes / AudioBytes 是两条流的字节数（yt-dlp 的 filesize/clen）。
+	// 有了它才能按字节分段并行下载（单连接被 CDN 限速，见 library.fetchRanges）。
+	VideoBytes int64
+	AudioBytes int64
 }
 
 // streamProbe 只取 -j 输出里用得上的几个字段。
@@ -66,8 +70,18 @@ type streamFormat struct {
 	VCodec      string  `json:"vcodec"`
 	ACodec      string  `json:"acodec"`
 	Tbr         float64 `json:"tbr"` // 总码率 kbps（画面那条只有画面）
+	Filesize    int64   `json:"filesize"`
+	FilesizeEst int64   `json:"filesize_approx"`
 	AbR         float64 `json:"abr"` // 音轨码率 kbps
 	URL         string  `json:"url"`
+}
+
+// size 是 yt-dlp 给的字节数：优先 filesize（clen），没有就退估算值。
+func (f streamFormat) size() int64 {
+	if f.Filesize > 0 {
+		return f.Filesize
+	}
+	return f.FilesizeEst
 }
 
 // ResolveStream 解析一条视频的 HLS master 地址。
@@ -83,7 +97,12 @@ func (y *YtDlp) ResolveStream(ctx context.Context, videoID string) (StreamInfo, 
 	args = append(args, y.commonArgs()...)
 	args = append(args, BaseURL+"/watch?v="+videoID)
 
+	started := time.Now()
 	stdout, stderr, err := y.run(ctx, bin, args...)
+	// 解析耗时是「点开到出画面」里最长的一段（实测冷启动 13~16 秒），
+	// 想优化起播就得先能看见它到底花在哪一次调用上——所以这行用 Debug 常开着不吵。
+	y.log.Debug("yt-dlp 解析完成", "videoId", videoID,
+		"elapsed", time.Since(started).Round(time.Millisecond).String(), "err", err)
 	if err != nil {
 		return StreamInfo{}, y.mapError(err, stderr)
 	}
@@ -158,12 +177,14 @@ func parseEpoch(s string) int64 {
 func dashTracks(formats []streamFormat) []DashTrack {
 	audioURL, audioCodecs := "", ""
 	bestABR := 0.0
+	var audioBytes int64
 	for _, f := range formats {
 		if !strings.HasPrefix(f.ACodec, "mp4a") || f.VCodec != "none" || f.Ext != "m4a" || f.URL == "" {
 			continue
 		}
 		if f.AbR > bestABR {
 			bestABR, audioURL, audioCodecs = f.AbR, f.URL, f.ACodec
+			audioBytes = f.size()
 		}
 	}
 	if audioURL == "" {
@@ -185,6 +206,8 @@ func dashTracks(formats []streamFormat) []DashTrack {
 			VideoURL:    f.URL,
 			AudioURL:    audioURL,
 			AudioCodecs: audioCodecs,
+			VideoBytes:  f.size(),
+			AudioBytes:  audioBytes,
 		}
 		if prev, ok := byHeight[f.Height]; !ok || t.Bandwidth > prev.Bandwidth {
 			byHeight[f.Height] = t
