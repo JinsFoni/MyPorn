@@ -121,7 +121,7 @@ B 站不是「追一个艺人」，是「订阅一个内容源」。所以它和
 | 视频墙 | 侧边栏「B 站」（`/bilibili`，徽标 = 未看条数） | UP 主胶囊 + 全部/未看 + 封面墙 + 「全部标为已看」「添加 UP 主」 |
 | 管理 | 管理 → 「B 站」页签（`/manage?tab=bilibili`） | 读数、Cookie/ffmpeg 状态、加 UP 主、逐位 UP 主的同步/回填续翻/下载未看/停用/删除 |
 | 设置 | 设置 → 「B 站」 | Cookie（SESSDATA）+ 画质说明；「网络与代理」里多一行 B 站专用代理 |
-| 手机 | 「动态」顶部的分段控件（动态 / YouTube / B 站） | 底部导航仍是 6 格，塞不下第 7 格 |
+| 手机 | 底部导航第 4 格「B 站」（`grid-cols-8`） | 原先是「动态」顶部的分段控件；2026-10-29 拆掉那排切换，B 站和 YouTube 直接进底栏 |
 
 墙上每张卡直接链到 `/video/{id}`：详情页就是那套现成的「播放 + 画质 + 下载」，
 B 站没有专属播放器组件，只有「每档画质的地址从哪来」这一件事不同（§4）。
@@ -410,4 +410,4 @@ PCDN 不是永远慢（单条 30 MB range 实测 7.29 MB/s，跟官方镜像 7.5
 | `internal/httpapi/handlers_bilibili.go` | `/api/bilibili/*` 与 `/api/manage/bilibili` |
 | `internal/store/migrations/0010_m7b_bilibili_page.sql` | 投稿墙与未看角标的两个索引 |
 | `web/src/routes/Bilibili.svelte` | 视频墙（UP 主胶囊 + 筛选 + 添加） |
-| `web/src/components/SocialTabs.svelte` | 手机端「动态 / YouTube / B 站」分段控件 |
+| `web/src/components/AppShell.svelte` | 手机底栏 8 格：YouTube / B 站 直接进底栏（原先那排「动态 / YouTube / B 站」分段控件已拆掉） |

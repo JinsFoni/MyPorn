@@ -63,13 +63,10 @@
 
   // 设置不进侧边列表，单独摆在侧边栏右下角（只显示齿轮图标）；移动端底部 tab 仍保留五项
   const SIDE_NAV = NAV.filter((item) => item.icon !== 'settings');
-  // 移动端底部只有 6 格：加「动态」之后把「发现」收进艺人页（那里本来就有搜索和推荐位），
-  // 否则 7 格在 320px 屏上每格只剩 45px，字都要挤掉。
-  // YouTube / B 站也不进底部：它们和「动态」是同一类「订阅内容流」，
-  // 用 /moments 顶部的分段控件切换（见 SocialTabs）。
-  const MOBILE_NAV = NAV.filter(
-    (item) => item.icon !== 'discover' && item.icon !== 'youtube' && item.icon !== 'bilibili',
-  );
+  // 移动端底部 8 格：YouTube / B 站 也摆进来（/moments 顶部那排分段控件已经拆掉，
+  // 手机上侧边栏不存在，底栏是唯一入口）。「发现」仍不进底栏——它收在艺人页里
+  // （那里本来就有搜索和推荐位），再放一格 320px 屏上每格只剩 40px，图标都要挤。
+  const MOBILE_NAV = NAV.filter((item) => item.icon !== 'discover');
   const settingsActive = $derived(ui.settingsOpen);
 
   /** 移动端底部 tab 的共用样式 */
@@ -444,7 +441,7 @@
     class="fixed inset-x-0 bottom-0 z-40 bg-ink/85 pb-safe backdrop-blur-xl backdrop-saturate-150 lg:hidden"
     aria-label="主导航"
   >
-    <ul class="grid grid-cols-6">
+    <ul class="grid grid-cols-8">
       {#each MOBILE_NAV as item (item.href)}
         {@const isActive = item.icon === 'settings' ? settingsActive : activeHref === item.href}
         <li>

@@ -9,7 +9,6 @@
    */
   import { onMount, untrack } from 'svelte';
   import InfiniteList from '../components/InfiniteList.svelte';
-  import SocialTabs from '../components/SocialTabs.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import { ApiError, api, messageFor } from '../lib/api';
   import { imageUrl } from '../lib/img';
@@ -305,11 +304,8 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="flex flex-col gap-4">
-  <!-- 顶部切换：动态 / YouTube。两个页面是「订阅内容流」的两种形态，共用这一行。 -->
-  <div class="flex items-center justify-between gap-3">
-    <SocialTabs active="moments" />
-  </div>
-
+  <!-- 这一页不再挂「动态 / YouTube / B 站」那排分段控件：三个入口已经都在导航里
+       （桌面侧边栏、手机底栏），页面顶部只留工具栏。 -->
   <!-- 工具栏：筛选用横向胶囊，右侧是唯一的主动作 -->
   <div class="flex flex-wrap items-center gap-2">
     <div class="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1 pb-1">
