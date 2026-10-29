@@ -725,25 +725,25 @@
       aria-modal="true"
       aria-label={v.title}
     >
-      <!-- 顶栏只剩一个关闭键：标题挪到画面下面，先看片再读标题 -->
-      <div class="flex items-center justify-end gap-3">
-        <button
-          type="button"
-          class="shrink-0 rounded-full p-1.5 text-dim transition-colors hover:bg-panel hover:text-fg"
-          onclick={closeDetail}
-          aria-label="关闭"
-        >
-          <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="m6 6 12 12M18 6 6 18" stroke-linecap="round" />
-          </svg>
-        </button>
-      </div>
+      <!-- 关闭键浮在画面右上角，而不是自己占一行：占一行的话画面顶边到弹窗边缘是
+           16(内边距)+28(那一行)+12(mt-3)=56px，左右只有 16px，实测就是 56 vs 16，
+           看着像上边距翻了三倍。现在画面顶边 = 左右 = 16px。 -->
+      <button
+        type="button"
+        class="absolute right-4 top-4 z-40 rounded-full bg-ink/70 p-1.5 text-fg/90 backdrop-blur-sm transition-colors hover:bg-ink hover:text-fg"
+        onclick={closeDetail}
+        aria-label="关闭"
+      >
+        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="m6 6 12 12M18 6 6 18" stroke-linecap="round" />
+        </svg>
+      </button>
 
       <!-- 播放器：默认走服务端出的 HLS（画质到 4K、无广告、隐私模式下也能看）。
            内嵌 iframe 只在解析失败时当兜底，隐私模式下连这个兜底也不给。 -->
       {#if useEmbed}
         <iframe
-          class="mt-3 aspect-video w-full rounded-xl bg-ink"
+          class="aspect-video w-full rounded-xl bg-ink"
           src={v.embedUrl}
           title={v.title}
           allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen"
@@ -751,7 +751,7 @@
         ></iframe>
       {:else if stream}
         {#key streamAttempt}
-          <div class="mt-3 overflow-hidden rounded-xl bg-black">
+          <div class="overflow-hidden rounded-xl bg-black">
             <VideoPlayer
               src={streamSrc}
               type={HLS_TYPE}
@@ -786,7 +786,7 @@
           </div>
         {/key}
       {:else}
-        <div class="relative mt-3 aspect-video w-full overflow-hidden rounded-xl bg-black">
+        <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-black">
           {#if streamLoading}
             <VideoLoading
               poster={v.posterUrl || v.thumbUrl}
