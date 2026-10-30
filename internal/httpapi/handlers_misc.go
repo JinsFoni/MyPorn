@@ -190,7 +190,13 @@ func normalizeBiliCookie(raw string) (string, error) {
 		}
 	}
 	if !has {
-		return "", fmt.Errorf("Cookie 里没有 SESSDATA：B 站登录态靠它，请从已登录的浏览器里复制整串")
+		// 2026-10-30 实测：照着「控制台里输 document.cookie」拿到的那串里**没有** SESSDATA
+		// ——它是 HttpOnly，document.cookie 根本看不见。那种串打 nav 只会回 -101，
+		// 现象又变回「配了还是没登录」。所以报错里直接把「怎么拿」说清。
+		return "", fmt.Errorf("Cookie 里没有 SESSDATA：B 站登录态靠它，而它是 HttpOnly，" +
+			"控制台的 document.cookie 看不到。请用 F12 → Network 里任意 api.bilibili.com 请求的 " +
+			"Request Headers → cookie 那一行，或 Application → Cookies → https://www.bilibili.com " +
+			"里复制 SESSDATA 的值；浏览器导出的 cookies.txt 也能直接粘")
 	}
 	return strings.Join(parts, "; "), nil
 }

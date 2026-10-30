@@ -828,6 +828,16 @@
                         <span class="text-muted">cookies.txt</span> 原件都能用，粘进来即可。
                         4K / HDR 要大会员。Cookie 加密存库，保存后不再回显。
                       </p>
+                      <!-- 2026-10-30 实测：SESSDATA 是 HttpOnly，控制台 document.cookie 里没有它；
+                           照那个粘过来的串打 nav 只会回 -101，现象又变回「配了还是没登录」。 -->
+                      <p class="mt-1 text-meta text-dim">
+                        注意：控制台里敲 <code class="font-mono">document.cookie</code>
+                        拿到的那串<b>不含</b>
+                        SESSDATA（HttpOnly）。要拿整段就去 F12 → Network 点任意一条
+                        <code class="font-mono">api.bilibili.com</code>
+                        请求，复制 Request Headers 里的 cookie 那一行；或在 Application → Cookies →
+                        bilibili.com 里复制 SESSDATA 的值。
+                      </p>
                       <textarea
                         id="bili-cookie"
                         class="field mt-2 h-24 resize-y font-mono text-meta"
