@@ -524,10 +524,30 @@ curl -s 'https://api.bilibili.com/x/web-interface/nav' -H 'Cookie: SESSDATA=…'
 
 ## 9. 待验证
 
-- **扫码登录的成功分支还没真扫过**：`generate`（74 ms）、`poll` 的 `pending` 状态、二维码
-  渲染（240×240）都实测过，但「扫完 → Set-Cookie 落库 → nav 回昵称」这一段要手机真扫一次
-  才能闭环，包括 `buvid3` 补齐和 `canRefresh=true` 的显示。同理续期四步也还没真跑过
-  （手上那条登录态已被作废，`cookie/info` 直接回 -101，没有 `refresh_token` 可续）。
+- **「B 站自己置 `refresh=true` 那一刻，定时任务自动续上」这一条还没等到**：四步续期已手工
+  真跑过（见 §7.12.4），但 `data.refresh` 由 B 站按自己的时间表置位，刚登录时是 `false`，
+  要等它临近过期才会变 `true`。到时候看日志有没有 `INFO B 站登录态已续期 mid=…` 即可。
+
+### 7.12.4 真机验证记录（2026-10-30 19:19–19:21）
+
+手机扫完码之后逐项量了一遍：
+
+| 项 | 结果 |
+|---|---|
+| 服务端日志 | `B 站扫码登录成功 mid=34899708 可自动续期=true` → 紧接着 `B 站登录态确认有效 uname=月白喵丶` |
+| `GET /api/bilibili/health` | `loggedIn=true`、`uname="月白喵丶"`、`canRefresh=true`、`cookieBroken=false` |
+| 落库 | `bili_cookie` 504 字节密文、`bili_ac_time_value` 80 字节密文，同一秒写入（`2026-10-30T11:19:58Z`） |
+| 凭据解码 | `SESSDATA` 222 字节、`bili_jct` 32、`refresh_token` 32、`buvid3` 有、`Complete()=true` |
+| 页面 | `/bilibili` 三处横幅（扫码 / 被作废 / 不能自动续期）全部消失 |
+| 第 1 步 `cookie/info` | `need_refresh=false`（刚登录，还没进续期窗口），无错误 |
+| 第 2~4 步 | 手工强制跑完：`correspond` 抠到 `refresh_csrf` → `cookie/refresh` 换新 → `confirm/refresh` 确认，**全程 0.97 s**；写库后再打 nav 仍回 `月白喵丶`，说明新凭据生效、旧的已作废 |
+
+强制轮换用的是一次性工具（不入库，已删）：读库里的 `bili_cookie` + `bili_ac_time_value` →
+`RefreshCredential` → 回写两个 secret。正是因为刚扫的码重扫成本只有几十秒，才敢在真机上新旧轮换一次；
+平时这一动作由 `runBiliCredentialScheduler` 在 B 站置位后自动完成。
+
+另一条副作用实测：扫码之后 `nav` 立刻可用，但**旧的手填 Cookie 已经彻底没用了**（那条会话本身
+早被作废），库里只剩这一条新凭据。
 
 - ~~登录后 `arc/search` 的限额是否变宽~~ → **问错了**：额度取决于 wbi 签名，不取决于登录（§7-7）；
 - ~~1080P 的 `dash.video` 是否给到 `id=80`~~ → **已实测给到**（§7.8）；
