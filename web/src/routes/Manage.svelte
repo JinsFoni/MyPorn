@@ -6,7 +6,7 @@
   import StatTile from '../components/StatTile.svelte';
   import SubscriptionRow from '../components/SubscriptionRow.svelte';
   import { api, messageFor } from '../lib/api';
-  import { formatBytes, formatCount, formatDate, relativeFuture, relativeTime } from '../lib/format';
+  import { formatBytes, formatCount, formatDate, formatDateTime, relativeFuture, relativeTime } from '../lib/format';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
   import { platformLabel } from '../lib/platform';
@@ -1286,11 +1286,15 @@
               <span class={biliHealth.loggedIn ? 'text-sage' : 'text-brick'}>
                 {biliHealth.loggedIn
                   ? `已登录 ${biliHealth.uname}（1080P 可用）`
-                  : biliHealth.cookieBroken
-                    ? 'Cookie 在库里但解不开（服务端密钥变了，重填之前先修密钥）'
-                    : biliHealth.hasCookie
-                      ? 'Cookie 存了但没登录成功（最高 720P）'
-                      : '未填 Cookie（最高 720P）'}
+                  : biliHealth.navError
+                    ? '查不出 B 站登录状态（网络/风控），不代表 Cookie 失效'
+                    : biliHealth.cookieBroken
+                      ? 'Cookie 在库里但解不开（服务端密钥变了，重填之前先修密钥）'
+                      : biliHealth.hasCookie
+                        ? biliHealth.lastLoginOk
+                          ? `B 站作废了这条登录态（上次确认有效 ${formatDateTime(biliHealth.lastLoginOk)}，最高 720P）`
+                          : 'Cookie 存了但 B 站说未登录（最高 720P，可能已作废）'
+                        : '未填 Cookie（最高 720P）'}
               </span>
               <span class={biliHealth.ffmpegOk ? 'text-sage' : 'text-brick'}>
                 {biliHealth.ffmpegOk ? 'ffmpeg 可用（分轨档位能合流）' : 'ffmpeg 缺失，480P 及以上放不了'}

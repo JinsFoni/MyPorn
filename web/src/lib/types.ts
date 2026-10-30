@@ -214,6 +214,16 @@ export interface BiliHealth {
   loggedIn: boolean;
   /** nav 回的昵称（登录成功才有） */
   uname: string;
+  /**
+   * 上一次 nav 明确确认「已登录」的时间。有它才能区分「从没成功过（粘错了）」
+   * 和「曾经有效、后来被 B 站作废」——后者除了重填没别的办法，而且 Cookie 里
+   * 自带的到期时间说明不了问题（2026-10-30 实测：内嵌到期 2027-04-25，第 5 天就回 -101）。
+   */
+  lastLoginOk?: string;
+  /** nav 请求本身失败（网络 / 风控）：这时 loggedIn=false 不代表 Cookie 失效 */
+  navError?: string;
+  /** 库里这条 Cookie 的写入时间（配合「B 站现在说未登录」说明是哪条、什么时候填的） */
+  cookieSetAt?: string;
   /** 分轨档位要靠 ffmpeg 合流 */
   ffmpegOk: boolean;
   hasProxy: boolean;

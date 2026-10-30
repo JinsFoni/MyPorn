@@ -56,6 +56,20 @@ func (s *Store) SetSecret(box *secret.Box, key, plain string) error {
 	return err
 }
 
+// SecretUpdatedAt 返回这条敏感项最近一次被写入的时间（RFC3339，空 = 没这条）。
+//
+// 用途：B 站把登录态作废时，界面要说的是「这条 Cookie 是 X 写进来的、现在 B 站不认了」，
+// 而不是含糊的「Cookie 失效」。2026-10-30 就是这么一次：用户以为又踩了密钥坑，
+// 实际是 B 站在 SESSDATA 到期前把那条登录态作废了（内嵌到期 2027-04-25，第 5 天 -101）。
+func (s *Store) SecretUpdatedAt(key string) (string, error) {
+	var at string
+	err := s.db.QueryRow(`SELECT updated_at FROM settings WHERE key = ?`, key).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return at, err
+}
+
 // SecretState 是三态答案，比 bool 多出来的那一态就是用户投诉的那个 bug。
 type SecretState int
 

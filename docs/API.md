@@ -991,12 +991,21 @@ B 站没有自己的表：UP 主是 `performers` 的一行（`platform='bilibili
 ```
 → 200 {
     "hasCookie": true,    // 库里存了 Cookie（**不等于能用**，见 loggedIn）
+    "cookieBroken": false,// 存着但用当前 APP_ENCRYPTION_KEY 解不开（密钥换过）——重填前先修密钥
     "loggedIn": true,     // 真拿这条 Cookie 打了一次 nav：能登录上吗
     "uname": "月白喵丶",    // nav 回的昵称（未登录是空串）
+    "lastLoginOk": "2026-10-30T10:32:34Z", // 上一次 nav 明确确认「已登录」的时间（从没确认过就没有这个字段）
+    "navError": "…",      // 仅在 nav 请求本身失败时出现（网络/风控）：有它说明「没问出来」，不代表 Cookie 失效
+    "cookieSetAt": "2026-10-29T07:49:13Z", // 库里这条 Cookie 的写入时间
     "ffmpegOk": true,     // 分轨档位（480P 及以上）要靠它合流
     "hasProxy": false
   }
 ```
+
+`lastLoginOk` / `cookieSetAt` 是为了把三种「没登录上」分开：**查不出来**（`navError` 非空）、
+**曾经有效、后来被 B 站作废**（`lastLoginOk` 有值）、**从没成功过**（多半粘错了）。
+Cookie 里自带的到期时间不算数——B 站可以在到期前作废登录态（2026-10-30 实测：内嵌到期
+2027-04-25，第 5 天就回 `-101`，见 `docs/M7-BILIBILI.md` §7.11）。
 
 这三项看起来像故障、其实是 B 站的规则，所以界面上要能直接看到（对应 M6 的 `GET /api/yt/health`）。
 

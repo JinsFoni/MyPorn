@@ -402,6 +402,42 @@ PCDN 不是永远慢（单条 30 MB range 实测 7.29 MB/s，跟官方镜像 7.5
 
 注意：密文用 AES-GCM，密钥丢了**不可能**恢复。这条记录只能重填一次（重填时会用当前密钥加密）。
 
+## 7.11 「Cookie 又失效了」但不是密钥的锅（2026-10-30 实测）
+
+症状：/bilibili 顶部又亮红条。刚踩过 §7.10 的密钥坑，第一反应是「密钥又被盖掉了」。
+
+量到的事实（这次**不是**密钥问题）：
+
+| 检查 | 结果 |
+|---|---|
+| `/api/bilibili/health` | `hasCookie=true`、`cookieBroken=false`（解密成功） |
+| `settings.secret_key_fp` 与当前密钥指纹 | 一致；`bili_cookie` 写于 2026-10-29T07:49:13Z |
+| `nav` / `x/space/myinfo` / `nav/stat` 三个接口 | 一律 `{"code":-101,"message":"账号未登录"}` |
+| 只发 `SESSDATA=`（原样 `%2C` 222 字节 / URL 解码 216 字节） | 两种写法都是 `-101` |
+| SESSDATA 内嵌的到期时间 | **2027-04-25 01:08:10** |
+| `bili_ticket_expires` | 2026-10-29 23:59:40（比发现时早约 19 小时） |
+| Cookie 字段数 | 36 个，`buvid3` / `b_nut` / `buvid4` / `bili_jct` 都在（不是漏字段） |
+
+结论：**Cookie 能解开、字段齐全、内嵌到期日还有半年，B 站却在到期前把这条登录态作废了。**
+现实中就三种来路：在那台浏览器里退出登录、改密码、风控（本机出口 IP 和浏览器不是同一个，
+风控嫌疑最大但没法证实）。所以「Cookie 里的到期时间」不能当「登录态还有效」用。
+
+改了什么（下次一眼分清三种情况，不再一律写成「粘错了」）：
+
+1. `/api/bilibili/health` 多三个字段：`navError`（nav 请求本身失败 = 网络/风控，**不代表** Cookie 失效）、
+   `lastLoginOk`（上一次 nav 明确回「已登录」的时间，落在 `settings.bili_login_ok_at`，最多 30 分钟写一次）、
+   `cookieSetAt`（这条 Cookie 的写入时间，取自 `settings.updated_at`）；
+2. nav 回未登录时打一条 WARN：`B 站登录态被作废：nav 回未登录（Cookie 能解开，是 B 站那边不认了） 填于=… 上次确认有效=…`，
+   日志从此有时间线，不用再靠猜；
+3. /bilibili 横幅与管理页健康行按三态分别说话：查不出来（网络）/ 曾经有效、现在被作废（带上次有效时间）/
+   从没成功过（带填写时间）。
+
+自查一条命令（`-101` 就是登录态没了，与密钥无关）：
+
+```bash
+curl -s 'https://api.bilibili.com/x/web-interface/nav' -H 'Cookie: SESSDATA=…' | head -c 200
+```
+
 ## 8. 已知限制 / 取舍
 
 1. **多 P 投稿只取第 1 个 `cid`**。合集型投稿（一部视频挂几十个分 P）在墙上只出现一条，点开播的是第 1 P。

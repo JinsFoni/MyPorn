@@ -143,9 +143,27 @@ type biliHealthDTO struct {
 	// 2026-10-29 踩过：hasCookie=true 但存的是被拆坏的 cookies.txt 片段，界面装没事。
 	LoggedIn bool   `json:"loggedIn"`
 	Uname    string `json:"uname"`
-	FFmpegOK bool   `json:"ffmpegOk"`
-	HasProxy bool   `json:"hasProxy"`
+	// LastLoginOK 是上一次 nav 明确回「已登录」的时间（RFC3339，空 = 从没在这台服务上确认过）。
+	//
+	// 2026-10-30 实测：一条 SESSDATA 内嵌的到期时间是 2027-04-25，B 站却对 nav /
+	// x/space/myinfo / nav/stat 一律回 -101。也就是说「Cookie 里的到期时间」不等于
+	// 「登录态还有效」——B 站那边可以在到期前任意作废一条登录态（别处退出登录、
+	// 改密码、风控都算）。有 LastLoginOK 才能把这两种完全不同的失效分开：
+	// 从没成功过（多半是粘错了）vs 曾经有效、后来被 B 站作废（只能重填）。
+	LastLoginOK string `json:"lastLoginOk,omitempty"`
+	// NavError 是 nav 请求本身失败（网络断了 / 被风控挡了）。这时 LoggedIn=false
+	// 只说明「没问出来」，不代表 Cookie 失效——旧代码把两者混成一个布尔，用户
+	// 看到的就是「又失效了」，然后去重填一条本来没问题的 Cookie。
+	NavError string `json:"navError,omitempty"`
+	// CookieSetAt 是库里这条 Cookie 的写入时间：配上「现在 B 站说未登录」，
+	// 界面才能说清是哪条 Cookie 什么时候填的，而不是笼统一句「失效」。
+	CookieSetAt string `json:"cookieSetAt,omitempty"`
+	FFmpegOK    bool   `json:"ffmpegOk"`
+	HasProxy    bool   `json:"hasProxy"`
 }
+
+// 记「上次确认登录有效」的间隔下限：健康检查是页面打开就调一次，写库不必那么勤。
+const biliLoginOKWriteEvery = 30 * time.Minute
 
 func (s *Server) handleBiliHealth(w http.ResponseWriter, _ *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -167,13 +185,45 @@ func (s *Server) handleBiliHealth(w http.ResponseWriter, _ *http.Request) {
 			if login, ok2 := ad.(interface {
 				LoginName(context.Context) (string, error)
 			}); ok2 {
-				if name, err := login.LoginName(ctx); err == nil {
-					dto.Uname, dto.LoggedIn = name, name != ""
+				name, err := login.LoginName(ctx)
+				switch {
+				case err != nil:
+					dto.NavError = err.Error()
+					s.log.Warn("B 站登录状态查不出来（不等于是 Cookie 失效）", "err", err)
+				case name != "":
+					dto.Uname, dto.LoggedIn = name, true
+					s.noteBiliLoginOK(name)
+				default:
+					// nav 明确回 -101：这条登录态在 B 站那边没了。
+					last, _ := s.st.GetSetting("bili_login_ok_at")
+					dto.LastLoginOK = last
+					dto.CookieSetAt, _ = s.st.SecretUpdatedAt("bili_cookie")
+					s.log.Warn("B 站登录态被作废：nav 回未登录（Cookie 能解开，是 B 站那边不认了）",
+						"填于", dto.CookieSetAt, "上次确认有效", last)
 				}
 			}
 		}
 	}
 	writeJSON(w, http.StatusOK, dto)
+}
+
+// noteBiliLoginOK 记下「nav 刚刚确认这条 Cookie 是登录态」的时间和昵称。
+//
+// 存在的理由：B 站会在 SESSDATA 的到期时间之前就作废登录态（2026-10-30 实测：内嵌到期
+// 2027-04-25，实际 5 天就回 -101）。只留这一条时间戳，下次用户问「怎么又失效了」时，
+// 界面和日志能直接给出「X 时候还有效」，而不是让人怀疑是不是又把密钥搞坏了。
+func (s *Server) noteBiliLoginOK(name string) {
+	now := time.Now()
+	prev, _ := s.st.GetSetting("bili_login_ok_at")
+	if t, err := time.Parse(time.RFC3339, prev); err == nil && now.Sub(t) < biliLoginOKWriteEvery {
+		return
+	}
+	if err := s.st.SetSetting("bili_login_ok_at", now.UTC().Format(time.RFC3339)); err != nil {
+		s.log.Warn("记录 B 站登录确认时间失败", "err", err)
+		return
+	}
+	_ = s.st.SetSetting("bili_login_name", name)
+	s.log.Info("B 站登录态确认有效", "uname", name, "之前一次", prev)
 }
 
 // handleManageBili 是 管理 → B 站 页签的整页数据（一次请求给全，和 /api/manage/youtube 同构）。

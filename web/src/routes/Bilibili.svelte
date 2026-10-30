@@ -27,7 +27,7 @@
   import { live } from '../lib/live.svelte';
   import { ui } from '../lib/ui.svelte';
   import { navigate, patchQuery, router } from '../lib/router.svelte';
-  import { formatCount, relativeFuture } from '../lib/format';
+  import { formatCount, formatDateTime, relativeFuture } from '../lib/format';
   import type { BiliChannel, BiliHealth, ResolvedPerformer, Video } from '../lib/types';
 
   type Mode = 'all' | 'unseen';
@@ -278,18 +278,32 @@
     </div>
   {/if}
 
-  <!-- 配了 Cookie 却没登录上：不是 B 站的问题，是存进去的那串不对（实测踩过：
-       浏览器导出的 cookies.txt 被整理成两百多个假 SESSDATA，hasCookie 照样 true）。 -->
+  <!-- 配了 Cookie 却没登录上：先分清「问不出来」还是「B 站不认了」。
+       2026-10-30 实测：一条 SESSDATA 内嵌到期 2027-04-25，B 站第 5 天就回 -101——
+       Cookie 里的到期时间不等于登录态有效，B 站可以在到期前任意作废（别处退出登录、
+       改密码、风控）。把它写成「粘错了」会让用户反复重贴一条本来没问题的串。 -->
   {#if health && health.hasCookie && !health.loggedIn}
     <div class="flex items-start gap-2 rounded-xl bg-panel px-3 py-2 text-meta text-muted">
       <span class="mt-0.5 text-brick">●</span>
       <p>
-        Cookie 存了但没登录成功（B 站说未登录），所以画质仍是 720P。
-        整段 Cookie 头、只贴 SESSDATA 的值、浏览器导出的 cookies.txt 都能认，重新
-        <button type="button" class="underline underline-offset-2" onclick={() => ui.openSettings('bilibili')}>
-          填一次
-        </button>
-        试试。
+        {#if health.navError}
+          查不出 B 站登录状态（网络或风控挡了这一下），<span class="text-dim">这不等于 Cookie 失效</span>，
+          过一会儿再刷新。 <span class="text-dim">{health.navError}</span>
+        {:else if health.lastLoginOk}
+          这条 Cookie 在 {formatDateTime(health.lastLoginOk)} 还是登录态，现在 B 站回「未登录」：被 B 站那边作废了。
+          重填一次就好，画质现在仍是 720P。
+          <button type="button" class="underline underline-offset-2" onclick={() => ui.openSettings('bilibili')}>
+            重填 Cookie
+          </button>
+        {:else}
+          这条 Cookie 是 {formatDateTime(health.cookieSetAt)} 填进来的，现在 B 站回「未登录」：
+          要么那串不对，要么 B 站已经把这条登录态作废了（Cookie 里自带的到期时间不算数）。
+          画质现在仍是 720P，
+          <button type="button" class="underline underline-offset-2" onclick={() => ui.openSettings('bilibili')}>
+            重填一次
+          </button>
+          最快。
+        {/if}
       </p>
     </div>
   {/if}
