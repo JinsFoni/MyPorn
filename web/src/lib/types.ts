@@ -227,6 +227,22 @@ export interface BiliHealth {
   /** 分轨档位要靠 ffmpeg 合流 */
   ffmpegOk: boolean;
   hasProxy: boolean;
+  /** 库里这条凭据带 refresh_token（只有扫码登录拿得到）→ 能自动续期，不用等作废后重填 */
+  canRefresh: boolean;
+}
+
+/** 扫码登录：`url` 转成二维码图片，`key` 用来轮询 */
+export interface BiliQrcode {
+  url: string;
+  key: string;
+}
+
+/** 轮询一次的结果；success 时服务端已经写库，前端不需要回传任何凭据 */
+export interface BiliQrcodePoll {
+  status: 'pending' | 'scanned' | 'success' | 'expired';
+  message?: string;
+  /** 登录成功后 nav 回显的昵称 */
+  uname?: string;
 }
 
 export interface BiliStats {

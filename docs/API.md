@@ -997,10 +997,15 @@ B 站没有自己的表：UP 主是 `performers` 的一行（`platform='bilibili
     "lastLoginOk": "2026-10-30T10:32:34Z", // 上一次 nav 明确确认「已登录」的时间（从没确认过就没有这个字段）
     "navError": "…",      // 仅在 nav 请求本身失败时出现（网络/风控）：有它说明「没问出来」，不代表 Cookie 失效
     "cookieSetAt": "2026-10-29T07:49:13Z", // 库里这条 Cookie 的写入时间
+    "canRefresh": false,  // 这条凭据带 refresh_token（扫码登录才拿得到）→ 能自动续期
     "ffmpegOk": true,     // 分轨档位（480P 及以上）要靠它合流
     "hasProxy": false
   }
 ```
+
+`canRefresh=false` 是手填 Cookie 的固有短板：那条串里没有 `refresh_token`，B 站一作废
+就只能重填。扫码登录（D5b）会把 `refresh_token` 一起存下来，之后由服务端每 6 小时检查、
+在到期前自动换新。
 
 `lastLoginOk` / `cookieSetAt` 是为了把三种「没登录上」分开：**查不出来**（`navError` 非空）、
 **曾经有效、后来被 B 站作废**（`lastLoginOk` 有值）、**从没成功过**（多半粘错了）。
@@ -1012,6 +1017,28 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
 `hasCookie` 与 `loggedIn` 要分开看：Cookie 存进去了但格式不对（实例：浏览器导出的
 `cookies.txt` 被整理成两百多个假 `SESSDATA`）时，`hasCookie=true` 而 `loggedIn=false`，
 表现就是「配了 Cookie 还是 720P」。`loggedIn` 只在 `hasCookie=true` 时才会真去打 nav。
+
+### D5b. `POST /api/bilibili/login/qrcode` —— 扫码登录
+
+```
+→ 200 { "url": "https://account.bilibili.com/h5/account-h5/auth/scan-web?…&qrcode_key=…",
+        "key": "de88af434b0b1b1a154cf439579ba6ca" }
+```
+
+前端把 `url` 画成二维码（本地渲染，不把二维码地址发给第三方），`key` 用于轮询。
+本机实测：打 B 站 passport 往返 **74 ms**。
+
+### D5c. `GET /api/bilibili/login/qrcode?key=…` —— 轮询扫码结果
+
+```
+→ 200 { "status": "pending" | "scanned" | "success" | "expired", "message": "…", "uname": "…" }
+```
+
+`status=success` 时**服务端已经把凭据写进库**（`SESSDATA`/`bili_jct`/`DedeUserID` 取自
+登录响应的 `Set-Cookie`，`refresh_token` 取自响应 JSON，`buvid3` 另打
+`/x/web-frontend/getbuvid` 补齐），响应体里只有昵称，前端全程不接触凭据——
+因为 `SESSDATA` 是 HttpOnly，任何「让用户复制」的路径都拿不到它（§7.11）。
+建议 2 秒一次轮询，二维码 180 秒过期。
 
 ### D6. `GET /api/manage/bilibili`
 

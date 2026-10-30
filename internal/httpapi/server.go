@@ -267,6 +267,10 @@ func (s *Server) Routes() http.Handler {
 			pr.Post("/bilibili/seen", s.handleBiliSeen)
 			pr.Post("/bilibili/channels/{id}/download-unseen", s.handleBiliDownloadUnseen)
 			pr.Get("/bilibili/health", s.handleBiliHealth)
+			// 扫码登录：generate 拿二维码，poll 轮询；成功时服务端自己落库，
+			// 前端拿不到也不需要经手 SESSDATA（它是 HttpOnly，手抄那条路走过两次都失败）。
+			pr.Post("/bilibili/login/qrcode", s.handleBiliQrcodeGenerate)
+			pr.Get("/bilibili/login/qrcode", s.handleBiliQrcodePoll)
 			pr.Get("/manage/bilibili", s.handleManageBili)
 
 			pr.Get("/settings", s.handleGetSettings)

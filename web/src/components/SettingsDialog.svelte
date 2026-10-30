@@ -838,6 +838,10 @@
                         请求，复制 Request Headers 里的 cookie 那一行；或在 Application → Cookies →
                         bilibili.com 里复制 SESSDATA 的值。
                       </p>
+                      <p class="mt-1 text-meta text-dim">
+                        更省事的办法：去 <b>/bilibili</b> 页面点「扫码登录」，用手机 B 站 App 扫一下——
+                        服务端直接落库，顺带拿到 refresh_token，之后到期前会自动换新，不用再手动维护。
+                      </p>
                       <textarea
                         id="bili-cookie"
                         class="field mt-2 h-24 resize-y font-mono text-meta"

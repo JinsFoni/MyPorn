@@ -239,6 +239,8 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	go runBiliCredentialScheduler(ctx, srv, logger)
+
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
@@ -355,6 +357,46 @@ func runYtScheduler(ctx context.Context, st *store.Store, runner *jobs.Runner, l
 			continue
 		}
 		lastRun = time.Now()
+	}
+}
+
+// runBiliCredentialScheduler 每 6 小时问一次 B 站「这条登录态该续了吗」，到点就续。
+//
+// 为什么必须有它：B 站的登录态不是「到期才失效」，而是「临近过期时给你一次换新的机会，
+// 错过就作废」。实测（2026-10-30）一条 SESSDATA 内嵌到期 2027-04-25 的登录态，第 5 天
+// 就回 -101——手填 Cookie 又没有 refresh_token，于是只能重填。续期四步见
+// internal/platform/bilibili/refresh.go。
+//
+// 启动后先等 3 分钟再查第一次：开机时通常有一堆同步任务在跑，别去抢那点带宽。
+// biliCredentialCheckEvery 与 httpapi 里的同名常量保持一致：检查本身只是一个 GET，
+// 勤一点没成本，而错过续期窗口的代价是用户要重新扫码。
+const biliCredentialCheckEvery = 6 * time.Hour
+
+func runBiliCredentialScheduler(ctx context.Context, srv *httpapi.Server, log *slog.Logger) {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	lastRun := time.Now().Add(-biliCredentialCheckEvery + 3*time.Minute) // 3 分钟后第一次
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if time.Since(lastRun) < biliCredentialCheckEvery {
+			continue
+		}
+		lastRun = time.Now()
+		checkCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		refreshed, err := srv.CheckAndRefreshBiliCredential(checkCtx)
+		cancel()
+		switch {
+		case err != nil:
+			log.Warn("B 站登录态检查/续期失败（不代表 Cookie 失效）", "err", err)
+		case refreshed:
+			// 成功那行由 CheckAndRefreshBiliCredential 自己打，这里不重复。
+		default:
+			log.Debug("B 站登录态无需续期")
+		}
 	}
 }
 

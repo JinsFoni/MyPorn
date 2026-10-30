@@ -16,11 +16,13 @@
     "@fontsource/saira-extra-condensed": "^5.3.0",
     "@videojs/hlsjs-video": "10.2.0",
     "@videojs/html": "10.2.0",
+    "qrcode": "^1.5.4",
     "svelte": "^5.57.2"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/vite": "^4.3.3",
+    "@types/qrcode": "^1.5.6",
     "svelte-check": "^4.7.7",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.9.3",

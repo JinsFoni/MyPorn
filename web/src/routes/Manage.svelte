@@ -6,6 +6,7 @@
   import StatTile from '../components/StatTile.svelte';
   import SubscriptionRow from '../components/SubscriptionRow.svelte';
   import { api, messageFor } from '../lib/api';
+  import BiliLoginDialog from '../components/BiliLoginDialog.svelte';
   import { formatBytes, formatCount, formatDate, formatDateTime, relativeFuture, relativeTime } from '../lib/format';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
@@ -60,6 +61,8 @@
   let biliLoading = $state(false);
   let biliError = $state('');
   let biliHealth = $state<BiliHealth | null>(null);
+  // 扫码登录弹窗（手填 Cookie 拿不到 HttpOnly 的 SESSDATA，也没有 refresh_token）
+  let biliLoginOpen = $state(false);
   let biliBusyId = $state<number | null>(null);
   let biliAddUrl = $state('');
   let biliAddBusy = $state(false);
@@ -1300,6 +1303,13 @@
                 {biliHealth.ffmpegOk ? 'ffmpeg 可用（分轨档位能合流）' : 'ffmpeg 缺失，480P 及以上放不了'}
               </span>
               <span class="text-dim">{biliHealth.hasProxy ? '走代理' : '直连'}</span>
+              <button
+                type="button"
+                class="rounded-full bg-raise px-2.5 py-1 text-meta text-fg transition-colors hover:bg-panel"
+                onclick={() => (biliLoginOpen = true)}
+              >
+                {biliHealth.loggedIn ? '换一个账号扫码登录' : '扫码登录'}
+              </button>
             </div>
             <div class="mt-2 flex items-center gap-2">
               <button
@@ -1476,3 +1486,13 @@
     {/if}
   {/if}
 </div>
+
+<!-- 扫码登录弹窗：服务端写库，这里刷新一次健康行即可。 -->
+<BiliLoginDialog
+  open={biliLoginOpen}
+  onClose={() => (biliLoginOpen = false)}
+  onSuccess={() => {
+    biliLoginOpen = false;
+    void loadBili();
+  }}
+/>

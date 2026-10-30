@@ -444,6 +444,63 @@ cookies.txt），设置页的说明也补了同一段。
 curl -s 'https://api.bilibili.com/x/web-interface/nav' -H 'Cookie: SESSDATA=…' | head -c 200
 ```
 
+## 7.12 扫码登录 + 自动续期（2026-10-30 实现）
+
+§7.11 的两条结论指向同一件事：**手填 Cookie 这条路本身有上限**——`SESSDATA` 是 HttpOnly
+（抄不到），串里也没有 `refresh_token`（作废后无法自救）。所以照 `amtoaer/bili-sync` 的做法
+补了两条路：扫码登录（一次性拿全五项）和自动续期（长期不回退）。
+
+### 7.12.1 扫码登录
+
+| 步骤 | 接口 | 关键点 |
+|---|---|---|
+| 1 | `POST /api/bilibili/login/qrcode` | 转发 `passport …/qrcode/generate`，回 `{url, key}`；实测往返 **74 ms** |
+| 2 | `GET …/login/qrcode?key=` | 转发 `…/qrcode/poll`，B 站的 `data.code` 映射成 `pending/scanned/success/expired`（0 / 86101 / 86090 / 86038） |
+
+成功那一下的取法与手填完全不同：
+
+- `SESSDATA` / `bili_jct` / `DedeUserID` 从**登录响应的 `Set-Cookie`** 里挑（`HttpOnly` 只在这里出现）；
+- `refresh_token` 从响应 JSON 的 `data.refresh_token`（浏览器那边存成 `ac_time_value` cookie）；
+- `buvid3` 另打 `GET api.bilibili.com/x/web-frontend/getbuvid` 补齐（这个接口不要登录）；
+- 三项缺一（尤其缺 `refresh_token`）就报错让人重扫，**不**收下一条「用几天又失效」的凭据。
+
+前端：`web/src/components/BiliLoginDialog.svelte` 用 `qrcode` 包在本地渲出 240×240 的图
+（二维码地址不外发），2 秒轮询、180 秒倒计时，过期给「点一下重新生成」。入口在
+`/bilibili` 的三处横幅和管理 → B 站 健康行。
+
+真机验证（playwright-cli，mute 无关）：点「扫码登录」后弹窗出现、`img` 是
+`data:image/png;base64,…`、`naturalWidth=240`、倒计时从 180 往下走；`poll` 返回
+`{"status":"pending","message":"等待扫码"}`（50 ms）。**成功分支需要手机真扫，见 §9。**
+
+### 7.12.2 自动续期（四步，顺序不能换）
+
+| 步骤 | 请求 | 用途 |
+|---|---|---|
+| 1 | `GET passport …/x/passport-login/web/cookie/info` | `data.refresh` 决定要不要续 |
+| 2 | `GET www.bilibili.com/correspond/1/<RSA密文>` | 页面里抠 `<div id="1-name">…</div>` → `refresh_csrf` |
+| 3 | `POST passport …/web/cookie/refresh`（form） | `csrf=<旧 bili_jct>`、`refresh_csrf`、`refresh_token=<旧>`、`source=main_web` → Set-Cookie 出新的三件套 + JSON 出新的 `refresh_token` |
+| 4 | `POST passport …/web/confirm/refresh`（form） | `csrf=<新 bili_jct>`、`refresh_token=<**旧**>`，确认后旧的才作废 |
+
+第 2 步的 RSA 公钥是 B 站前端写死的，`RSA-OAEP(SHA-256)` 加密 `refresh_<毫秒-20000>`
+（提前 20 秒防本机时钟比服务器快），转 hex 塞进 URL。`refresh.go` 顶部有完整注释。
+
+调度：`runBiliCredentialScheduler`（`cmd/myporn/main.go`）每 10 分钟看一眼、满 **6 小时**
+才真查一次；启动 3 分钟后第一次。检查失败只打 `WARN`（网络抖动 ≠ Cookie 失效），
+续期成功打 `INFO B 站登录态已续期 mid=…`。
+
+另有一条实测：**已作废的登录态**打 `cookie/info` 回 `{"code":-101,"message":"账号未登录"}`，
+所以代码把 `-101` 单独翻译成「只能重新扫码」，而不是笼统的「刷新失败」。
+
+### 7.12.3 存储
+
+| secret key | 内容 |
+|---|---|
+| `bili_cookie` | 规范化的 Cookie 头，只有四段：`buvid3=…; SESSDATA=…; bili_jct=…; DedeUserID=…` |
+| `bili_ac_time_value` | `refresh_token`；**手填 Cookie 时为空** → `health.canRefresh=false` |
+
+两条都用现有 `secret.Box` 加密。手填路径保持不变（设置里粘 Cookie 仍然有效），
+只是 `canRefresh` 会一直是 false，`/bilibili` 会提示「这条不能自动续期，扫一次码补上」。
+
 ## 8. 已知限制 / 取舍
 
 1. **多 P 投稿只取第 1 个 `cid`**。合集型投稿（一部视频挂几十个分 P）在墙上只出现一条，点开播的是第 1 P。
@@ -466,6 +523,11 @@ curl -s 'https://api.bilibili.com/x/web-interface/nav' -H 'Cookie: SESSDATA=…'
    要加就得动通用表结构，本期不做。
 
 ## 9. 待验证
+
+- **扫码登录的成功分支还没真扫过**：`generate`（74 ms）、`poll` 的 `pending` 状态、二维码
+  渲染（240×240）都实测过，但「扫完 → Set-Cookie 落库 → nav 回昵称」这一段要手机真扫一次
+  才能闭环，包括 `buvid3` 补齐和 `canRefresh=true` 的显示。同理续期四步也还没真跑过
+  （手上那条登录态已被作废，`cookie/info` 直接回 -101，没有 `refresh_token` 可续）。
 
 - ~~登录后 `arc/search` 的限额是否变宽~~ → **问错了**：额度取决于 wbi 签名，不取决于登录（§7-7）；
 - ~~1080P 的 `dash.video` 是否给到 `id=80`~~ → **已实测给到**（§7.8）；

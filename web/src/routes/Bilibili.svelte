@@ -20,6 +20,7 @@
   import InfiniteList from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import TopBar from '../components/TopBar.svelte';
+  import BiliLoginDialog from '../components/BiliLoginDialog.svelte';
   import VideoCard from '../components/VideoCard.svelte';
   import PlatformIcon from '../components/PlatformIcon.svelte';
   import { api, messageFor } from '../lib/api';
@@ -42,6 +43,8 @@
   let channelsLoaded = $state(false);
   let channelsError = $state('');
   let health = $state<BiliHealth | null>(null);
+  // 扫码登录：手填 Cookie 抄不到 HttpOnly 的 SESSDATA，也没有 refresh_token（见条幅说明）。
+  let loginOpen = $state(false);
 
   // ---- 筛选（唯一真源是地址栏：?up=<id>&mode=unseen） ----
   /**
@@ -269,9 +272,13 @@
     <div class="flex items-start gap-2 rounded-xl bg-panel px-3 py-2 text-meta text-muted">
       <span class="mt-0.5 text-dim">●</span>
       <p>
-        没填 B 站 Cookie：最高只能看 720P、下载也只有 720P/480P。
+        没登录 B 站：最高只能看 720P、下载也只有 720P/480P。
+        <button type="button" class="underline underline-offset-2" onclick={() => (loginOpen = true)}>
+          扫码登录
+        </button>
+        （推荐，一次扫码顺带拿到自动续期能力）或
         <button type="button" class="underline underline-offset-2" onclick={() => ui.openSettings('bilibili')}>
-          填一个 Cookie
+          手填 Cookie
         </button>
         就能拿到 1080P 以上。
       </p>
@@ -291,19 +298,38 @@
           过一会儿再刷新。 <span class="text-dim">{health.navError}</span>
         {:else if health.lastLoginOk}
           这条 Cookie 在 {formatDateTime(health.lastLoginOk)} 还是登录态，现在 B 站回「未登录」：被 B 站那边作废了。
-          重填一次就好，画质现在仍是 720P。
-          <button type="button" class="underline underline-offset-2" onclick={() => ui.openSettings('bilibili')}>
-            重填 Cookie
+          画质现在仍是 720P，
+          <button type="button" class="underline underline-offset-2" onclick={() => (loginOpen = true)}>
+            扫一次码
           </button>
+          就好——扫码拿到的凭据带 refresh_token，之后 B 站续期前会自动换新的，不会再这么反复失效。
         {:else}
           这条 Cookie 是 {formatDateTime(health.cookieSetAt)} 填进来的，现在 B 站回「未登录」：
           要么那串不对，要么 B 站已经把这条登录态作废了（Cookie 里自带的到期时间不算数）。
           画质现在仍是 720P，
-          <button type="button" class="underline underline-offset-2" onclick={() => ui.openSettings('bilibili')}>
-            重填一次
+          <button type="button" class="underline underline-offset-2" onclick={() => (loginOpen = true)}>
+            扫码登录
           </button>
-          最快。
+          最快，也可以继续
+          <button type="button" class="underline underline-offset-2" onclick={() => ui.openSettings('bilibili')}>
+            手填一次
+          </button>。
         {/if}
+      </p>
+    </div>
+  {/if}
+
+  <!-- 登录着，但这条凭据是手填的 Cookie：没有 refresh_token，B 站一作废就只能重填。
+       扫码一次就补上（见 BiliLoginDialog 顶部注释）。 -->
+  {#if health && health.loggedIn && !health.canRefresh}
+    <div class="flex items-start gap-2 rounded-xl bg-panel px-3 py-2 text-meta text-muted">
+      <span class="mt-0.5 text-dim">●</span>
+      <p>
+        这条登录态是手填 Cookie 来的，<b>不能自动续期</b>——B 站哪天作废了只能再填一次。
+        <button type="button" class="underline underline-offset-2" onclick={() => (loginOpen = true)}>
+          扫码登录一次
+        </button>
+        之后服务端会在到期前自己换新。
       </p>
     </div>
   {/if}
@@ -553,3 +579,14 @@
     </div>
   </div>
 {/if}
+
+<!-- 扫码登录弹窗：成功由服务端直接落库，这里只需要重新拉一次健康状态。 -->
+<BiliLoginDialog
+  open={loginOpen}
+  onClose={() => (loginOpen = false)}
+  onSuccess={() => {
+    loginOpen = false;
+    void loadHealth();
+    live.toast('已登录 B 站', 'success');
+  }}
+/>

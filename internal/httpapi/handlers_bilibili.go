@@ -158,8 +158,11 @@ type biliHealthDTO struct {
 	// CookieSetAt 是库里这条 Cookie 的写入时间：配上「现在 B 站说未登录」，
 	// 界面才能说清是哪条 Cookie 什么时候填的，而不是笼统一句「失效」。
 	CookieSetAt string `json:"cookieSetAt,omitempty"`
-	FFmpegOK    bool   `json:"ffmpegOk"`
-	HasProxy    bool   `json:"hasProxy"`
+	// CanRefresh 表示库里这条凭据带 refresh_token（只有扫码登录拿得到）。
+	// 带它才能自动续期；手填 Cookie 通篇没有这个字段，所以 B 站一作废就只能重填。
+	CanRefresh bool `json:"canRefresh"`
+	FFmpegOK   bool `json:"ffmpegOk"`
+	HasProxy   bool `json:"hasProxy"`
 }
 
 // 记「上次确认登录有效」的间隔下限：健康检查是页面打开就调一次，写库不必那么勤。
@@ -178,6 +181,11 @@ func (s *Server) handleBiliHealth(w http.ResponseWriter, _ *http.Request) {
 		CookieBroken: cookieBroken,
 		FFmpegOK:     ffmpegOK,
 		HasProxy:     s.px.For(platformBilibili) != "",
+	}
+	if hasCookie && !cookieBroken {
+		if cred, err := s.biliCredential(); err == nil {
+			dto.CanRefresh = cred.RefreshToken != ""
+		}
 	}
 	// 只有真的存了 Cookie 才去问 nav：没存就没得问，省一次请求。
 	if dto.HasCookie {

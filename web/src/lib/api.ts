@@ -9,6 +9,8 @@ import type {
   BiliChannelsResponse,
   BiliHealth,
   BiliManageResponse,
+  BiliQrcode,
+  BiliQrcodePoll,
   DownloadAccepted,
   DownloadOptions,
   DownloadsResponse,
@@ -452,6 +454,14 @@ export const api = {
   },
   biliHealth(): Promise<BiliHealth> {
     return request<BiliHealth>('/api/bilibili/health');
+  },
+  /** 扫码登录第 1 步：拿二维码 */
+  biliQrcodeGenerate(): Promise<BiliQrcode> {
+    return request<BiliQrcode>('/api/bilibili/login/qrcode', { method: 'POST' });
+  },
+  /** 扫码登录第 2 步：轮询；success 时服务端已经落库 */
+  biliQrcodePoll(key: string): Promise<BiliQrcodePoll> {
+    return request<BiliQrcodePoll>(`/api/bilibili/login/qrcode${qs({ key })}`);
   },
   manageBili(): Promise<BiliManageResponse> {
     return request<BiliManageResponse>('/api/manage/bilibili');
