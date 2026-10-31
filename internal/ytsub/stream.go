@@ -84,6 +84,19 @@ func (f streamFormat) size() int64 {
 	return f.FilesizeEst
 }
 
+// fastPlayerClient 是快车道只问的那一个客户端。
+//
+// yt-dlp 默认会并发问 tv samsung 和 visionos 两家播放器 API，再把两家结果并起来
+// （2026-11-01 实测一次解析的阶段耗时：网页 1.00 s、tv samsung 0.71 s、
+// visionos 0.54 s、播放器 JS 0.93 s、deno 解 n 挑战 0.52 s、m3u8 0.78 s，合计 4.5 s）。
+// 而 visionos 一家就把这里要的东西给全了：HLS 的 manifest_url（628/233 那批 m3u8）、
+// AV1 2160p 的 https 直链（401）、AAC 音轨（140）。
+//
+// 只问一家的实测（同一条视频、同一时段）：visionos 2.42~3.18 s，默认两家 4.5 s；
+// 换来的是「点开到出画面」少等 1.5 秒左右。会员专属 / 分区限制 / 儿童视频对某些客户端
+// 不可见，所以拿不到清单时退回默认客户端集合再问一次（见 worthDefaultClients）。
+const fastPlayerClient = "visionos"
+
 // ResolveStream 解析一条视频的 HLS master 地址。
 //
 // 特意不带 -f：这里要的是清单，不是某一档格式；带上格式串反而会让 yt-dlp
@@ -93,22 +106,47 @@ func (y *YtDlp) ResolveStream(ctx context.Context, videoID string) (StreamInfo, 
 	if bin == "" {
 		return StreamInfo{}, social.StaleParser("没有找到 yt-dlp：去设置 → YouTube 里填路径，或先装一个（版本越新越好）")
 	}
+	info, stderr, err := y.resolveStreamWith(ctx, bin, videoID, fastPlayerClient)
+	if err == nil && info.MasterURL != "" {
+		return info.finish(videoID), nil
+	}
+	if err != nil && !worthDefaultClients(stderr) {
+		// 已经知道这条视频放不了（会员/私有/删除），再等 4.5 秒重问一遍没有意义
+		return StreamInfo{}, y.mapError(err, stderr)
+	}
+	y.log.Debug("快车道没拿到 HLS 清单，退回默认客户端重问一次",
+		"videoId", videoID, "master", info.MasterURL != "", "err", err)
+	info, stderr, err = y.resolveStreamWith(ctx, bin, videoID, "")
+	if err != nil {
+		return StreamInfo{}, y.mapError(err, stderr)
+	}
+	if info.MasterURL == "" {
+		return StreamInfo{}, social.Upstream("这条视频没有可用的 HLS 清单（直播/会员专属/分区限制时会出现）", nil)
+	}
+	return info.finish(videoID), nil
+}
+
+// resolveStreamWith 跑一次 `yt-dlp -j`，client 为空就用 yt-dlp 的默认客户端集合。
+func (y *YtDlp) resolveStreamWith(ctx context.Context, bin, videoID, client string) (StreamInfo, string, error) {
 	args := []string{"-j", "--no-playlist", "--no-warnings", "--socket-timeout", "20"}
 	args = append(args, y.commonArgs()...)
+	if client != "" {
+		args = append(args, "--extractor-args", "youtube:player_client="+client)
+	}
 	args = append(args, BaseURL+"/watch?v="+videoID)
 
 	started := time.Now()
 	stdout, stderr, err := y.run(ctx, bin, args...)
 	// 解析耗时是「点开到出画面」里最长的一段（实测冷启动 13~16 秒），
 	// 想优化起播就得先能看见它到底花在哪一次调用上——所以这行用 Debug 常开着不吵。
-	y.log.Debug("yt-dlp 解析完成", "videoId", videoID,
+	y.log.Debug("yt-dlp 解析完成", "videoId", videoID, "client", clientName(client),
 		"elapsed", time.Since(started).Round(time.Millisecond).String(), "err", err)
 	if err != nil {
-		return StreamInfo{}, y.mapError(err, stderr)
+		return StreamInfo{}, stderr, err
 	}
 	var p streamProbe
 	if err := json.Unmarshal([]byte(stdout), &p); err != nil {
-		return StreamInfo{}, social.StaleParser("yt-dlp 的视频信息解析失败（版本可能过期）：" + err.Error())
+		return StreamInfo{}, stderr, social.StaleParser("yt-dlp 的视频信息解析失败（版本可能过期）：" + err.Error())
 	}
 	info := StreamInfo{VideoID: videoID, Title: p.Title}
 	if p.Duration != nil {
@@ -125,15 +163,41 @@ func (y *YtDlp) ResolveStream(ctx context.Context, videoID string) (StreamInfo, 
 		break
 	}
 	info.Tracks = dashTracks(p.Formats)
-	if info.MasterURL == "" {
-		return StreamInfo{}, social.Upstream("这条视频没有可用的 HLS 清单（直播/会员专属/分区限制时会出现）", nil)
-	}
+	return info, stderr, nil
+}
+
+// finish 补上解析结果的尾巴：寿命读不到就按 30 分钟保守估算。
+func (info StreamInfo) finish(videoID string) StreamInfo {
+	info.VideoID = videoID
 	if info.ExpiresAt.IsZero() {
 		// 读不到 expire= 就按 30 分钟保守估算：宁可早一点重新解析，
 		// 也不要拿着可能已经作废的签名地址去放分片。
 		info.ExpiresAt = time.Now().Add(30 * time.Minute)
 	}
-	return info, nil
+	return info
+}
+
+// worthDefaultClients 判断「快车道失败」值不值得换默认客户端再问一遍。
+//
+// 只认「这条视频本来就看不了」的判决词直接放弃（会员专属、私有、已删除、地区限制、
+// 人机验证）；其余（yt-dlp 不认这个客户端名、接口返回空、临时 5xx）都再试一次。
+func worthDefaultClients(stderr string) bool {
+	s := strings.ToLower(stderr)
+	switch {
+	case strings.Contains(s, "members-only"), strings.Contains(s, "join this channel"),
+		strings.Contains(s, "private video"), strings.Contains(s, "removed by the uploader"),
+		strings.Contains(s, "video unavailable"), strings.Contains(s, "is not available in your country"),
+		strings.Contains(s, "sign in to confirm"), strings.Contains(s, "not a bot"):
+		return false
+	}
+	return true
+}
+
+func clientName(c string) string {
+	if c == "" {
+		return "默认"
+	}
+	return c
 }
 
 // expireFromURL 从 googlevideo 的清单地址里取寿命（Unix 秒）。

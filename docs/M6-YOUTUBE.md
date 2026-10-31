@@ -777,3 +777,68 @@ with N bytes remaining`），比我们代理「3 路切块 + 往前预取 4 段�
 
 结论：分轨不是缺的那块，我们早就分了；直连在网页里被 CORS 挡住、且吞吐不如代理。
 **播放链路不动**。真要再快，方向是「解析那 4–13 秒」和「起播前两段」，不是改成直连。
+
+### 14.13 插件为什么「解析」几乎不花时间，以及我们能砍掉的那 1.5 秒
+
+用户追问：同一台机器，Quetta 点开就放，我们要等。差在哪，量了一遍。
+
+#### 它根本没有「解析」这一步
+
+Quetta 是自带播放器的浏览器：YouTube 页面自己的播放器已经把 `streamingData` 拿在手里了
+（实测这个页面在 harness 浏览器里：导航后 **2.99 s** 发出第一条 googlevideo 分片请求、
+**4.62 s** 收完第一段，`ytInitialPlayerResponse.streamingData` 早就有了），它只是接着把
+清单和分片放出来。我们这边没有页面、没有播放器、没有 PO token，只能由 yt-dlp 从头问一遍。
+
+#### 我们要付的账：一次解析 = 5 个来回 + 一次 JS 求解（实测 4.5 s）
+
+`yt-dlp -v -j` 逐阶段打点（DgiefGG22EI，2026-11-01）：
+
+| 阶段 | 耗时 |
+|---|---|
+| 下载网页（拿播放器 JS 的版本号） | 1.00 s |
+| tv samsung 播放器 API | 0.71 s |
+| visionos 播放器 API | 0.54 s |
+| 下载播放器 JS（11a45ffb-main） | 0.93 s |
+| deno 解 n 挑战 | 0.52 s |
+| 下载 m3u8 信息 | 0.78 s |
+| 合计 | **4.5 s** |
+
+「便宜客户端」也试过了，走不通：直接 POST `youtubei/v1/player` 用 **ANDROID / IOS** 客户端
+只要 **0.6~0.7 s**，`playabilityStatus=OK`，还给 AV1 2160p 直链（itag 401）且地址里没有 `n=`。
+但那批地址是**半残**的——同一条 URL：`0-8 MB` 回 206、4.75 MB/s，`200 MB` 和 `280 MB`
+立刻 403（重试三次都是 403）。原因就是挑战没解、也没有 PO Token（`yt-dlp -v` 里那句
+`PO Token Providers: none`）。所以「播放器 JS 0.9 s + deno 0.5 s」这 1.4 s 省不掉，
+省了就只能放开头几 MB。
+
+#### 能省的：别再问两家客户端
+
+yt-dlp 默认并发问 tv samsung + visionos 再把结果并起来。实测 **visionos 一家就把这里要的
+全给了**（HLS 的 `manifest_url`、AV1 2160p 的 401 直链、AAC 140 音轨）：
+
+| 客户端 | `yt-dlp -j` 耗时 | 有 HLS 清单 | 有 AV1(401) |
+|---|---|---|---|
+| 默认（tv samsung + visionos） | 4.5 s | 是 | 是 |
+| tv_samsung 单独 | 3.58 s | **否**（0 条 m3u8） | 是 |
+| tv_samsung,visionos | 3.97 s | 是 | 是 |
+| **visionos 单独** | **2.42 / 2.48 / 3.18 s** | 是（17 条 m3u8） | 是 |
+
+所以 `ytsub.ResolveStream` 改成两级：先 `--extractor-args youtube:player_client=visionos`，
+**拿不到清单才退回默认客户端集合**再问一次（会员专属 / 私有 / 删除 / 地区限制这些
+「本来就看不了」的判决直接放弃，不白等第二次——`worthDefaultClients`）。
+
+应用内实测（`GET /api/yt/videos/{id}/stream`，冷解析，同一时段）：
+
+| 视频 | 解析耗时（改前 → 改后） |
+|---|---|
+| YFsMnJEbV1U | 4.442 s → **2.561 s** |
+| _naNThAiK4o | — → 2.862 s（整请求 2.99 s） |
+| vHcb8AS4A2g | — → 2.604 s |
+| dpta7lehP0M | — → 3.557 s |
+| WFNq-9Ks02U（会员专属） | — → **1.76 s 直接判决**，没有第二次解析 |
+
+改后回归：4K 的 AV1 那条（3840×2160、`readyState=4`、正常推进）与 1080p 的 HLS 那条
+（1920×1080，master 带音轨 rendition）都实测能放；`go test ./internal/ytsub/ ./internal/ytstream/
+./internal/httpapi/` 全绿。
+
+剩下的两三秒是结构性的：网页 + 播放器 API + 播放器 JS + deno。真要再快，只能是「提前问」
+（视频墙预热、悬停预热已经这么做了）或者「拿账号/PO token 换掉 JS 求解」，不是继续调参。
