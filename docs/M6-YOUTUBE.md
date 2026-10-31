@@ -713,3 +713,67 @@ API 请求 + n 挑战求解）；「分片取回」超过 10 秒就会开始 `wa
 
 降级策略没变，也不许静默降级：`/dash.m3u8` 建不起来（没有 AV1 直链、不是分片 mp4、sidx 读不出来）
 就 302 回 `/stream.m3u8` 走原来的 VP9 HLS（慢但能看）；画质菜单里报的码率永远是**实际在播的那条**。
+
+### 14.12 「插件能直连、音视频分开」——我们本来就是这么做的（2026-11-01 实测）
+
+用户反馈：Quetta（自带播放器的视频浏览器）播 YouTube 很流畅，抓到两条地址「音视频是分开的」，
+问能不能照搬。拆开看了一遍，结论是**这套形状我们早就在用**，缺的那一环（浏览器直连 googlevideo）
+在当前架构里既做不到也不划算。证据如下，免得下次再从头查。
+
+#### 插件抓到的那两条清单是什么
+
+两条都是 YouTube 自己的 HLS 端点 `manifest.googlevideo.com/api/manifest/hls_playlist/…`：
+
+| 轨道 | 清单 itag | 里面的 `sgovp/sgoap` | 实际编码 | 体积 / 时长 | 分片 |
+|---|---|---|---|---|---|
+| 画面 | 628 | `itag=315` | VP9 2160p50 | 315 612 961 B / 169.46 s = **14.9 Mbps** | 28 段 × 6.0 s，10.3–11.6 MB |
+| 声音 | 234 | `itag=140` | AAC-LC 129.5 kbps | 2 744 371 B / 169.48 s | 28 段 × 6.0 s，324 KB 起 |
+
+两条清单都没有「合成」这回事：画面清单只有 `#EXT-X-MAP`（`govp/slices=0-8027752`，即文件头
+8.03 MB）+ 28 条 `govp/slices=0-220,<段区间>`（每段前面都拼了文件头前 220 字节），
+声音清单同理（`goap/slices`）。也就是**一条只有画面的流 + 一条只有声音的流，由它自己的播放器
+同时放、自己对齐**——不是 MSE 合流，也不是 ffmpeg 合成。
+
+#### 我们这边的清单（同一条视频，`/api/yt/videos/987/dash.m3u8` 实测）
+
+```
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Default",DEFAULT=YES,AUTOSELECT=YES,URI="/api/yt/dash/80945…/a.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=13591476,CODECS="av01.0.13M.08,mp4a.40.2",RESOLUTION=3840x2160,FRAME-RATE=60.000,AUDIO="aud"
+/api/yt/dash/80945…/v.m3u8          ← 57 段，8.8–11.8 MB/段，AV1 2160p60 13.59 Mbps
+/a.m3u8                             ← 33 段，AAC 140，首段 161 788 B
+```
+
+形状完全一致（音轨走 `#EXT-X-MEDIA`、画面走 `#EXT-X-BYTERANGE` 分片）。差别只有两处：
+**档位**（我们发 AV1 13.59 Mbps，插件那条是 VP9 14.9 Mbps，同一份画面的码率高一倍）和
+**字节路径**（我们经本机代理，它浏览器直连 CDN）。
+
+#### 为什么「浏览器直连」在网页里做不到：CORS 只回给 youtube.com
+
+同一份 googlevideo 分片地址，只改 `Origin`：
+
+| 请求头 | 响应里的 `Access-Control-Allow-Origin` |
+|---|---|
+| `Origin: https://www.youtube.com` | `https://www.youtube.com`（还有 `Allow-Credentials: true`） |
+| `Origin: http://127.0.0.1:18081` | **没有这个头**（只有 `Vary: Origin`） |
+| `Origin: null` | 没有 |
+
+hls.js 是 `fetch`/XHR 取分片的，没有 ACAO 就一定被拦死。能跨域播的只有**原生 `<video src>`**
+（媒体元素不走 CORS）——Quetta 之所以行，是因为分片是它自己的播放器取的，不在网页的 CORS 里。
+顺带量了直连本身的吞吐（curl、同一时段）：单连接 2.2–8.6 MB/s 且偶发半路被掐（`transfer closed
+with N bytes remaining`），比我们代理「3 路切块 + 往前预取 4 段」更不稳，所以直连也不划算。
+
+#### 原生双元素（照插件的样子）与现有播放路径对照，同一条视频同一台机器
+
+用 `<video muted src=itag401(AV1 2160p)直链>` + `<audio muted src=itag140>` 手工同步（真机浏览器）：
+
+| 观测量 | 原生双元素 + 直连（插件式） | 现在的 hls.js + MSE + 本机代理 |
+|---|---|---|
+| 采样时长 | 78 s | 62 s |
+| 卡顿（`waiting`） | 起播 1 次，之后 0 | **0** |
+| 丢帧 | 1 / 3 919 | 1 / ~3 700 |
+| 缓冲余量 | 10–17 s | **70–85 s**（预取一直往前拉） |
+| `readyState` / 分辨率 | 恒 4 / 3840×2160 | 恒 4 / 3840×2160 |
+| 出画面 | 3.73 s（页面加载起算） | 冷启动整页 5.86 s 到首帧（解析已缓存） |
+
+结论：分轨不是缺的那块，我们早就分了；直连在网页里被 CORS 挡住、且吞吐不如代理。
+**播放链路不动**。真要再快，方向是「解析那 4–13 秒」和「起播前两段」，不是改成直连。
