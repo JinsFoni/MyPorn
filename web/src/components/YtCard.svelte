@@ -6,6 +6,7 @@
    * 时间可能未知（深度回填走 yt-dlp flat，实测没有时间戳），所以「时间未知」是正常态，
    * 不显示成错误、也不要显示 1970。想让它有日期：点开单条会补，墙上的「补齐」整批补（jobs 的 yt_meta）。
    */
+  import CoverArt from './CoverArt.svelte';
   import { imageUrl } from '../lib/img';
   import { formatCount, formatDuration, relativeTime } from '../lib/format';
   import type { YtVideo } from '../lib/types';
@@ -24,7 +25,6 @@
 
   let { video, onOpen, onDownload, onWarm, downloading = false }: Props = $props();
 
-  let thumbFailed = $state(false);
   // 640：墙在 2xl 断点是 4 列（每张 ~316px CSS），DPR2 要 632px 才不糊。
   // 上游给的是 hq720（1280×720），i.ytimg 不认 w=，所以这里只是把尺寸意图写清楚。
   const thumb = $derived(imageUrl(video.thumbUrl, 640));
@@ -49,23 +49,8 @@
     onfocus={() => onWarm?.(video)}
   >
     <div class="aspect-video w-full">
-      {#if thumb && !thumbFailed}
-        <img
-          src={thumb}
-          alt=""
-          loading="lazy"
-          decoding="async"
-          class="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
-          onerror={() => (thumbFailed = true)}
-        />
-      {:else}
-        <div class="grid h-full w-full place-items-center text-dim">
-          <svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="3" y="5.5" width="18" height="13" rx="3" />
-            <path d="M10.4 9.6v4.8l4-2.4z" fill="currentColor" stroke="none" />
-          </svg>
-        </div>
-      {/if}
+      <!-- 竖屏视频的封面两侧烘着站方的暗色填充，这里换成本身的虚化（见 CoverArt） -->
+      <CoverArt src={thumb} scaleClass="transition-transform duration-300 group-hover:scale-[1.02]" />
     </div>
 
     {#if !video.seen}
