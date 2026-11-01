@@ -410,6 +410,13 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
   - 「这次按键归谁管」看**合成路径里有没有皮肤那个 shadow root**，不能看 `host.contains()`：焦点在皮肤内部控件上时
     事件会穿过 shadow root（皮肤管，页面监听直接返回）；但焦点落在 `<video-skin>` 宿主元素本身时（点过播放器再点空白处），
     事件根本不进 shadow DOM，皮肤那套监听不会触发——按 `contains` 判断会连页面监听一起跳过，表现为**左右键完全没反应**。
+  - **音量/快进那两条提示（`media-volume-indicator` / `media-seek-indicator`）只认皮肤那条通道**：它们订阅的是容器的
+    输入动作（`subscribeToInputActions`），只有热键协调器派发的动作才让它们亮起来。所以页面监听里**不能自己算**
+    `setVolume()` / `seek()` ——那样音量和进度都改得动，提示条永远不出现（实测 2026-11-01：不带焦点按 ↑，音量
+    1.00→0.90 而 `media-volume-indicator` 仍 `hidden`；点一下播放器再按 ↑，同一处才亮出 192×28 的「90%」）。
+    现在方向键与 M 一律先 `pressInSkin()` 合成一颗 keydown 直接派给 `.media-container`（`composed:false`，否则它会
+    冒回 window 上被同一个监听再抓一次），皮肤不在（还没升级完）才退回自己算。派出去的大写字母键按小写派：绑定是
+    `keys="m"`，而 `matchesHotkeyEvent` 还要求 `shiftKey` 与绑定一致（绑定没声明 shift），带 shift 派一条路都不走。
 - **音量记忆**：存 `localStorage` 的 `myporn.player.volume`（`{volume, muted}`），但必须等媒体就绪（`canPlay`）再套用，
   否则会被播放器默认的满音量盖掉，并且会把默认值写回去污染记忆。**没存过也要从第一下就开始记**：媒体就绪时
   把当前值当作基线写进 `lastVolume`，否则「第一次调音量」这条路根本走不到写入分支。

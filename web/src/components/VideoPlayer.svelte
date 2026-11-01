@@ -562,12 +562,48 @@
   function tuneSkin(): void {
     tuneHotkeys();
     patchSkin();
-    const container = skinEl?.shadowRoot?.querySelector('.media-container');
-    if (!(container instanceof HTMLElement)) return;
+    const container = skinContainer();
+    if (!container) return;
     container.style.setProperty(
       '--media-controls-gradient',
       'linear-gradient(to top, rgb(0 0 0 / 0.3), rgb(0 0 0 / 0) 26%)',
     );
+  }
+
+  /** 皮肤 shadow root 里那个承载热键/手势的容器（`.media-container`），没升级完时返回 null */
+  function skinContainer(): HTMLElement | null {
+    const el = skinEl?.shadowRoot?.querySelector('.media-container');
+    return el instanceof HTMLElement ? el : null;
+  }
+
+  /**
+   * 把一次按键**派回皮肤自己的热键通道**，成功（皮肤在）就返回 true。
+   *
+   * 为什么要绕这一道：皮肤的快捷键不是挂在 window 上，而是挂在 shadow root 里的 `.media-container`
+   * （`<media-hotkey keys="ArrowUp" action="volumeStep">`），而**音量/快进那两条提示
+   * （`media-volume-indicator` / `media-seek-indicator`）只认这条通道**——它们订阅的是容器的
+   * 输入动作（`subscribeToInputActions`），只有热键协调器派发的动作才会让它们亮起来。
+   * 于是焦点不在播放器里时（没点过播放器，按键落到 window 上的那份兜底处理），下面直接调
+   * `setVolume()` / `seek()` 音量进度都改得动，提示条却永远不出现——2026-11-01 用户报的就是这个
+   * （实测：不带焦点按 ↑ 音量 1.00→0.90，`media-volume-indicator` 仍 `hidden`；点一下播放器再按 ↑
+   * 同一处就亮出 192×28 的「90%」）。
+   * 合成一颗 keydown 直接派给容器，音量、静音、快进就都由皮肤自己算：提示条自然亮，步长也跟
+   * 有焦点时**完全同源**（tuneHotkeys 已经把两边改成 5s / 10%）。
+   *
+   * `composed: false` 是必须的：这颗事件不该穿出 shadow root，否则它会继续冒到 window 上，
+   * 被同一个 onKeydown 再抓一次、无限套娃。
+   */
+  function pressInSkin(key: string): boolean {
+    const container = skinContainer();
+    if (!container) return false;
+    // 大写字母键（`M`）要按小写派：皮肤的绑定是 `keys="m"`，`matchesHotkeyEvent` 拿
+    // `event.key.toLowerCase()` 比值、但 `shiftKey` 必须与绑定一致（绑定没声明 shift），
+    // 所以派出去的这颗不能带 shift，否则按 Shift+M 会一条路都不走。方向键名字原样保留。
+    const name = key.length === 1 ? key.toLowerCase() : key;
+    container.dispatchEvent(
+      new KeyboardEvent('keydown', { key: name, bubbles: false, composed: false, cancelable: true }),
+    );
+    return true;
   }
 
   /**
@@ -1484,7 +1520,10 @@
     };
   });
 
-  /** 页面级快捷键：焦点不在播放器里时也能用（在播放器里由皮肤自己的 hotkey 接管，这里不重复处理） */
+  /**
+   * 页面级快捷键：焦点不在播放器里时也能用（键落在播放器里由皮肤自己的 hotkey 接管，这里不重复处理）。
+   * 方向键与 M 本身不自己算，先派回皮肤那条通道——音量/快进提示条只认它，见 pressInSkin。
+   */
   function onKeydown(event: KeyboardEvent): void {
     const s = store();
     if (!s) return;
@@ -1501,6 +1540,8 @@
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return;
 
+    // 下面这两个是**皮肤派不上用场时**的退路（见 pressInSkin）。走它们同样改得动音量/进度，
+    // 只是没有提示条；正常路径由皮肤自己算，步长也一样是 5s / 10%。
     const seek = (delta: number): void => {
       const max = s.duration > 0 ? s.duration : s.currentTime + Math.abs(delta);
       void s.seek(Math.min(max, Math.max(0, s.currentTime + delta))).catch(() => {});
@@ -1526,26 +1567,28 @@
           );
         } else s.pause();
         break;
+      // 方向键与静音优先派给皮肤（见 pressInSkin）：这样「音量 / 快进提示条」才会出现；
+      // 皮肤没装上时才退回自己算，功能不至于丢。
       case 'ArrowLeft':
         event.preventDefault();
-        seek(-SEEK_STEP);
+        if (!pressInSkin('ArrowLeft')) seek(-SEEK_STEP);
         break;
       case 'ArrowRight':
         event.preventDefault();
-        seek(SEEK_STEP);
+        if (!pressInSkin('ArrowRight')) seek(SEEK_STEP);
         break;
       case 'ArrowUp':
         event.preventDefault();
-        nudgeVolume(VOLUME_STEP);
+        if (!pressInSkin('ArrowUp')) nudgeVolume(VOLUME_STEP);
         break;
       case 'ArrowDown':
         event.preventDefault();
-        nudgeVolume(-VOLUME_STEP);
+        if (!pressInSkin('ArrowDown')) nudgeVolume(-VOLUME_STEP);
         break;
       case 'm':
       case 'M':
         event.preventDefault();
-        s.setMuted(!s.muted);
+        if (!pressInSkin('m')) s.setMuted(!s.muted);
         break;
       case 'f':
       case 'F':
