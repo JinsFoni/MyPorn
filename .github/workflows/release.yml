@@ -1,0 +1,80 @@
+name: Release
+
+# 发布 release 时自动构建多架构镜像并推到 GHCR：
+#   ghcr.io/jinsfoni/myporn:1.2.3 / :1.2 / :1 / :latest / :sha-xxxxxxx
+#
+# 只由「在 GitHub 上发布 release」触发，不跟 tag push 走——两者都开会一次发布跑两遍。
+# 想重跑某次发布的镜像：Actions 里手动 dispatch，填同一个 tag。
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已存在的 tag（例：v0.1.0）
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    name: 构建并推送 amd64 + arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      # GHCR 只接受小写仓库名，而 owner 是 JinsFoni
+      - name: 算出镜像名与版本号
+        run: |
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "VERSION=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}},value=${{ env.VERSION }}
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=MyPorn
+            org.opencontainers.image.description=自托管影片聚合与播放（单二进制 + ffmpeg + yt-dlp）
+            org.opencontainers.image.licenses=UNLICENSED
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ env.VERSION }}
+          # arm64 走 QEMU 模拟，Go 编译要几分钟，缓存能省掉大部分
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 把标签写进 job 摘要
+        run: |
+          {
+            echo "### MyPorn $VERSION"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
