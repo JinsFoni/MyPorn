@@ -79,6 +79,12 @@
   let proxyAvailable = $state(false);
   let usingProxy = $state(false);
   let selectedVariantId = $state<string | null>(null);
+  /**
+   * 记忆里那一档的高度（px），null = 没记忆 → 默认最高。
+   * 单独存一份是为了让清晰度菜单能把它标出来：记忆造成的降档必须是看得见的选择，
+   * 不能让 4K 片子悄悄地按记忆里的 1080 起播、用户却不知道是谁决定的。
+   */
+  let rememberedPx = $state<number | null>(rememberedHeight());
   let mockNote = $state('');
   let downloadOpen = $state(false);
   /**
@@ -178,12 +184,15 @@
       if (info.tags?.length && video && video.tags.length === 0) {
         video = { ...video, tags: info.tags };
       }
-      const preferred = pickVariant(info, rememberedHeight());
+      // 每次解析都重读一遍记忆：别的标签页可能刚改过，旧键也要在这里被清掉
+      rememberedPx = rememberedHeight();
+      const preferred = pickVariant(info, rememberedPx);
       // 本地文件本来就是同源直发，"用代理播放"对它是空操作。
       const chosen = preferred ?? info.variants.find((v) => v.id === info.defaultVariantId) ?? null;
       proxyAvailable = info.proxyPlaybackUrl !== null && chosen?.local !== true;
       if (chosen && needsRemuxPrep(chosen)) {
         // 分轨档位（4K/1080P+）要先在服务端合流：地址先压着，进度到 ready 再交给播放器。
+        // 注意**不**传 remember：这一档是代码按默认选出来的，不是用户点的，不能写进偏好。
         selectedVariantId = null;
         void activateVariant(chosen);
       } else {
@@ -216,7 +225,8 @@
   function applyVariant(variantId: string): void {
     const variant = playback?.variants.find((v) => v.id === variantId);
     if (!variant) return;
-    void activateVariant(variant);
+    // 全站只有这条路是「用户自己点的档位」——偏好的记忆也只在这里写
+    void activateVariant(variant, { remember: true });
   }
 
   /**
@@ -225,8 +235,16 @@
    * 分轨档位（B 站 1080P+ / 4K）要先等服务端把音画两轨合成一份 mp4——4K 一档
    * 554 MB~1.77 GB，头一次要等 1~3 分钟。所以这里先轮询进度、把百分比画在画面上，
    * 合好才改 selectedVariantId（这时 <video> 拿到的是一个已经就绪的文件，秒开）。
+   *
+   * `remember` 只有清晰度菜单传 true。起播时自动选中合流档位也走这个函数
+   * （B 站的默认档就是 1080P，必须合流），但那是代码选的、不是用户选的：
+   * 以前这里无条件 rememberHeight，结果打开任何一部 B 站片子就把偏好写成 1080，
+   * 之后所有平台的 4K 片都从 1080p 起播。
    */
-  async function activateVariant(variant: PlaybackVariant): Promise<void> {
+  async function activateVariant(
+    variant: PlaybackVariant,
+    opts: { remember?: boolean } = {},
+  ): Promise<void> {
     const token = ++prepToken;
     playError = '';
     if (needsRemuxPrep(variant)) {
@@ -234,7 +252,10 @@
       if (!ready || token !== prepToken) return;
     }
     selectedVariantId = variant.id;
-    rememberHeight(variant.height);
+    if (opts.remember === true) {
+      rememberHeight(variant.height);
+      rememberedPx = variant.height;
+    }
   }
 
   /** 轮询合流进度，ready 时返回 true；失败/取消返回 false（原因写进 playError）。 */
@@ -297,7 +318,24 @@
       });
   }
 
-  /** 播放器左上角清晰度菜单的条目（顺序即 sortVariantsDesc 的顺序，最高在最上） */
+  /**
+   * 记忆真正会命中的那一条（同高度可能有多个编码，取排序第一的，与 pickVariant 同口径）。
+   * 记忆存的是高度，不是变体 id，所以标的时候得先按同样的规则算出「到底是哪一条」，
+   * 否则 1080p 的 H.264 和 AV1 两条会一起被标上「上次选的」。
+   */
+  const rememberedVariantId = $derived<string | null>(
+    rememberedPx === null || rememberedPx >= (variants[0]?.height ?? 0)
+      ? null
+      : (variants.find((v) => v.local !== true && v.height === rememberedPx)?.id ?? null),
+  );
+
+  /**
+   * 播放器左上角清晰度菜单的条目（顺序即 sortVariantsDesc 的顺序，最高在最上）。
+   *
+   * 「上次选的」标在记忆那一档上——但只在它确实比最高档低时才标：
+   * 那种情况下「为什么这部 4K 片在放 1080p」必须能一眼看出来是记忆造成的，
+   * 而不是让人以为片源只有 1080p。
+   */
   const qualities = $derived<QualityOption[]>(
     variants.map((variant) => ({
       id: variant.id,
@@ -307,6 +345,7 @@
         formatBandwidth(variant.bandwidth),
         variant.local === true ? '本地文件' : null,
         variant.local !== true && variant.id === playback?.defaultVariantId ? '最高' : null,
+        variant.id === rememberedVariantId ? '上次选的' : null,
       ]
         .filter((part) => part !== null && part !== '')
         .join(' · '),

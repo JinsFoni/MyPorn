@@ -9,11 +9,24 @@
  */
 import type { PlaybackInfo, PlaybackVariant } from './types';
 
-const QUALITY_KEY = 'myporn.quality.height';
+/**
+ * 记忆键。
+ *
+ * `.v2`：旧键 `myporn.quality.height` 里的值**不可信**，整条废弃。成因是旧代码在
+ * 「自动选档」那条路上也记了一笔：B 站 1080P 起播要先服务端合流，走的是 activateVariant，
+ * 它末尾顺手 rememberHeight。于是**只要打开过任何一部 B 站片子**（实测 /video/315，
+ * 默认档 1080p.av1，3 秒内合好），偏好就被写成 1080；此后所有平台的 4K 片
+ * （实测 xHamster /video/464：默认档 2160p.av1，4K 四档）都静悄悄地从 1080p 起播。
+ * 旧键里分不清「用户点的」和「代码写的」，只能整体丢掉——代价是老用户要重新手动选一次档。
+ */
+const QUALITY_KEY = 'myporn.quality.height.v2';
+const LEGACY_QUALITY_KEY = 'myporn.quality.height';
 
 /** 记忆的画质高度（px），null = 无偏好 → 用最高 */
 export function rememberedHeight(): number | null {
   try {
+    // 顺手清掉旧键，免得它在别人浏览器里继续被当成「偏好」
+    window.localStorage.removeItem(LEGACY_QUALITY_KEY);
     const raw = window.localStorage.getItem(QUALITY_KEY);
     if (!raw) return null;
     const n = Number.parseInt(raw, 10);
@@ -23,6 +36,13 @@ export function rememberedHeight(): number | null {
   }
 }
 
+/**
+ * 记下用户选的档位。
+ *
+ * **只该在「用户自己点了清晰度菜单」时调用**（见 Video.svelte 的 applyVariant）。
+ * 自动选档（defaultVariantId、合流档位起播时的 activateVariant）绝不能走这里：
+ * 那不是用户的选择，记下来等于拿一个代码写的数字覆盖全站所有片子的默认画质。
+ */
 export function rememberHeight(height: number): void {
   try {
     window.localStorage.setItem(QUALITY_KEY, String(height));
