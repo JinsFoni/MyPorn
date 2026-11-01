@@ -772,8 +772,22 @@ POST /api/moments/cooldown
 
 ```json
 { "path": "/opt/ytvenv/bin/yt-dlp", "found": true, "version": "2026.10.26",
-  "ageDays": 1, "stale": false, "ffmpegOk": true, "missingDates": 27 }
+  "ageDays": 1, "stale": false, "ffmpegOk": true, "error": "", "missingDates": 27 }
 ```
+
+配置的路径用不了时（文件被删 / 是目录 / 没有可执行位 / `--version` 跑不起来）：
+
+```json
+{ "path": "/tmp/ytvenv/bin/yt-dlp", "found": false, "version": "",
+  "ageDays": 0, "stale": false, "ffmpegOk": false,
+  "error": "这个路径上没有可执行的 yt-dlp：/tmp/ytvenv/bin/yt-dlp", "missingDates": 27 }
+```
+
+`found` 的语义是「**能跑通 `--version`**」，不是「设置里填了路径」或「文件存在」。
+2026-11-02 就是这条不一致坑的：`/tmp/ytvenv/bin/yt-dlp` 被 macOS 定时 tmp 清理删掉，
+`found` 仍报 true、`version` 为空，界面显示「版本新鲜」，而点开任何一条视频都是 502
+`fork/exec … no such file or directory`。现在 `path` 照旧回显用户填过的那一条，
+`error` 说明为什么用不了，界面两处（管理 → YouTube、设置 → YouTube）都直接显示它。
 
 `missingDates` = 还没有发布时间的视频条数（墙上据此决定显不显示「有 N 条视频没有发布时间 · 补齐」那一条）。
 

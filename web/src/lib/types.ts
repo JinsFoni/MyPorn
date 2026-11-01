@@ -939,6 +939,8 @@ export interface YtHealth {
   /** 超过 90 天：下载大概率 403 */
   stale: boolean;
   ffmpegOk: boolean;
+  /** 「配了路径但用不了」的原因（文件没了 / 不可执行 / --version 跑不起来），正常时为空 */
+  error: string;
   /** 还没有发布时间的视频条数（墙上显示「补齐」那一条用） */
   missingDates: number;
 }

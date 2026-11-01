@@ -206,11 +206,14 @@ func main() {
 	runner.RegisterDefaults()
 
 	// yt-dlp 是这个功能最脆的一环（实测旧版全线 403，见 M6 §11.5），启动时先把版本打进日志。
+	// 找不到时要把「它去哪儿找过」打出来：2026-11-02 就是 /.tmp 被人清掉之后，
+	// 日志只写「没有找到」，而设置里那条绝对路径看上去好好的（文件没了、目录还在）。
 	verCtx, cancelVer := context.WithTimeout(context.Background(), 15*time.Second)
 	ytVersion := ytDlp.Version(verCtx)
 	cancelVer()
 	if v := ytVersion; !v.Found {
-		logger.Warn("没有找到 yt-dlp：YouTube 只能抓 RSS（没有时长、没有深度回填），也不能下载")
+		logger.Warn("没有可用的 yt-dlp：站内播放 / 深度回填 / 下载都会失败，只能抓 RSS（没有时长）",
+			"path", v.Path, "err", v.Error)
 	} else if v.Stale {
 		logger.Warn("yt-dlp 版本偏旧，下载很可能失败", "version", v.Version, "ageDays", v.AgeDays)
 	} else {

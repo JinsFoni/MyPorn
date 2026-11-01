@@ -646,10 +646,25 @@
                         <p class="text-meta text-brick">
                           没找到 yt-dlp。没有它只能抓 RSS（最近 15 条、没有时长），也不能下载。
                         </p>
+                        <!-- 后端给的原文（含它实际去找的路径）：填过一个已经不存在的绝对路径，
+                             光说「没找到」会让人以为设置没生效 -->
+                        {#if ytHealth?.error}
+                          <p class="mt-1 break-all font-mono text-[0.6875rem] text-brick">{ytHealth.error}</p>
+                        {/if}
                         <p class="mt-1 text-meta text-dim">
                           装一个（<code class="font-mono">pipx install yt-dlp</code> 或
                           <code class="font-mono">brew install yt-dlp</code>），或在下面填绝对路径。
                         </p>
+                        <button
+                          type="button"
+                          class="mt-2 rounded-full bg-raise px-2.5 py-1 text-meta text-fg transition-colors hover:bg-panel"
+                          onclick={() => {
+                            ytHealth = null;
+                            void loadYtHealth();
+                          }}
+                        >
+                          重新检查
+                        </button>
                       {:else}
                         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta">
                           <span class="text-fg">yt-dlp {ytHealth.version}</span>

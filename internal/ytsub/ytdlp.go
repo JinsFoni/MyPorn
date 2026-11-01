@@ -67,10 +67,33 @@ func NewYtDlp(pathFor func() string, proxyFor func() string, cookies func() stri
 }
 
 // Bin 返回实际使用的可执行文件路径（找不到时返回空串）。
+//
+// 「找到了」必须是**真的能跑**：设置里填的绝对路径也要过一遍 os.Stat + 可执行位。
+// 2026-11-02 的教训——/tmp/ytvenv/bin/yt-dlp 被 macOS 的定时 tmp 清理删了
+// （同一目录里的 python 符号链接还在，所以目录看着正常），而这里当时把配置的路径
+// 原样返回，于是 /api/yt/health 报 found=true、version=""，界面显示「版本新鲜」，
+// 点开任何一条 YouTube 视频都是 502「fork/exec /tmp/ytvenv/bin/yt-dlp: no such file
+// or directory」——用户看到的是「解析失败：<链接>」，像是 YouTube 抽风。
+// 现在路径不可执行就当没找到，各调用点会给出「没有找到 yt-dlp，去设置里填路径」。
+//
+// 注意**不要**在这里退回去 LookPath 兜底：设置里明确填了某个版本，就应该用它或者
+// 明说它不在；悄悄换成本机 brew 那个过期版本，只会让故障从「找不到」变成「403」。
+//
+// 唯一的例外是「填的是命令名而不是路径」（默认配置就是 "yt-dlp"，见 config.YtDlpPath）：
+// 这种必须交给 PATH 去找——拿它去 os.Stat 会得到相对路径 "./yt-dlp"，永远不存在。
 func (y *YtDlp) Bin() string {
 	if y.pathFor != nil {
 		if p := strings.TrimSpace(y.pathFor()); p != "" {
-			return p
+			if !strings.ContainsRune(p, os.PathSeparator) {
+				if q, err := exec.LookPath(p); err == nil {
+					return q
+				}
+				return ""
+			}
+			if executableFile(p) {
+				return p
+			}
+			return ""
 		}
 	}
 	p, err := exec.LookPath("yt-dlp")
@@ -80,10 +103,23 @@ func (y *YtDlp) Bin() string {
 	return p
 }
 
+// executableFile 报告 path 是不是一个能跑的文件：存在、不是目录、带可执行位。
+func executableFile(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		return false
+	}
+	return st.Mode().Perm()&0o111 != 0
+}
+
 // Available 报告 yt-dlp 是否可用。
 func (y *YtDlp) Available() bool { return y.Bin() != "" }
 
 // VersionInfo 是给界面看的健康度。
+//
+// Error 只在「配了路径但用不了」时非空（文件没了 / 不可执行 / --version 跑不起来），
+// 里面直接写人话加路径：这一格存在的意义就是回答「为什么下载总是失败」，
+// 显示一行「yt-dlp 版本新鲜」而实际 fork 不了，比不显示更糟。
 type VersionInfo struct {
 	Path     string `json:"path"`
 	Found    bool   `json:"found"`
@@ -91,17 +127,26 @@ type VersionInfo struct {
 	AgeDays  int    `json:"ageDays"`
 	Stale    bool   `json:"stale"`
 	FFmpegOK bool   `json:"ffmpegOk"`
+	Error    string `json:"error"`
 }
 
 // Version 读版本号并算出「距发布多少天」。
 func (y *YtDlp) Version(ctx context.Context) VersionInfo {
 	info := VersionInfo{}
+	// 先把「用户填的那个路径」原样放进 Path：找不到时界面要能显示它到底往哪儿找过
+	if y.pathFor != nil {
+		info.Path = strings.TrimSpace(y.pathFor())
+	}
 	bin := y.Bin()
 	if bin == "" {
+		if info.Path != "" {
+			info.Error = "这个路径上没有可执行的 yt-dlp：" + info.Path
+		} else {
+			info.Error = "没找到 yt-dlp：设置里没填路径，PATH 里也没有"
+		}
 		return info
 	}
 	info.Path = bin
-	info.Found = true
 	if _, err := exec.LookPath("ffmpeg"); err == nil {
 		info.FFmpegOK = true
 	}
@@ -109,8 +154,13 @@ func (y *YtDlp) Version(ctx context.Context) VersionInfo {
 	defer cancel()
 	out, err := exec.CommandContext(cctx, bin, "--version").Output()
 	if err != nil {
+		// 文件在、可执行位也有，但跑不起来（架构不符 / 依赖缺失 / 权限被拦）。
+		// Found 保持 false：界面那一格问的是「能不能用」，不是「文件在不在」。
+		info.Error = "yt-dlp 跑不起来：" + err.Error()
 		return info
 	}
+	// 能跑通 --version 才算「可用」：这一格问的是能不能用，不是文件在不在。
+	info.Found = true
 	ver := strings.TrimSpace(string(out))
 	if i := strings.LastIndex(ver, " "); i >= 0 {
 		ver = ver[i+1:]

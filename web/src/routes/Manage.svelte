@@ -1087,6 +1087,9 @@
           <div class="panel px-4 py-3">
             {#if !ytHealth.found}
               <p class="text-ui text-brick">没找到 yt-dlp：只能抓 RSS（没有时长），也不能下载。</p>
+              {#if ytHealth.error}
+                <p class="mt-1 break-all font-mono text-[0.6875rem] text-brick">{ytHealth.error}</p>
+              {/if}
               <p class="mt-1 text-meta text-dim">
                 装一个或在设置里填绝对路径（pipx / brew / 官方二进制都行），然后回来点「重新检查」。
               </p>

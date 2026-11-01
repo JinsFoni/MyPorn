@@ -34,9 +34,15 @@ make web            # 只编前端
 ```
 
 ```bash
-PORT=18081 YTDLP_PATH=/tmp/ytvenv/bin/yt-dlp nohup ./bin/myporn >> .tmp/run/run.log 2>&1 &
+PORT=18081 YTDLP_PATH=$PWD/.tmp/ytvenv/bin/yt-dlp nohup ./bin/myporn >> .tmp/run/run.log 2>&1 &
 # 登录拿 cookie：POST /api/auth/login {"password":"..."} → .tmp/cookie.txt
 ```
+
+**yt-dlp 装在 `.tmp/ytvenv`，不要装进 `/tmp`**：macOS 的定时任务会删掉 `/tmp` 里三天没动过的
+文件（目录还在，里面的符号链接还在），2026-11-02 就是这么发生的——`/tmp/ytvenv/bin/yt-dlp` 被删掉，
+点开任何一条 YouTube 视频都是 502 `fork/exec … no such file or directory`，界面上只写「解析失败」。
+重装：`python3 -m venv .tmp/ytvenv && .tmp/ytvenv/bin/pip install -U yt-dlp`（要最新版，brew 那个
+2026.07.04 会直接 403）。设置里的 `ytdlp_path` 也填这个绝对路径，就不依赖启动时的环境变量了。
 
 数据库在 `.tmp/run/data/myporn.db`（**不是** `.tmp/myporn.db`，后者是早期踩坑留下的幻觉）。
 
