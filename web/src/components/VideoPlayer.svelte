@@ -93,6 +93,13 @@
   let playerEl = $state<HTMLElement | null>(null);
   let mediaEl = $state<HTMLElement | null>(null);
   let canvasEl = $state<HTMLCanvasElement | null>(null);
+  /** 播放器黑盒**里面**的那层氛围光：竖屏视频两侧的黑边靠它填（见下面的「氛围模式」） */
+  let innerCanvasEl = $state<HTMLCanvasElement | null>(null);
+  /** 黑边在哪一轴、有多宽：由 measureBars 量出来，写进 CSS 自定义属性，mask 靠它裁 */
+  let barAxis = $state<'x' | 'y' | 'none'>('none');
+  /** 盒内那层画过一帧没有：没画过就还是张黑画布，露出来就是一道黑边 */
+  let barsPainted = $state(false);
+  let barsEl = $state<HTMLDivElement | null>(null);
   let skinEl = $state<HTMLElement | null>(null);
 
   /** 播放器 store：字段见 @videojs/html 的 player-store 参考（paused / currentTime / error …） */
@@ -691,6 +698,21 @@
 
   // ---------- 氛围模式 ----------
 
+  /**
+   * 氛围光有**两层**，同一份 32×18 采样：
+   *   1. `.ambient-glow`：黑盒外面那层，往播放器四周溢出（原来的效果）；
+   *   2. `.ambient-bars`：盒子里**压在画面上面**、只漏在黑边里的那层，给竖屏/宽银幕片子用。
+   *
+   * 为什么第 2 层只能压在画面上、不能垫在画面下面：`<video>` 是 `object-fit: contain`
+   * （实测 computed 值），竖屏片子（如 `G7nLsgxggrE` 2160×3840）在 1259×708 的盒子里
+   * 只占中间 398×708，左右各 430px 是黑边。实测在这块黑边上做过的尝试——
+   * 把 `video-skin` 的 `bg-black`、`<video>` 的 `background-color` 全改成 transparent，
+   * 再在它下面垫一张有内容的 canvas（平均色 136/124/152，确认不是空画布）——
+   * 那 430px 依然是纯黑：Chromium 把 `<video>` 的整个盒子（含 letterbox 区）当一层不透明的
+   * 视频层画出来，垫在下面的东西一律照不进来。所以只能反过来：把光画在画面上方，
+   * 再用 `mask` 把它裁成只有黑边那两条，画面正中间不糊。
+   */
+
   /** 真正在播的 `<video>`：原生是它自己，hls.js 引擎在 `<hlsjs-video>` 的 shadow root 里 */
   function innerVideo(): HTMLVideoElement | null {
     const el = mediaEl;
@@ -709,6 +731,41 @@
     stopAmbient = null;
   }
 
+  /**
+   * 把「黑边有多宽」量出来交给 CSS：`object-fit: contain` 下画面按 `min(盒宽/视频宽, 盒高/视频高)`
+   * 缩放，两条黑边的宽度就是剩下的那一半。竖屏片子走 x、宽银幕走 y，两个都不会有。
+   * 量不到（还没 metadata / 不是 contain）就标成 none，这一层直接不显示，宁可不画也别糊住画面。
+   */
+  function measureBars(): void {
+    const box = barsEl;
+    const video = innerVideo();
+    if (!box || !video) return;
+    const rect = video.getBoundingClientRect();
+    const { videoWidth: vw, videoHeight: vh } = video;
+    let axis: 'x' | 'y' | 'none' = 'none';
+    let bar = 0;
+    if (
+      getComputedStyle(video).objectFit === 'contain' &&
+      vw > 0 &&
+      vh > 0 &&
+      rect.width > 0 &&
+      rect.height > 0
+    ) {
+      const scale = Math.min(rect.width / vw, rect.height / vh);
+      const barX = Math.round((rect.width - vw * scale) / 2);
+      const barY = Math.round((rect.height - vh * scale) / 2);
+      if (barX >= 2) {
+        axis = 'x';
+        bar = barX;
+      } else if (barY >= 2) {
+        axis = 'y';
+        bar = barY;
+      }
+    }
+    box.style.setProperty('--ambient-bar', `${String(bar)}px`);
+    barAxis = axis;
+  }
+
   function startAmbient(): void {
     stopAmbientLoop();
     const canvas = canvasEl;
@@ -719,23 +776,78 @@
     canvas.width = AMBIENT_W;
     canvas.height = AMBIENT_H;
 
+    // 盒内那层自己再采一次（cover 取景，见下面 draw）：多一次 4K→32×18 的 GPU 缩采样，
+    // 实测开着它播 8 秒 483 帧掉 0 帧，不值当为这点开销去凑合外面那张压扁的采样。
+    const inner = innerCanvasEl;
+    if (inner) {
+      inner.width = AMBIENT_W;
+      inner.height = AMBIENT_H;
+    }
+    const innerCtx = inner?.getContext('2d') ?? null;
+    barsPainted = false;
+
     let stopped = false;
     let handle = 0;
     let raf = 0;
     let last = 0;
 
+    /**
+     * 末尾 0.3 秒不再采样。`drawImage` 拿到的并不总是画面：片子快播完、hls.js 开始收
+     * SourceBuffer 之后，同一句 `drawImage` 返回的是**纯黑**（实测 `G7nLsgxggrE`：
+     * 采样平均色 156/147/180 一路正常，播到 10.91/10.913 秒时掉成 0/0/0，光晕跟着灭）。
+     * 与其检测黑帧（要把画布从 GPU 读回来，或者分不清「片子里本来就是黑场」），
+     * 不如干脆停在最后一帧好画面上——光晕本来就是氛围，不需要跟着片尾变黑。
+     */
+    const nearEnd = (): boolean =>
+      Number.isFinite(video.duration) && video.duration > 0 && video.currentTime >= video.duration - 0.3;
+
     const draw = (): void => {
-      if (stopped || video.readyState < 2) return;
+      if (stopped || video.readyState < 2 || video.ended || nearEnd()) return;
       try {
+        // 盒外那层：整帧压到 32×18，取的是「整部片子现在大概什么颜色」
         ctx.drawImage(video, 0, 0, AMBIENT_W, AMBIENT_H);
+        if (innerCtx) {
+          // 盒内那层按 cover 取景：黑边里接的是画面**这一条边**的延续。
+          // 用整帧压扁的话左右两侧会把画面中间的人也拖进黑边，看着像糊了两团黑影。
+          const vw = video.videoWidth;
+          const vh = video.videoHeight;
+          if (vw > 0 && vh > 0) {
+            const aspect = AMBIENT_W / AMBIENT_H;
+            let sw = vw;
+            let sh = vh;
+            if (vw / vh > aspect) sw = vh * aspect;
+            else sh = vw / aspect;
+            innerCtx.drawImage(
+              video,
+              (vw - sw) / 2,
+              (vh - sh) / 2,
+              sw,
+              sh,
+              0,
+              0,
+              AMBIENT_W,
+              AMBIENT_H,
+            );
+            if (!barsPainted) barsPainted = true;
+          }
+        }
       } catch {
         // 跨源污染 / 尺寸未就绪：跳过这一帧
       }
     };
 
-    // 暂停状态下的跳转也要更新一次光晕
+    // 黑边宽度会随窗口缩放、进全屏、换片源变化，都重新量一遍
+    const remeasure = (): void => measureBars();
+    measureBars();
     video.addEventListener('seeked', draw);
     video.addEventListener('loadeddata', draw);
+    video.addEventListener('loadedmetadata', remeasure);
+    video.addEventListener('resize', remeasure);
+    // 观察真正有布局盒子的 `<video>`：`<hlsjs-video>` 是 `display: contents`，它永远不触发
+    // ResizeObserver（进全屏时黑边宽度就停在旧值）。全屏切换那一层没有 resize，单独听一下。
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(remeasure) : null;
+    ro?.observe(video);
+    document.addEventListener('fullscreenchange', remeasure);
     draw();
 
     type FrameVideo = HTMLVideoElement & {
@@ -772,6 +884,10 @@
       stopped = true;
       video.removeEventListener('seeked', draw);
       video.removeEventListener('loadeddata', draw);
+      video.removeEventListener('loadedmetadata', remeasure);
+      video.removeEventListener('resize', remeasure);
+      document.removeEventListener('fullscreenchange', remeasure);
+      ro?.disconnect();
       if (handle) frameVideo.cancelVideoFrameCallback?.(handle);
       if (raf) cancelAnimationFrame(raf);
     };
@@ -783,6 +899,8 @@
     void src;
     void engine;
     void canvasEl;
+    void innerCanvasEl;
+    void barsEl;
     void mediaEl;
     if (on && canvasEl) startAmbient();
     else stopAmbientLoop();
@@ -979,7 +1097,7 @@
     <!-- 皮肤的 --media-* 是它的公开调色口：全部压到站点的单色冷调（纯白当强调色、Roboto、12px 圆角）。
          lang 从 <html lang="zh-CN"> 继承，控件文案走 @videojs/html 自带的 zh-CN 语言包。 -->
     <media-i18n>
-      <video-player bind:this={playerEl} poster={poster ?? undefined} aria-label={title}>
+      <video-player class="player-stack" bind:this={playerEl} poster={poster ?? undefined} aria-label={title}>
         <video-skin
           bind:this={skinEl}
           class="block aspect-video w-full bg-black"
@@ -990,6 +1108,21 @@
           {:else}
             <video bind:this={mediaEl} playsinline preload="metadata" aria-label={title}></video>
           {/if}
+
+          <!-- 盒内那层氛围光：压在画面上面、被 mask 裁成只留 `object-fit: contain` 的黑边
+               （为什么不能垫在画面下面，见上面 measureBars 的注释）。出画面之前不显示，
+               否则一张还没采样的黑画布会把加载态盖黑。
+               模糊必须挂在里层 canvas 上、mask 挂在外层 div 上：两者落在同一个元素上时
+               Chromium 会先裁后糊，画面那侧会糊进一圈黑边（实测 40px 的模糊就是 40px 的黑缝）。 -->
+          <div
+            bind:this={barsEl}
+            class="ambient-bars"
+            data-on={ambient && barsPainted ? 'true' : 'false'}
+            data-bars={barAxis}
+            aria-hidden="true"
+          >
+            <canvas bind:this={innerCanvasEl} class="ambient-bars-canvas"></canvas>
+          </div>
 
           <!-- 加载态：糊掉的封面 / 刚才那一帧垫底 + 中间转环（皮肤的大播放键在它上面，照样能点） -->
           {#if buffering}
@@ -1046,10 +1179,71 @@
     }
   }
 
+  /* ---------- 氛围模式（盒内那层）：填 `object-fit: contain` 留下的黑边 ---------- */
+  /* 压在画面上面（z-index:2），比皮肤的控件层（shadow root 里那层 z-index:30）低、
+     比加载态（.video-veil-host，z-index:3）低，所以既不挡控件也不糊加载态。
+     放大 1.2 倍 + 模糊，是为了让边缘落在裁剪框外面，黑边里不会露出一圈发暗的晕边。 */
+  .ambient-bars {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.5s ease;
+  }
+  .ambient-bars-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    transform: scale(1.2);
+    filter: blur(44px) saturate(1.3);
+  }
+  .ambient-bars[data-on='true'][data-bars='x'] {
+    opacity: 0.5;
+    -webkit-mask-image: linear-gradient(
+      to right,
+      #000 0 var(--ambient-bar, 0px),
+      transparent var(--ambient-bar, 0px) calc(100% - var(--ambient-bar, 0px)),
+      #000 calc(100% - var(--ambient-bar, 0px)) 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      #000 0 var(--ambient-bar, 0px),
+      transparent var(--ambient-bar, 0px) calc(100% - var(--ambient-bar, 0px)),
+      #000 calc(100% - var(--ambient-bar, 0px)) 100%
+    );
+  }
+  .ambient-bars[data-on='true'][data-bars='y'] {
+    opacity: 0.5;
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      #000 0 var(--ambient-bar, 0px),
+      transparent var(--ambient-bar, 0px) calc(100% - var(--ambient-bar, 0px)),
+      #000 calc(100% - var(--ambient-bar, 0px)) 100%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      #000 0 var(--ambient-bar, 0px),
+      transparent var(--ambient-bar, 0px) calc(100% - var(--ambient-bar, 0px)),
+      #000 calc(100% - var(--ambient-bar, 0px)) 100%
+    );
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ambient-bars {
+      transition: none;
+    }
+  }
+  .player-stack {
+    position: relative;
+    z-index: 1;
+  }
+
   /* 加载态在外面套一层只为了让淡出挂在有个盒子的元素上 */
   .video-veil-host {
     position: absolute;
     inset: 0;
+    /* 比盒内氛围光（z-index:2）高：还没出画面的那几秒，光晕不该盖在加载态上 */
+    z-index: 3;
     pointer-events: none;
   }
 

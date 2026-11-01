@@ -215,6 +215,19 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
   暂停时靠 `seeked`/`loadeddata` 各补一帧。跨源片源会污染画布，但只 `drawImage` 不读像素，所以照常能糊出来。
   `hlsjs-video` 的内层 `<video>` 在它的 shadow root 里，采样前要先挖出来。光晕画布在裁剪层**外面**，
   这样能溢出到播放器四周；全屏时它自然落在全屏元素之外（全屏不需要环境光）。
+- **氛围模式·黑边那层**（`.ambient-bars`，竖屏和宽银幕片子用）：外面那层照不进播放器**里面的**黑边——
+  Chromium 把 `<video>` 整个盒子（含 `object-fit: contain` 的 letterbox 区）当一层不透明视频层画出来：
+  实测把 `video-skin` 的 `bg-black`、`<video>` 的 `background-color` 全改成 transparent，
+  再在它们下面垫一张有内容的 canvas（采样平均色 136/124/152，确认不是空画布），那 430px 依然是纯黑。
+  所以第二层反过来压在画面**上面**、用 `mask` 裁成只留黑边：量出的黑边宽度写进 `--ambient-bar`，
+  `data-bars=x|y|none` 决定裁哪一轴（`contain` 只可能一个轴有黑边）。实测 `G7nLsgxggrE`（2160×3840）
+  在 1259×708 的盒子里画面只占 398×708，两侧各 430px；进全屏 1440×900 → 467px（`<hlsjs-video>` 是
+  `display: contents`，ResizeObserver 要观察里面的 `<video>`，全屏切换另外听 `fullscreenchange`）。
+  这层按 **cover** 取景而不是整帧压扁：黑边里接的是画面那一条边的延续，不会把画面中间的人拖进两侧。
+  模糊挂里层 canvas、mask 挂外层 div——两者落在同一个元素上时 Chromium 先裁后糊，画面那侧会糊出一条
+  40px 的黑缝。层序：画面 < `.ambient-bars`(2) < 加载态(3) < 皮肤控件(30) < 页面浮层(50)。
+  片尾最后 0.3 秒停止采样：快播完时 hls.js 开始收 SourceBuffer，`drawImage` 返回纯黑
+  （实测采样平均色 156/147/180 → 0/0/0），光晕会跟着灭，所以干脆冻在最后一帧好画面上。
 - **两个媒体元素**：全是直链 mp4 用原生 `<video>`（连 hls.js 都不下载），只要有一条 HLS 就整页切 `<hlsjs-video>`
   （hls.js 引擎，也能放 mp4，切档后仍是同一个元素）。`engine` 由 `needsHlsEngine()` 在拿到片源时定一次。
 - **自动起播的坑**：原生 `<video>` 设完 `src` 立刻 `play()` 就能成；HLS 要等清单解析、MediaSource 挂上，
