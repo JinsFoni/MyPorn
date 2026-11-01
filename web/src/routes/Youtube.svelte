@@ -921,7 +921,10 @@
       <div class="mt-3 flex items-start gap-3">
         <h2 class="min-w-0 flex-1 text-title font-medium leading-snug text-fg">{v.title}</h2>
 
-        <div class="flex shrink-0 items-center gap-1">
+        <!-- 这一行的高度钉成标题首行的行高（text-title 16px × 1.375 = 22px），36px 的按钮从上下各溢出 7px，
+             圆心正好压在首行中线上。不钉的话 items-start 把 36px 的方框顶对齐到 22px 的行框上，
+             图标看着比标题低 7px——32px 时只低 5px 看不出来，放大到 20px 就明显了。 -->
+        <div class="flex h-[1.375rem] shrink-0 items-center gap-1">
           <button
             type="button"
             class="yt-act"
@@ -932,14 +935,14 @@
             disabled={downloading.has(v.id)}
           >
             {#if downloading.has(v.id)}
-              <svg viewBox="0 0 24 24" class="h-4 w-4 animate-spin" fill="none" stroke="currentColor" stroke-width="2">
+              <svg viewBox="0 0 24 24" class="h-5 w-5 animate-spin" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="8" stroke-opacity="0.25" />
                 <path d="M20 12a8 8 0 0 0-8-8" />
               </svg>
             {:else}
               <svg
                 viewBox="0 0 24 24"
-                class="h-4 w-4"
+                class="h-5 w-5"
                 fill="none"
                 stroke="currentColor"
                 stroke-width="1.8"
@@ -962,7 +965,7 @@
           >
             <svg
               viewBox="0 0 24 24"
-              class="h-4 w-4"
+              class="h-5 w-5"
               fill={v.saved ? 'currentColor' : 'none'}
               stroke="currentColor"
               stroke-width="1.8"
@@ -979,7 +982,7 @@
             aria-label="复制播放链接"
             onclick={() => void copyLink()}
           >
-            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
               <path d="M10.2 13.4a4.5 4.5 0 0 0 6.7.4l1.9-1.9a4.5 4.5 0 0 0-6.4-6.4l-1.1 1.1" />
               <path d="M13.8 10.6a4.5 4.5 0 0 0-6.7-.4l-1.9 1.9a4.5 4.5 0 0 0 6.4 6.4l1.1-1.1" />
             </svg>
@@ -993,7 +996,7 @@
             title="在 YouTube 打开"
             aria-label="在 YouTube 打开"
           >
-            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
               <path d="M18 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4.5" />
               <path d="M15 3.5h5.5V9" />
               <path d="M20.2 3.8 11 13" />
@@ -1002,7 +1005,9 @@
         </div>
       </div>
 
-      <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">
+      <!-- mt-2（8px）而不是原来的 1.5：标题行那四颗 36px 的键比 22px 的行框各挤出 7px，
+           底下这颗只剩 1px 的缝；再加 2px 才不会让「在 YouTube 打开」的点击框压住这一行的顶边 -->
+      <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">
         {#if v.channel.avatarUrl}
           <img src={imageUrl(v.channel.avatarUrl, 32) ?? ''} alt="" class="h-5 w-5 rounded-full object-cover" />
         {/if}
@@ -1130,14 +1135,15 @@
     }
   }
 
-  /* 标题行右上角那四颗图标键：32×32 圆点，图标 16px。
+  /* 标题行右上角那四颗图标键：36×36 圆点，图标 20px（原来是 32/16，用户说偏小）。
+     图标/按钮取 0.55 的比例——再大（22/40 起）曲线细节开始糊，再小就回到「点不到」的手感。
      和画面上的关闭键不是一套——那是压在视频上、要半透明才不挡画面；
      这几颗在弹窗正文里，默认不铺底，hover / 键盘聚焦才浮一层 panel（冷白 5%）。
      下载那颗用 data-emphasis="primary" 提亮到 fg：它是这四个里唯一的「写」操作。 */
   .yt-act {
     display: grid;
-    width: 2rem;
-    height: 2rem;
+    width: 2.25rem;
+    height: 2.25rem;
     place-items: center;
     border-radius: 9999px;
     color: var(--color-muted);
