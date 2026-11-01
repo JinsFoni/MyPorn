@@ -733,6 +733,15 @@ bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源�
   构 `linux/amd64,linux/arm64` 推 GHCR，tag 用 semver 展开（`1.2.3` / `1.2` / `1` / `latest`）外加 `sha-xxxxxxx`。
   arm64 走 QEMU，所以开了 `type=gha` 缓存。GHCR 只收小写仓库名，镜像名在 workflow 里用 `${GITHUB_REPOSITORY,,}` 算出来。
 
+实测（第一次真发版，2026-11-01 的 v0.1.0）：
+
+- `release.yml` 从「发布 release」到两个架构的 manifest 都进 GHCR：**3 分 14 秒**（arm64 走 QEMU，缓存命中后重跑 3 分 18 秒）；
+- GHCR 上的 tag：`0.1.0` / `0.1` / `0` / `latest` / `sha-xxxxxxx`；semver 那几条会去掉前缀 v，
+  所以又补了一条 `type=raw` 把 `v0.1.0` 原样打上——`docker pull ...:v0.1.0` 当初是 manifest unknown；
+- 包默认就是公开的：不带凭据取匿名 token 拉 manifest 返回 200，`docker pull` 直接可用；
+- 拉下来按 README 那三步（`.env` + `chown 1000` + `docker compose up -d`）在干净副本里跑通：
+  容器 12 s 后 healthy，`/healthz` 答 `version=v0.1.0`（说明 `-X main.buildVersion` 这条链是通的）。
+
 ### 14.5 国内构建的换源口
 
 `Dockerfile` 留了 `GOPROXY` / `APK_MIRROR` / `PIP_INDEX` 三个 build-arg（不填就是官方源）。
