@@ -131,6 +131,15 @@
     color: #fff;
   }
 
+  /* 滚动条：冷白 20%（`--color-line-strong`）的发丝药丸，槽 10px、边框 3px，
+     滑块可见 4px——这是站点原来那根的口径，别加粗也别提亮：参考截图那套 45%/65%/80%
+     的玻璃色和 12px 宽试过一版（2026-11-01），用户看完要「颜色和宽度改回原来的」。
+     轨道（`::-webkit-scrollbar-track`）一点颜色都不给，页面背景就是滚动条的背景。
+     滑块靠 `border: 3px transparent` + `background-clip: content-box` 收窄，
+     槽 10px 里那条 4px 居中的发丝就是这么做出来的（不加这两行会糊满整格）。
+
+     这里的 ::-webkit-scrollbar 只服务对话框、面板这些**非根**滚动容器；
+     文档那一根不用这套规则，见下一条（换成 `ScrollThumb.svelte` 自己画的浮层）。 */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
@@ -143,6 +152,34 @@
   }
   ::-webkit-scrollbar-track {
     background: transparent;
+  }
+
+  /* 文档那一根：原生的关掉，改成 components/ScrollThumb.svelte 画的浮层。
+     理由只有一条——**根元素的背景图铺不进滚动条的槽**：给 html 挂一层 400px 高的
+     纯红带、`background-size:100vw 400px` 后截图，内容区 x≤783 是 (255,0,0)，
+     槽 x=784..799 仍是 html 的 `background-color` (2,4,8)。也就是说根滚动条的底
+     永远是一块纯色：顶部环境光铺不过去、卡片贴到右边缘时就是一条显眼的黑竖条。
+     （非根容器没有这个限制：它自己的背景图会画到滚动条底下，同一个实验里
+     800px 宽的 `overflow-y:scroll` 容器在 x=784..799 仍是渐变红——所以面板/对话框
+     里的原生条留着，背景本来就是统一的。）
+     关掉之后 `clientWidth == innerWidth`，页面不再为滚动条让出 10px。 */
+  html {
+    scrollbar-width: none;
+  }
+  /* 必须是 `display:none`：写 `width:0` 这条会被忽略，原生槽照旧占位
+     （实测 headed Chrome：`html::-webkit-scrollbar{width:0}` 之后 clientWidth 仍是 1584）。 */
+  html::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Firefox 的其余滚动容器走另一套（没有 content-box 那套裁剪，只能是细条）。
+     必须包在 @supports not 里：Chrome 121+ 也认 `scrollbar-color`，
+     一旦给它设上，同一元素上的 ::-webkit-scrollbar 定制就整体失效。 */
+  @supports not selector(::-webkit-scrollbar) {
+    :where(:not(html)) {
+      scrollbar-width: thin;
+      scrollbar-color: var(--color-line-strong) transparent;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -6,6 +6,7 @@
   import Performers from './routes/Performers.svelte';
   import Discover from './routes/Discover.svelte';
   import SettingsDialog from './components/SettingsDialog.svelte';
+  import ScrollThumb from './components/ScrollThumb.svelte';
   import Downloads from './routes/Downloads.svelte';
   import NotFound from './routes/NotFound.svelte';
   import { api } from './lib/api';
@@ -200,3 +201,6 @@
   </AppShell>
   <SettingsDialog />
 {/if}
+
+<!-- 文档级滚动条（原生条已在 app.css 里关掉，见该处注释） -->
+<ScrollThumb />
