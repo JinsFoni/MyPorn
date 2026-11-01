@@ -269,6 +269,17 @@ export interface VideoPage {
   nextCursor: string | null;
 }
 
+/**
+ * 播放器「上一个 / 下一个」的两个邻居（`/api/videos/{id}/adjacent`）。
+ *
+ * 方向按列表的视觉顺序：prev 是排在它上面那条（更新），next 是下面那条（更旧）。
+ * 那一侧到底了就为 null——按钮据此置灰，不绕回第一条。
+ */
+export interface VideoNeighbors {
+  prev: Video | null;
+  next: Video | null;
+}
+
 export interface PlaybackVariant {
   id: string;
   height: number;

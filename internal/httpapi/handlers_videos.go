@@ -99,6 +99,42 @@ func (s *Server) handleGetVideo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto)
 }
 
+// handleVideoAdjacent 回答「这个影片在**你刚才看的那份列表**里，上一条/下一条是谁」。
+//
+// 播放器的「上一个 / 下一个」就用它。过滤条件由前端翻译成参数（它知道用户是从哪一页点进来的），
+// 和那份列表的参数同口径：关注流（排除 B 站）、某位艺人的片子、B 站墙（按 UP 主 / 未看筛）。
+// 到列表头/尾那边返回 null，前端据此把对应的按钮按下去——不猜、也不绕回第一条。
+func (s *Server) handleVideoAdjacent(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	v, err := s.st.GetVideo(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "影片不存在")
+		return
+	}
+	q := r.URL.Query()
+	performerID, _ := strconv.ParseInt(q.Get("performerId"), 10, 64)
+	prev, next, err := s.st.AdjacentVideos(v, store.FeedQuery{
+		PerformerID:     performerID,
+		Platform:        q.Get("platform"),
+		ExcludePlatform: q.Get("excludePlatform"),
+		OnlyNew:         q.Get("onlyNew") == "1",
+		Query:           q.Get("q"),
+		SubscribedOnly:  q.Get("subscribedOnly") == "1",
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	out := map[string]any{"prev": nil, "next": nil}
+	if prev != nil {
+		out["prev"] = videoDTO(prev)
+	}
+	if next != nil {
+		out["next"] = videoDTO(next)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleVideoSeen(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err := s.st.MarkVideoSeen(id); err != nil {

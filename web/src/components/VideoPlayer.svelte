@@ -6,9 +6,10 @@
    * 进度条与缓冲、时间、音量、倍速、字幕、设置菜单、画中画、全屏、错误弹窗、手势与快捷键）。
    * 皮肤用 `--media-*` 自定义属性调成站点的单色冷调，不引入第二套视觉语言。
    *
-   * 皮肤之外，这里还补了三样皮肤给不了的东西：
-   *   1. **清晰度菜单**与**氛围模式**开关：两个按钮挂进皮肤底部控制条右侧那一组里（见 lib/playerBar.ts），
-   *      和自带的音量/设置/画中画/全屏排在同一行、一起显隐；
+   * 皮肤之外，这里还补了几样皮肤给不了的东西：
+   *   1. **上一个 / 下一个**、**清晰度菜单**与**氛围模式**开关：这几个控件挂进皮肤底部控制条右侧那一组里
+   *      （见 lib/playerBar.ts），和自带的音量/设置/画中画/全屏排在同一行、一起显隐；
+   *      设置（齿轮）菜单里再加一个**自动切换下一个**的开关；
    *   2. **氛围模式**本身：把当前画面缩到 32×18 的画布上再放大模糊，给播放器四周蒙一层同色光；
    *   3. **音量记忆**（`localStorage`，等媒体就绪才套用，否则会被播放器默认的满音量盖掉）；
    *   4. **加载态**（见 VideoLoading.svelte）：封面（还没出过帧）或刚才那一帧（缓冲中）垫底 + 中间转环，
@@ -22,6 +23,10 @@
   import '@videojs/html/video/player';
   import '@videojs/html/video/skin';
   import '@videojs/html/i18n';
+  // 设置菜单里的「自动切换下一个」是个 <media-menu-checkbox-item>。皮肤自己不用这个组件，
+  // 所以它没被注册——不显式 import 的话标签就只是个空壳：没有 role、点不动、也不发事件
+  //（2026-11-01 实测：customElements.get('media-menu-checkbox-item') 为 undefined）。
+  import '@videojs/html/ui/menu-checkbox-item';
   import { prefersReducedMotion, type QualityOption } from '../lib/player';
   import { mountPlayerBar, type PlayerBar, type PlayerBarState } from '../lib/playerBar';
   import VideoLoading from './VideoLoading.svelte';
@@ -66,6 +71,19 @@
      * 整个播放器重建，得靠这个回调把进度接住，再把 `startAt` 塞回来。
      */
     onTime?: (time: number, paused: boolean) => void;
+    /**
+     * 上一个 / 下一个：给的是邻居片名（工具提示用），`null` = 那一侧到头了。
+     * 两个回调都不传就是「这个页面没有列表」，按钮整组不出现。
+     */
+    prevTitle?: string | null;
+    nextTitle?: string | null;
+    onPrev?: () => void;
+    onNext?: () => void;
+    /**
+     * 本片播完、且设置里的「自动切换下一个」开着时调用（页面负责跳到下一个）。
+     * 不传就不在设置菜单里放那个开关——没地方可切换时，开关只会让人困惑。
+     */
+    onEnded?: () => void;
     /** 首次挂载时要从哪一秒开始（<=1 当作从头）；换片源的续播由播放器自己处理 */
     startAt?: number;
     /** 盖在画面上方的页面级浮层（解析中 / 播放失败） */
@@ -86,6 +104,11 @@
     onStarted,
     onFailed,
     onTime,
+    prevTitle = null,
+    nextTitle = null,
+    onPrev,
+    onNext,
+    onEnded,
     startAt = 0,
     overlay,
   }: Props = $props();
@@ -110,6 +133,8 @@
     duration: number;
     paused: boolean;
     started: boolean;
+    /** 播到结尾了：store 直接映射媒体的 ended（见 @videojs/media 的 state） */
+    ended: boolean;
     canPlay: boolean;
     volume: number;
     muted: boolean;
@@ -126,6 +151,7 @@
 
   const VOLUME_KEY = 'myporn.player.volume';
   const AMBIENT_KEY = 'myporn.ambient';
+  const AUTO_NEXT_KEY = 'myporn.player.autonext';
 
   /**
    * 快捷键的步长：←→ 一次 5 秒（皮肤默认 10 秒太长——一按就跳掉整整一场戏的开头），
@@ -175,6 +201,10 @@
   let lastVolume = { volume: -1, muted: false };
 
   let ambient = $state(readAmbient());
+  /** 设置菜单里的「自动切换下一个」；默认关（不打招呼就自动跳到下一部太吓人） */
+  let autoNext = $state(readAutoNext());
+  /** 这一条片源已经报过 ended 了：store 的 ended 会一直是 true，别每秒都跳一次 */
+  let endedSent = false;
   /** 媒体还没法出画面：盖一层「糊封面 + 加载环」，等 playing/canplay 就收掉 */
   let buffering = $state(true);
   /** 加载态用的底图：最近一帧的缩略图（data URL）。没有就退回封面 */
@@ -222,6 +252,24 @@
     return !prefersReducedMotion();
   }
 
+  function readAutoNext(): boolean {
+    try {
+      return window.localStorage.getItem(AUTO_NEXT_KEY) === '1';
+    } catch {
+      /* 隐私模式忽略 */
+    }
+    return false;
+  }
+
+  function toggleAutoNext(): void {
+    autoNext = !autoNext;
+    try {
+      window.localStorage.setItem(AUTO_NEXT_KEY, autoNext ? '1' : '0');
+    } catch {
+      /* 隐私模式忽略 */
+    }
+  }
+
   function toggleAmbient(): void {
     ambient = !ambient;
     try {
@@ -241,7 +289,13 @@
    */
   function mountBar(): void {
     if (bar || !skinEl) return;
-    const handle = mountPlayerBar(skinEl, { selectQuality: chooseQuality, toggleAmbient });
+    const handle = mountPlayerBar(skinEl, {
+      selectQuality: chooseQuality,
+      toggleAmbient,
+      goPrev: () => onPrev?.(),
+      goNext: () => onNext?.(),
+      toggleAutoNext,
+    });
     if (!handle) {
       if (barTries < 40) {
         barTries += 1;
@@ -253,7 +307,7 @@
       return;
     }
     bar = handle;
-    bar.update({ qualities, selected: selectedQuality, ambient });
+    pushBarState();
   }
 
   /**
@@ -461,6 +515,9 @@
     snapCanvas = null;
     snapAt = 0;
     veilArt = null;
+    // 换了片子就是新的一条：上一部「已经播完」的状态不能带过来，否则新的这一部
+    // 一开播就被当成播完、直接跳走
+    endedSent = false;
     // 换了片子就是新的一条管线：自愈额度重新算
     mediaRecoveries = 0;
     recoverResumeAt = -1;
@@ -929,10 +986,29 @@
     attach();
   });
 
-  // 清晰度列表 / 当前档 / 氛围开关变了，把状态推给控制条里的两个按钮
-  $effect(() => {
-    const state: PlayerBarState = { qualities, selected: selectedQuality, ambient };
+  /**
+   * 上一个 / 下一个可不可用：两个回调都没给就是这个页面没有列表，整组按钮不出现。
+   * 给了回调但那一侧没邻居（到头了），按钮留着但按不动——位置不能跳。
+   */
+  const nav = $derived<PlayerBarState['nav']>(onPrev !== undefined || onNext !== undefined
+    ? { prev: prevTitle, next: nextTitle }
+    : null);
+
+  function pushBarState(): void {
+    const state: PlayerBarState = {
+      qualities,
+      selected: selectedQuality,
+      ambient,
+      nav,
+      // 只有页面提供了「播完去哪儿」才给这个开关，否则它只是个按了没反应的装饰
+      autoNext: onEnded === undefined ? null : autoNext,
+    };
     bar?.update(state);
+  }
+
+  // 清晰度 / 当前档 / 氛围开关 / 邻居变了，把状态推给控制条里的那几个控件
+  $effect(() => {
+    pushBarState();
   });
 
   onMount(() => {
@@ -960,6 +1036,21 @@
       if (s.started && !startedSent) {
         startedSent = true;
         onStarted?.();
+      }
+
+      /**
+       * 播到结尾：设置里的「自动切换下一个」开着就让页面去跳下一个。
+       *
+       * ended 一旦置上就会一直保持 true（拖回去重播才回到 false），所以只报一次；
+       * onEnded 自己没有「还有没有下一个」的判断——那是页面的事（它手里才有列表）。
+       */
+      if (s.ended) {
+        if (!endedSent) {
+          endedSent = true;
+          if (autoNext) onEnded?.();
+        }
+      } else if (endedSent) {
+        endedSent = false;
       }
 
       if (onTime && Math.abs(s.currentTime - lastReportedTime) >= 1) {

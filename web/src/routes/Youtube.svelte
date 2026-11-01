@@ -266,6 +266,17 @@
    */
   const wantVideoId = $derived(router.query.get('v') ?? '');
 
+  /**
+   * 弹窗里的「上一个 / 下一个」：就在墙上这一份列表里前后挪一格。
+   *
+   * 用 `videos`（墙上已经加载出来的条目）而不是再问后端：这页的列表本来就是分页加载的，
+   * 用户看到的顺序就是它，切歌跟着这份顺序走最不容易出意外。深链接进来的片子可能不在
+   * 墙上（`findIndex` 为 -1），那时两个按钮都按下去——没有上下文就不猜。
+   */
+  const detailIndex = $derived(detail === null ? -1 : videos.findIndex((v) => v.videoId === detail?.videoId));
+  const prevDetail = $derived(detailIndex > 0 ? videos[detailIndex - 1] : null);
+  const nextDetail = $derived(detailIndex >= 0 && detailIndex < videos.length - 1 ? videos[detailIndex + 1] : null);
+
   function openDetail(video: YtVideo): void {
     if (router.query.get('v') === video.videoId) return;
     // push 一条历史：后退＝关弹窗。频道 / 筛选参数一路带着（patchQuery 只改 v）。
@@ -788,7 +799,7 @@
         {:else if stream && playbackSrc}
           <!-- 换档要重建播放器：2160p 和别的档是两个不同的清单地址，不能指望 hls.js 原地换
                （进度靠 onTime/startAt 接回来） -->
-          {#key `${String(streamAttempt)}-${playbackEngine}`}
+          {#key `${String(streamAttempt)}-${playbackEngine}-${v.videoId}`}
             <div class="overflow-hidden rounded-xl bg-black">
               <VideoPlayer
                 src={playbackSrc}
@@ -803,6 +814,11 @@
                 qualities={qualityOptions}
                 selectedQuality={selectedQualityId}
                 onSelectQuality={applyQuality}
+                prevTitle={prevDetail?.title ?? null}
+                nextTitle={nextDetail?.title ?? null}
+                onPrev={() => { if (prevDetail) openDetail(prevDetail); }}
+                onNext={() => { if (nextDetail) openDetail(nextDetail); }}
+                onEnded={() => { if (nextDetail) openDetail(nextDetail); }}
                 onFailed={onStreamFailed}
               >
                 {#snippet overlay()}

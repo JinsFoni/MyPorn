@@ -201,6 +201,9 @@ func (s *Server) Routes() http.Handler {
 			pr.Get("/videos", s.handleListVideos)
 			pr.Get("/videos/new", s.handleListNewVideos)
 			pr.Get("/videos/{id}", s.handleGetVideo)
+			// 播放器「上一个 / 下一个」：按调用方给的列表参数（= 用户从哪一页点进来的那份列表）
+			// 找它的上下邻居，到列表头/尾返回 null。
+			pr.Get("/videos/{id}/adjacent", s.handleVideoAdjacent)
 			pr.Post("/videos/{id}/seen", s.handleVideoSeen)
 			pr.Get("/videos/{id}/playback", s.handlePlayback)
 			// 本地库文件的直接下发（Range 续传）：下载过的影片不再依赖平台解析。

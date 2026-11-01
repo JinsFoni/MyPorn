@@ -5,7 +5,7 @@
   import Skeleton from '../components/Skeleton.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import VideoLoading from '../components/VideoLoading.svelte';
-  import { api, messageFor } from '../lib/api';
+  import { api, messageFor, type AdjacentScope } from '../lib/api';
   import {
     formatBandwidth,
     formatBytes,
@@ -30,8 +30,15 @@
     variantLabel,
     type QualityOption,
   } from '../lib/player';
-  import { router } from '../lib/router.svelte';
-  import type { PlaybackInfo, PlaybackVariant, RemuxStatus, VideoDetail } from '../lib/types';
+  import { navigate, router } from '../lib/router.svelte';
+  import type {
+    PlaybackInfo,
+    PlaybackVariant,
+    RemuxStatus,
+    Video,
+    VideoDetail,
+    VideoNeighbors,
+  } from '../lib/types';
 
   interface Props {
     id: string;
@@ -95,6 +102,13 @@
   const TAG_PREVIEW = 8;
   let tagsExpanded = $state(false);
   let seenSent = false;
+  /**
+   * 播放器「上一个 / 下一个」的两个邻居（列表口径见 neighborScope）。
+   * 到列表头/尾那一侧是 null，按钮据此按下去。
+   */
+  let neighbors = $state<VideoNeighbors>({ prev: null, next: null });
+  /** 换影片/换口径时 +1，让还在路上的那次请求自己作废（连点两下切歌时很常见） */
+  let neighborToken = 0;
 
   const variants = $derived(playback ? sortVariantsDesc(playback.variants) : []);
   const selectedVariant = $derived(variants.find((v) => v.id === selectedVariantId) ?? null);
@@ -351,6 +365,81 @@
     if (backTo === '/') return '返回关注';
     return '返回上一页';
   });
+
+  /**
+   * 播放器「上一个 / 下一个」按哪份列表算：跟着 `?back=` 走——它记着用户是从哪一页点进来的。
+   *
+   * 三处口径必须和那边的列表接口**完全一致**，否则切着切着会冒出列表里根本没出现过的片子
+   * （后端用的就是同一套 FeedQuery 条件，见 store.AdjacentVideos）：
+   *   · 艺人页     → 只要这位艺人的片；
+   *   · B 站墙     → platform=bilibili（可再按 UP 主 `?up=`、未看 `?mode=unseen` 过滤，
+   *                 并且取消订阅的 UP 主不在墙上 → subscribedOnly）；
+   *   · 关注流/其它 → 和 /api/videos 一样排除 B 站（它有自己的页面）。
+   * 从下载页、动态点进来的没有对应的「影片列表」，也按关注流那套算——总比跳到别的平台强。
+   */
+  const neighborScope = $derived.by((): AdjacentScope => {
+    const url = new URL(backTo, window.location.origin);
+    if (url.pathname.startsWith('/performer/')) {
+      const pid = Number.parseInt(url.pathname.slice('/performer/'.length), 10);
+      if (Number.isFinite(pid) && pid > 0) return { performerId: pid };
+    }
+    if (url.pathname === '/bilibili') {
+      const up = Number.parseInt(url.searchParams.get('up') ?? '', 10);
+      return {
+        platform: 'bilibili',
+        performerId: Number.isFinite(up) && up > 0 ? up : undefined,
+        onlyNew: url.searchParams.get('mode') === 'unseen',
+        subscribedOnly: true,
+      };
+    }
+    if (video?.platform === 'bilibili') return { platform: 'bilibili', subscribedOnly: true };
+    return { excludePlatform: 'bilibili' };
+  });
+
+  async function loadNeighbors(): Promise<void> {
+    const token = ++neighborToken;
+    try {
+      const found = await api.adjacent(videoId, neighborScope);
+      if (token === neighborToken) neighbors = found;
+    } catch {
+      // 拿不到邻居不该让播放器变红：按钮置灰就是了（下一部照样能手动点卡片进去）
+      if (token === neighborToken) neighbors = { prev: null, next: null };
+    }
+  }
+
+  // 换了影片、或者换了一份列表口径，都重新问一次「上下家是谁」
+  $effect(() => {
+    void videoId;
+    void neighborScope;
+    void loadNeighbors();
+  });
+
+  /**
+   * 切到邻居。`?back=` 原样带着走——连切几部之后点「返回」，还是要回到当初那一页，
+   * 而不是回到上一部影片的详情页。
+   */
+  function goToNeighbor(target: Video | null): void {
+    if (!target) return;
+    navigate(`/video/${String(target.id)}${router.search}`);
+  }
+
+  /**
+   * 换影片（手动连点、或播完自动切换）时把「这一部」的状态清干净。
+   * Video.svelte 的实例在参数变化时是复用的，不清就会串味：下一部一进来顶着上一部的
+   * 播放错误、被当成「已上报已看」而不再标记已读、代理开关还开着。
+   */
+  $effect(() => {
+    void videoId;
+    seenSent = false;
+    tagsExpanded = false;
+    usingProxy = false;
+    proxyAvailable = false;
+    playError = '';
+    preparing = null;
+    prepToken += 1;
+    selectedVariantId = null;
+    neighbors = { prev: null, next: null };
+  });
 </script>
 
 {#if pageError}
@@ -375,7 +464,9 @@
     {/if}
 
     {#if source}
-      {#key attempt}
+      <!-- 换影片也要重建播放器：同一条 src 之外的东西（进度、ended）都是「上一部」的，
+           不重建就会接着上一部的位置往下一部里 seek。attempt 是「重新解析」，videoId 是换片。 -->
+      {#key `${String(attempt)}:${String(videoId)}`}
         <VideoPlayer
           src={source.src}
           type={source.type}
@@ -386,6 +477,11 @@
           {qualities}
           selectedQuality={selectedVariantId}
           onSelectQuality={applyVariant}
+          prevTitle={neighbors.prev?.title ?? null}
+          nextTitle={neighbors.next?.title ?? null}
+          onPrev={() => goToNeighbor(neighbors.prev)}
+          onNext={() => goToNeighbor(neighbors.next)}
+          onEnded={() => goToNeighbor(neighbors.next)}
           onStarted={onStarted}
           onFailed={onFailed}
         >

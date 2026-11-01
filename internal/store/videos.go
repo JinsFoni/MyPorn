@@ -205,11 +205,12 @@ func liveSubFilter(idExpr string) string {
 		WHERE vp.video_id = ` + idExpr + `)`
 }
 
-// ListFeed 按发布时间倒序做 keyset 分页。
-func (s *Store) ListFeed(q FeedQuery) ([]*model.Video, string, error) {
-	if q.Limit <= 0 || q.Limit > 100 {
-		q.Limit = 30
-	}
+// feedFilter 把 FeedQuery 里「筛哪些片」的部分翻译成 SQL 条件（游标与分页不在这里）。
+//
+// 单独抽出来的理由：AdjacentVideos（播放器里的「上一个 / 下一个」）必须用和列表
+// **一模一样**的过滤条件去找上下家。两份条件各写一遍迟早写岔，那时候播放器的
+// 「下一个」会跳到列表里根本没出现过的片子上——用户看到的就是「顺序乱了」。
+func feedFilter(q FeedQuery) ([]string, []any) {
 	where := []string{"1=1"}
 	args := []any{}
 	if q.PerformerID > 0 {
@@ -234,6 +235,47 @@ func (s *Store) ListFeed(q FeedQuery) ([]*model.Video, string, error) {
 	if q.SubscribedOnly {
 		where = append(where, liveSubFilter("v.id"))
 	}
+	return where, args
+}
+
+// videoColumns 是 videos 行的读取顺序；ListFeed 与 AdjacentVideos 共用，保证 scanVideo 对得上。
+const videoColumns = `v.id, v.platform, v.platform_video_id, v.title, v.url, v.thumb_url, v.preview_url,
+			v.duration_sec, v.published_at, v.view_count, v.rating, v.tags, v.description, v.is_new`
+
+// scanVideo 按 videoColumns 的顺序扫一行出来（sql.Row 与 sql.Rows 都满足 rowScanner）。
+func scanVideo(row rowScanner) (*model.Video, error) {
+	v := &model.Video{}
+	var pub sql.NullString
+	var vc sql.NullInt64
+	var rating sql.NullFloat64
+	var tags string
+	if err := row.Scan(&v.ID, &v.Platform, &v.PlatformVideoID, &v.Title, &v.URL, &v.ThumbURL,
+		&v.PreviewURL, &v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew); err != nil {
+		return nil, err
+	}
+	v.PublishedAt = scanTime(pub)
+	if vc.Valid {
+		n := int(vc.Int64)
+		v.ViewCount = &n
+	}
+	if rating.Valid {
+		r := rating.Float64
+		v.Rating = &r
+	}
+	v.Tags = decodeTags(tags)
+	return v, nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// ListFeed 按发布时间倒序做 keyset 分页。
+func (s *Store) ListFeed(q FeedQuery) ([]*model.Video, string, error) {
+	if q.Limit <= 0 || q.Limit > 100 {
+		q.Limit = 30
+	}
+	where, args := feedFilter(q)
 	if ts, id, ok := decodeCursor(q.Cursor); ok {
 		if ts == "" {
 			where = append(where, "(v.published_at IS NULL AND v.id < ?)")
@@ -243,9 +285,7 @@ func (s *Store) ListFeed(q FeedQuery) ([]*model.Video, string, error) {
 			args = append(args, ts, ts, id)
 		}
 	}
-	sqlQ := `SELECT v.id, v.platform, v.platform_video_id, v.title, v.url, v.thumb_url, v.preview_url,
-			v.duration_sec, v.published_at, v.view_count, v.rating, v.tags, v.description, v.is_new
-		FROM videos v WHERE ` + strings.Join(where, " AND ") + `
+	sqlQ := `SELECT ` + videoColumns + ` FROM videos v WHERE ` + strings.Join(where, " AND ") + `
 		ORDER BY COALESCE(v.published_at,'') DESC, v.id DESC LIMIT ?`
 	rows, err := s.db.Query(sqlQ, append(args, q.Limit+1)...)
 	if err != nil {
@@ -255,25 +295,10 @@ func (s *Store) ListFeed(q FeedQuery) ([]*model.Video, string, error) {
 
 	out := []*model.Video{}
 	for rows.Next() {
-		v := &model.Video{}
-		var pub sql.NullString
-		var vc sql.NullInt64
-		var rating sql.NullFloat64
-		var tags string
-		if err := rows.Scan(&v.ID, &v.Platform, &v.PlatformVideoID, &v.Title, &v.URL, &v.ThumbURL,
-			&v.PreviewURL, &v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew); err != nil {
+		v, err := scanVideo(rows)
+		if err != nil {
 			return nil, "", err
 		}
-		v.PublishedAt = scanTime(pub)
-		if vc.Valid {
-			n := int(vc.Int64)
-			v.ViewCount = &n
-		}
-		if rating.Valid {
-			r := rating.Float64
-			v.Rating = &r
-		}
-		v.Tags = decodeTags(tags)
 		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
@@ -297,6 +322,69 @@ func (s *Store) ListFeed(q FeedQuery) ([]*model.Video, string, error) {
 		return nil, "", err
 	}
 	return out, next, nil
+}
+
+// AdjacentVideos 找出 anchor 在「同一份过滤条件、同一排序」里的上一条与下一条。
+//
+// 方向按列表的**视觉顺序**：列表是发布时间倒序，所以 prev = 排在它上面那条（更新），
+// next = 排在下面那条（更旧）——播放器上的「下一个」就是把列表继续往下翻一张。
+// 到列表头/尾就返回 nil（不是错误：意味着那个方向没有了）。
+//
+// anchor 一般就是刚 GetVideo 出来的那一行；只要它的 ID 与 PublishedAt 是对的就够。
+func (s *Store) AdjacentVideos(anchor *model.Video, q FeedQuery) (prev, next *model.Video, err error) {
+	if anchor == nil {
+		return nil, nil, nil
+	}
+	ts := ""
+	if anchor.PublishedAt != nil {
+		ts = fmtTime(*anchor.PublishedAt)
+	}
+	// q 里的 Cursor / Limit 对「找上下家」没有意义，别让调用方误传后改变结果：这里压根不看它们。
+	if prev, err = s.neighborOf(anchor, ts, q, true); err != nil {
+		return nil, nil, err
+	}
+	if next, err = s.neighborOf(anchor, ts, q, false); err != nil {
+		return nil, nil, err
+	}
+	found := []*model.Video{}
+	if prev != nil {
+		found = append(found, prev)
+	}
+	if next != nil {
+		found = append(found, next)
+	}
+	// 卡片列表要的是完整一行（艺人、本地库角标）：切歌按钮上会显示片名，相关页也要能直接跳。
+	if err := s.attachPerformers(found); err != nil {
+		return nil, nil, err
+	}
+	if err := s.attachLocal(found); err != nil {
+		return nil, nil, err
+	}
+	return prev, next, nil
+}
+
+// neighborOf 取某个方向上紧挨着的那一行。newer=true 取更新的（列表上方），false 取更旧的。
+func (s *Store) neighborOf(anchor *model.Video, ts string, q FeedQuery, newer bool) (*model.Video, error) {
+	where, args := feedFilter(q)
+	cmp, order := "<", "DESC"
+	if newer {
+		cmp, order = ">", "ASC"
+	}
+	// published_at 为 NULL 的行按空串参与比较（与 ORDER BY COALESCE(...) 同口径），
+	// 否则「时间未知」的片子永远比不出上下家。
+	where = append(where, "(COALESCE(v.published_at,'') "+cmp+
+		" ? OR (COALESCE(v.published_at,'') = ? AND v.id "+cmp+" ?))")
+	args = append(args, ts, ts, anchor.ID)
+	sqlQ := `SELECT ` + videoColumns + ` FROM videos v WHERE ` + strings.Join(where, " AND ") +
+		` ORDER BY COALESCE(v.published_at,'') ` + order + `, v.id ` + order + ` LIMIT 1`
+	v, err := scanVideo(s.db.QueryRow(sqlQ, args...))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 // attachLocal 批量填充"已落到哪些本地库"，供列表角标与已下载筛选使用。

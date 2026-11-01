@@ -124,7 +124,7 @@
 | 状态 | Svelte 5 runes（`$state/$derived/$effect`），跨页共享放 `.svelte.ts` 模块 |
 | 实时进度 | `EventSource('/api/events')` 单连接，页面卸载即关；不用 WebSocket |
 | 长列表 | IntersectionObserver 分页 + keyset 游标；先用「页淘汰」（离屏页卸载 DOM），万条库足够；真卡再上虚拟滚动 |
-| 播放器 | **Video.js 10**：`<video-player>`+`<video-skin>` 自定义元素（皮肤自带进度条/音量/倍速/画中画/全屏/快捷键/手势），皮肤只用 `--media-*` 变量调成站点的单色冷调；**清晰度菜单**与**氛围模式**两个按钮挂进皮肤底部控制条（详见 §7.4.2），氛围光靠画布取帧 → 放大模糊，音量与氛围开关都记在 `localStorage`；mp4 用原生 `<video>`，HLS 用 `<hlsjs-video>` 且 `await import()` 按需加载；**编码偏好见 §7.4.1** |
+| 播放器 | **Video.js 10**：`<video-player>`+`<video-skin>` 自定义元素（皮肤自带进度条/音量/倍速/画中画/全屏/快捷键/手势），皮肤只用 `--media-*` 变量调成站点的单色冷调；**上一个/下一个**、**清晰度菜单**、**氛围模式**挂进皮肤底部控制条，**自动切换下一个**开关挂进皮肤自带的设置菜单（详见 §7.4.2），氛围光靠画布取帧 → 放大模糊，音量、氛围、自动切换都记在 `localStorage`；mp4 用原生 `<video>`，HLS 用 `<hlsjs-video>` 且 `await import()` 按需加载；**编码偏好见 §7.4.1** |
 | 图片 | `loading=lazy` + 宽高占位防跳动；缩略图走 `/api/img?u=`（后端代理 + 磁盘缓存，绕开 Referer/403；抓取/缓存/缩图全在 `internal/imgcache`，HTTP 处理函数只解析参数、发字节）；**媒体图（封面 / 头像 / 缩略图）一律经 `lib/img.ts` 的 `imageUrl()` 出地址**——那是唯一入口，隐私模式要在那里把参数从 `w=`（显示宽）换成 `s=`（小糊图边长），漏了它就等于在隐私模式里露原图；图标与平台 logo 不走它，保持清晰。媒体图仍标 `data-media`，但只是标记（便于审计哪些 `<img>` 是封面/头像），不再承担样式 |
 | 封面预热 / 修复 | pornhub 的封面走 `pix-*.phncdn.com/…/rs:fit:320:180`，**地址带签名、一天就过期**（过期后 472；去掉签名参数是 470，换图床是 401——实测只有带新鲜签名才给图）。列表页懒加载，隔两天再点开某部片时地址早就死了，封面就永久空白。所以封面必须**趁地址还新鲜时抓进本地缓存**，之后不再依赖签名：① 同步时新片一入库就预热（`warmCovers`，一轮最多 40 张，后台跑）；② 启动后和每轮同步收尾各扫一遍「封面没进缓存」的影片补齐（`RepairCovers`，一轮最多 60 张、扫 400 条，同一时刻只跑一轮）；③ 补的时候先把**带签名（`hdnea=` / `validto=` / `//pix-`）的排最前**——这类「错过就没了」，缓存丢了就只能趁详情页还能给出新链接时救回来：抓不到就用 `GetVideo` 重解析详情页，地址变了就写回 `videos.thumb_url` 再抓一次（地址没变则不重试，免得每轮都打上游）。实测：清空 imgcache 冷启动，85 秒补回 60 张，其中 24 条过期签名封面全部换成新签名并落盘。④ **还要认「模糊占位图」**：xHamster 偶尔把 LQIP 塞进 `imageURL`（`…/b(2),s(w:16,h:9),webp/…`，原图只有 796 字节），16 像素宽的糊图铺到 266×150 的卡片上就是一整张糊封面——2026-10-31 那轮抓取有 676 条这么进库（Hot Pearl 641 + mysaaat 35），用户看到的是「隐私模式没开，封面却糊了」。`platform.PlaceholderThumb()` 按 URL 里 `s(w:X,h:Y)` 的宽度判断（正常档 526/1280/竖屏 350/405，占位图 16，取 200 作界），解析时跳过占位图（`platform.BestThumb`），修复扫描时把占位图**排在带签名的前面**且无视「已缓存」（糊图恰好抓得到，缓存里就是一张糊的），一律去详情页换真地址 | `internal/jobs/covers.go`、`internal/imgcache/imgcache.go`、`internal/store/videos.go` |
 | 主题 | Tailwind 原子类，**暗色为默认**，移动端优先布局（视觉基线见 §7.6） |
@@ -197,12 +197,25 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
   皮肤里那个「画质」菜单因此只有当前这一条（自动 + 当前档），不拿它当主入口——**清晰度菜单自己画**：
   分档列表来自后端（顺序即 §7.4.1 的排序），每行 `1080p` + `4.0 Mbps · 最高`，当前档打勾；侧边栏那个下拉框因此删了，
   右侧「清晰度」一行只读显示当前档。这样 §7.4.1 的排序与「默认最高画质」都由后端说了算。
-- **两个自绘按钮进底部控制条**（`lib/playerBar.ts`）：皮肤的整套控件在自己的 shadow root 里，`<video-skin>` 只留了一个默认插槽，
+- **自绘控件进底部控制条**（`lib/playerBar.ts`）：皮肤的整套控件在自己的 shadow root 里，`<video-skin>` 只留了一个默认插槽，
   没有「往控制条里加按钮」的口子，公开的 `--media-*` 也只能改颜色/圆角/字体。所以想在底部那一行、和自带的音量/设置/画中画/全屏
   并排，只能把节点**挂进它 shadow root 里的 `.video-controls-secondary`**（右侧按钮组）。挂进去之后是真正的条形成员：
   控件的显隐/上浮/毛玻璃底色/全屏缩放（`--media-scale-unit`）全都自动跟着走，不用再自己数 2.5 秒收回，
-  全屏也照样在（全屏元素就是 skin）。两处只依赖皮肤的类名与 `media-*` 公开组件：`.video-controls-secondary` 和
-  `.media-button` / `.media-menu-*`；皮肤结构升级导致挂不上时返回 `null`、上层按 50ms 重试 40 次，最坏结果是这两个按钮不出现。
+  全屏也照样在（全屏元素就是 skin）。三处只依赖皮肤的类名与 `media-*` 公开组件：`.video-controls-secondary`、
+  `.media-settings-menu-trigger`、以及 `.media-button` / `.media-menu-*`；皮肤结构升级导致挂不上时返回 `null`、上层按 50ms 重试 40 次，
+  最坏结果是这几个控件不出现。
+  - **上一个 / 下一个**：竖条+三角（皮肤自带的图标里没有 skip 这一类，自己画）。片名取自后端
+    `GET /api/videos/{id}/adjacent`（见 `docs/API.md` A4·补·2），列表口径跟着卡片链接上的 `?back=` 走：
+    关注流＝排除 B 站、艺人页＝那位艺人、B 站墙＝`platform=bilibili`（含 `?up=` / `?mode=unseen`）。
+    到头那一侧按钮**留着位置但按不动**（`aria-disabled` + 我们自己补的 0.35 透明度，皮肤只在 neutral 主题里给 `aria-disabled` 上样式）；
+    位置不能跳，否则控制条会随着「有没有下一部」一格格横移。切过去时 `?back=` 原样带着，连切几部后「返回」仍回原来那页。
+  - **自动切换下一个**：挂在皮肤自带的齿轮菜单里（`settingsMenuContent()` 顺着 `.media-settings-menu-trigger` 的 `commandfor`
+    找到那个 `<media-menu>`，再取它**直属**的 `.media-menu-content`），不另开第二个「设置」入口。行高按皮肤自己的 32px 做，
+    说明放 `title`/`aria-label`——多一行小字会把行高顶到 50px，和上面的「速度」对不齐。状态存 `myporn.player.autonext`，**默认关**。
+    用 `<media-menu-checkbox-item>`：它自己被点就翻转 `checked`、保持菜单打开、发 `checked-change`；状态真源仍在 Svelte 侧，
+    `update()` 再把值写回去。⚠️ 皮肤自己不用这个组件，**没有注册它**——不 `import '@videojs/html/ui/menu-checkbox-item'`
+    的话标签就是个空壳（2026-11-01 实测：`customElements.get('media-menu-checkbox-item')` 为 `undefined`，
+    没 `role`、点不动、也不发事件）。
   - **清晰度**：一个显示当前档的按钮（`1080p ⌄`）+ 皮肤自己的 `<media-menu>` 弹层（挂在按钮上方、右对齐，靠 `commandfor` 绑定，
     所以 `aria-expanded`、Esc、点外面关闭、打开时锁住控件不隐藏都由皮肤负责）。列表项用 `<media-menu-item class="media-menu-radio-item">`，
     每行两行文案（`1080p` / `4.0 Mbps · 最高`）+ 当前档的对勾；点一项 → `select` 事件 → 交回页面换片源。
@@ -343,7 +356,7 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
 | 范围 | 目标（gzip，KiB） | 实测（2026-10） |
 |---|---|---|
 | 首屏列表页（index + CSS） | ≤60 KB | 48.3 + 9.4 = 57.7 KB |
-| 视频页（Video.js 10 播放器 + 清晰度菜单/氛围模式/加载态，不含 HLS 引擎） | ≤95 KB | 84.2 KB |
+| 视频页（Video.js 10 播放器 + 上一个/下一个/清晰度菜单/氛围模式/加载态，不含 HLS 引擎） | ≤95 KB | 84.1 KB |
 | 仅 HLS 片源额外下载（hls.js 适配器） | ≤180 KB | 167.1 KB |
 | 全部路由合计 | ≤300 KB | ≈ 300 KB |
 
@@ -707,6 +720,10 @@ bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源�
 - 详情页的「返回」也认来源：卡片链接带 `?back=<编码后的整条路径+查询>`，
   `/video/:id` 据此渲染「返回 B 站 / 返回艺人 / 返回关注」，比写死的「返回关注」靠谱；
   「相关影片」的卡片不带这个参数（否则会链回自己），跨站请求也只认站内绝对路径。
+- 播放器的「上一个 / 下一个」同样认来源，只是两条路各走各的：`/video/:id` 按 `?back=` 换成
+  `/api/videos/{id}/adjacent` 的筛选条件（§7.4.2）；**YouTube 弹窗不离开这一页**（`?v=` 只是换个参数），
+  所以直接在当前墙上已经加载出来的那份列表里前后挪一格，不额外问后端——用户看见的顺序就是它。
+  深链接进来的片子可能不在墙上（`findIndex` 为 -1），那时两个按钮都按不动，没有上下文就不猜。
 
 ## 14. 部署与发布：一个镜像 + GitHub Actions
 

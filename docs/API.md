@@ -120,6 +120,7 @@ type Video = {
 | GET | `/api/videos?performerId=&cursor=&limit=30&q=` | 影片流，播放时间倒序，**keyset 游标**分页 → `{"items":Video[],"nextCursor":"..."\|null}` |
 | GET | `/api/videos/new?since=` | 新片（`isNew`）列表，同结构，首页角标用 |
 | GET | `/api/videos/{id}` | `Video` + `{"description":"...","related":Video[]}` |
+| GET | `/api/videos/{id}/adjacent` | 同一份列表里的上下家 → `{"prev":Video\|null,"next":Video\|null}`（见 A4·补·2） |
 | POST | `/api/videos/{id}/seen` | `204`，清除 isNew |
 
 ### 播放
@@ -374,6 +375,25 @@ type Video = {
 - 失败记录保留 5 分钟，前端刷新一眼就能看到上次为什么没好，而不是无限「正在准备」；
 - 前端拿到 `ready` 之后才把 `/api/videos/{id}/remux?v=…` 交给 `<video>`，那时是一个已经成型的
   文件，Range 秒开、能拖动。
+
+### A4·补·2. 播放器「上一个/下一个」`GET /api/videos/{id}/adjacent`
+
+播放器控制条那一对切歌按钮问的就是这个。查询参数和 `GET /api/videos` **同一套**（`performerId` /
+`platform` / `excludePlatform` / `onlyNew=1` / `q` / `subscribedOnly=1`），返回的是「在这份列表里，
+按列表顺序排在本片前后紧挨着的那两条」：
+
+```json
+{ "prev": { "id": 1025, "title": "...", ... }, "next": { "id": 981, "title": "...", ... } }
+```
+
+- `prev` = 列表里更靠上（更新）的一条，`next` = 更靠下（更旧）的一条；到头的那一侧是 `null`，**不是 404**。
+  影片本身不存在才 `404 not_found`。
+- 排序键完全照抄列表：`COALESCE(published_at,'') DESC, id DESC`，所以同一时间戳的重复条目也不会漏/重
+  （`(ts < ? OR (ts = ? AND id < ?))` 这种 keyset 条件，和翻页游标同一个写法）。
+- `Video` 结构和列表项一致（带 `performers`、本地档标记）；共用 `store.feedFilter` / `store.scanVideo`，
+  列表加过滤条件时这里不会漂。
+- 前端按卡片链接上的 `?back=` 决定口径（关注流＝`excludePlatform=bilibili`、艺人页＝`performerId`、
+  B 站墙＝`platform=bilibili` + `subscribedOnly=1`），切过去时把 `?back=` 原样带下去。
 
 ### A5. SSE 新增事件
 

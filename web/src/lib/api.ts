@@ -47,8 +47,19 @@ import type {
   YtVideosPage,
   Video,
   VideoDetail,
+  VideoNeighbors,
   VideoPage,
 } from './types';
+
+/** 「上一个 / 下一个」按哪份列表算：字段和 /api/videos 的筛选参数一一对应 */
+export interface AdjacentScope {
+  performerId?: number;
+  platform?: string;
+  excludePlatform?: string;
+  onlyNew?: boolean;
+  q?: string;
+  subscribedOnly?: boolean;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -288,6 +299,25 @@ export const api = {
   },
   playback(videoId: number | string): Promise<PlaybackInfo> {
     return request<PlaybackInfo>(`/api/videos/${id(videoId)}/playback`);
+  },
+  /**
+   * 播放器「上一个 / 下一个」用：这条影片在**当前这份列表**里的左右邻居。
+   *
+   * 传的是「那份列表的筛选条件」，所以要跟列表接口同口径：关注流传 `excludePlatform=bilibili`，
+   * 艺人页传 `performerId`，B 站墙传 `platform=bilibili`（可再加 `performerId` / `onlyNew`）。
+   * 到列表头/尾那一侧是 null——按下去就没了，不会绕回第一条。
+   */
+  adjacent(videoId: number | string, scope: AdjacentScope = {}): Promise<VideoNeighbors> {
+    return request<VideoNeighbors>(
+      `/api/videos/${id(videoId)}/adjacent${qs({
+        performerId: scope.performerId,
+        platform: scope.platform,
+        excludePlatform: scope.excludePlatform,
+        onlyNew: scope.onlyNew === true ? 1 : undefined,
+        q: scope.q,
+        subscribedOnly: scope.subscribedOnly === true ? 1 : undefined,
+      })}`,
+    );
   },
   /**
    * 分轨档位（B 站 1080P+/4K）的合流进度。
