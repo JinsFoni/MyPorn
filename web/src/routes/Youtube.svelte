@@ -412,6 +412,17 @@
   );
   const playbackSrc = $derived(usesDash ? dashSrc || streamSrc : streamSrc);
   const playbackType = $derived(HLS_TYPE);
+  /**
+   * 这会儿画面里有没有播放器（`<video-skin>`）。
+   *
+   * 关闭键必须**画在播放器里面**，不能当它的兄弟：播放器一旦发现指针离开了自己，
+   * 立刻把控制条收起来，而关闭键的显隐是跟着控制条走的——于是「鼠标移到关闭键上」
+   * 会被播放器当成「指针离开了」，控制条 + 关闭键当场淡出、`pointer-events` 变 none，
+   * 指针落到画面上（`cursor:none`），光标就消失了，点一下还会变成播放/暂停。
+   * 实测（1920×1080 窗口，HAVC 片段播放中）：唤醒控制条后把指针移到关闭键上，
+   * +0ms `data-controls-visible` 就没了、+200ms 关闭键透明度归零。
+   * 插进播放器的浮层里（`.overlay-layer`）之后，同一操作 controls 一直为真、光标保持 default。 */
+  const hasPlayer = $derived(!useEmbed && !!stream && !!playbackSrc);
   const playbackEngine = $derived<'hls' | 'native'>('hls');
 
   const qualityOptions = $derived<QualityOption[]>(
@@ -777,6 +788,28 @@
 <!-- 播放弹窗 -->
 {#if detailOpen && detail}
   {@const v = detail}
+  <!-- 关闭键：跟播放器底部控制条（.video-controls）同一套——白色 10% 底 + 16px 背景模糊 +
+       99px 圆角 + 一圈 1px 暗环。形状跟着控制条那根药丸走：比高更宽（42×28，左右各 14 的内距把
+       14px 图标裹在中间），不是一颗圆点；高度比控制条里的按钮（36×36）矮一号，不带文字。
+       位置在画面右上角；窄屏（< 32rem）要往下让一截，原因见下面 .yt-close 的注释。
+       有播放器时这颗键画在播放器浮层里（理由见 hasPlayer 的注释），所以这里的定位是相对画面框，
+       两种画法位置一样（播放器浮层就是画面框那么大）。 -->
+  {#snippet closeBtn()}
+    <button
+      type="button"
+      class="yt-close absolute right-3 top-3 z-30 flex h-7 items-center justify-center rounded-full px-3.5 text-fg"
+      onclick={(e) => {
+        // 这颗键现在画在播放器里，点下去会顺着组合路径冒泡到播发器的「点画面=播放/暂停」
+        e.stopPropagation();
+        closeDetail();
+      }}
+      aria-label="关闭"
+    >
+      <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.2">
+        <path d="m6 6 12 12M18 6 6 18" stroke-linecap="round" />
+      </svg>
+    </button>
+  {/snippet}
   <div class="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
     <button type="button" class="absolute inset-0 bg-ink/85 backdrop-blur-sm" aria-label="关闭" onclick={closeDetail}
     ></button>
@@ -824,6 +857,7 @@
                 onNext={() => { if (nextDetail) openDetail(nextDetail); }}
                 onEnded={() => { if (nextDetail) openDetail(nextDetail); }}
                 onFailed={onStreamFailed}
+                hideIdleCursor={false}
               >
                 {#snippet overlay()}
                   {#if playError}
@@ -841,6 +875,7 @@
                       </div>
                     </div>
                   {/if}
+                  {@render closeBtn()}
                 {/snippet}
               </VideoPlayer>
             </div>
@@ -873,20 +908,10 @@
           </div>
         {/if}
 
-        <!-- 关闭键：跟播放器底部控制条（.video-controls）同一套——白色 10% 底 + 16px 背景模糊 +
-             99px 圆角 + 一圈 1px 暗环。形状跟着控制条那根药丸走：比高更宽（42×28，左右各 14 的内距把
-             14px 图标裹在中间），不是一颗圆点；高度比控制条里的按钮（36×36）矮一号，不带文字。
-             位置在画面右上角；窄屏（< 32rem）要往下让一截，原因见下面 .yt-close 的注释。 -->
-        <button
-          type="button"
-          class="yt-close absolute right-3 top-3 z-30 flex h-7 items-center justify-center rounded-full px-3.5 text-fg"
-          onclick={closeDetail}
-          aria-label="关闭"
-        >
-          <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.2">
-            <path d="m6 6 12 12M18 6 6 18" stroke-linecap="round" />
-          </svg>
-        </button>
+        <!-- 没有播放器时（解析中 / 解析失败 / 兜底 iframe）关闭键只能当画面的兄弟，按 hover 显隐。 -->
+        {#if !hasPlayer}
+          {@render closeBtn()}
+        {/if}
       </div>
 
       <!-- 标题在播放器之后：弹窗一眼先看到画面，标题紧挨着频道/播放量这一行 -->
@@ -1096,6 +1121,14 @@
 
   .yt-close:hover {
     background: oklch(1 0 0 / 0.2);
+  }
+
+  /* 有播放器时关闭键画在播放器里面，播放器一进全屏它就跟着进去。
+     全屏里退出靠 ESC / 控制条，画面上不该留一颗「关掉整个弹窗」的键。
+     判断用宿主上的 `data-fullscreen`（VideoPlayer 的 watchFullscreen 写的），
+     不用 CSS 的 `:fullscreen`：无头浏览器里 `matches(':fullscreen')` 恒为 false，那条路验不了。 */
+  :global(.yt-media:has(video-skin[data-fullscreen])) .yt-close {
+    display: none;
   }
 
   /* 窄屏往右下让一截：皮肤在 < 32rem 时会把投屏/画中画/全屏收进画面右上角那颗浮动药丸，

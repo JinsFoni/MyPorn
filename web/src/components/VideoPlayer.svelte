@@ -98,6 +98,16 @@
     startAt?: number;
     /** 盖在画面上方的页面级浮层（解析中 / 播放失败） */
     overlay?: Snippet;
+    /**
+     * 控制条自己收起来之后，要不要把鼠标光标一起藏掉（默认藏，影院那味儿）。
+     *
+     * 弹窗里的播放器要把它关掉：弹窗是**盖在页面上的一层**，不是全屏影院，
+     * 用户还得点画面的关闭键、点外面退出、点标题下面的按钮——指针一没影就找不着北。
+     * 实测（YouTube 弹窗，275s 片子播放中）：控制条 2s 后自动收，收的同时皮肤把
+     * `cursor:none` 打在 `.video-skin` 上，右上角那块（关闭键那一带）光标直接消失；
+     * 关掉这条之后同一位置光标保持 `auto`，看得见也点得着。
+     */
+    hideIdleCursor?: boolean;
   }
 
   let {
@@ -121,6 +131,7 @@
     onEnded,
     startAt = 0,
     overlay,
+    hideIdleCursor = true,
   }: Props = $props();
 
   let playerEl = $state<HTMLElement | null>(null);
@@ -262,6 +273,8 @@
   let bar: PlayerBar | null = null;
   let barTries = 0;
   let barTimer: number | undefined;
+  /** `fullscreenchange` 的摘钩函数（见 watchFullscreen） */
+  let fullscreenCleanup: (() => void) | undefined;
   /** 盯着皮肤内部「控制条这会儿显示着没有」的观察器，见 watchControls() */
   let controlsObserver: MutationObserver | undefined;
   let controlsTimer: number | undefined;
@@ -617,6 +630,14 @@
       // 恢复进度的那一两秒里元素的 currentTime 是 0：控制条这时候显示出来就是「进度条归 0」，
       // 干脆跟加载态一起收起来（键盘快捷键照旧可用，热键挂在 player 上、不在这条控制条里）
       ":host([data-resuming='true']) media-controls-content{visibility:hidden !important}",
+      // 想留住光标的地方（弹窗）把皮肤的 `cursor:none` 按掉；全屏照旧藏起来。
+      // 未分层的内联样式压得过皮肤那几条（它们在 `@layer` 里），不用 `!important`。
+      ...(hideIdleCursor
+        ? []
+        : [
+            '@media (pointer:fine){.video-skin:not([data-controls-visible]){cursor:auto}' +
+              ':host([data-fullscreen]) .video-skin:not([data-controls-visible]){cursor:none}}',
+          ]),
     ].join('\n');
     root.append(style);
   }
@@ -657,6 +678,23 @@
     controlsObserver?.disconnect();
     controlsObserver = new MutationObserver(sync);
     controlsObserver.observe(container, { attributes: true, attributeFilter: ['data-controls-visible'] });
+  }
+
+  /**
+   * 把「现在是不是全屏」写到宿主上：`video-skin[data-fullscreen]`。
+   *
+   * 不用 CSS 的 `:fullscreen`：无头浏览器里 `el.matches(':fullscreen')` 恒为 false
+   * （`document.fullscreenElement` 明明就是它），靠它写的样式在本机没法验；
+   * 而页面那边（YouTube 弹窗要把关闭键藏起来）也只能看见光 DOM 的属性。
+   * `fullscreenchange` 在无头里照常触发，所以这条路子量得到。
+   */
+  function watchFullscreen(): void {
+    const sync = (): void => {
+      skinEl?.toggleAttribute('data-fullscreen', !!document.fullscreenElement);
+    };
+    sync();
+    document.addEventListener('fullscreenchange', sync);
+    fullscreenCleanup = () => document.removeEventListener('fullscreenchange', sync);
   }
 
   // ---------- 加载态：糊封面 + 加载环 ----------
@@ -1425,6 +1463,7 @@
     window.addEventListener('keydown', onKeydown);
     mountBar();
     watchControls();
+    watchFullscreen();
     return () => {
       unsubscribe();
       window.removeEventListener('keydown', onKeydown);
@@ -1433,6 +1472,8 @@
       if (controlsTimer !== undefined) clearTimeout(controlsTimer);
       controlsObserver?.disconnect();
       controlsObserver = undefined;
+      fullscreenCleanup?.();
+      fullscreenCleanup = undefined;
       stopSeekWatch();
       stopStallWatch();
       if (barTimer !== undefined) clearTimeout(barTimer);
