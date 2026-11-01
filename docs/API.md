@@ -887,7 +887,7 @@ GET /api/yt/videos/{id}/stream
 ```
 
 解析一次 4~5 秒（跑一次 `yt-dlp -j`），结果在服务端缓存 **30 分钟**，或被上游签名寿命
-（`expire=`，实测约 6 小时）截断 —— 切画质、重开弹窗都不会重新解析。
+（`expire=`，实测约 6 小时）截断 —— 切画质、重开播放页都不会重新解析。
 
 ```
 GET /api/yt/videos/{id}/stream.m3u8[?q=高度]
@@ -949,9 +949,9 @@ GET /api/yt/dash/{sid}/{v|a}.mp4?i=<n>   → 206 video/mp4（Range：偏移是**
 → 404 not_found      库里没有这条（可能没订阅它的频道）
 ```
 
-站内播放页的深链接 `/youtube?v=<videoId>` 用：刷新、从别处贴链接进来时，
-墙上那一页（36 条 + 可能带频道筛选）未必包含这条，所以需要单取。`{videoId}` 是 YouTube 的
-字符串 id，不是 `yt_videos.id`。
+站内播放页 `/youtube/<videoId>` 用（2026-11-02 起播放是独立页，之前是墙上的弹窗 `?v=`）：
+刷新、从别处贴链接进来时，墙上那一页（36 条 + 可能带频道筛选）未必包含这条，所以需要单取。
+`{videoId}` 是 YouTube 的字符串 id，不是 `yt_videos.id`。
 
 ## 附：M7 补 —— B 站独立页面（`/bilibili` + 管理 → B 站）
 

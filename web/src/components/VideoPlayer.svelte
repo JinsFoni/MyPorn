@@ -108,16 +108,6 @@
     startAt?: number;
     /** 盖在画面上方的页面级浮层（解析中 / 播放失败） */
     overlay?: Snippet;
-    /**
-     * 控制条自己收起来之后，要不要把鼠标光标一起藏掉（默认藏，影院那味儿）。
-     *
-     * 弹窗里的播放器要把它关掉：弹窗是**盖在页面上的一层**，不是全屏影院，
-     * 用户还得点画面的关闭键、点外面退出、点标题下面的按钮——指针一没影就找不着北。
-     * 实测（YouTube 弹窗，275s 片子播放中）：控制条 2s 后自动收，收的同时皮肤把
-     * `cursor:none` 打在 `.video-skin` 上，右上角那块（关闭键那一带）光标直接消失；
-     * 关掉这条之后同一位置光标保持 `auto`，看得见也点得着。
-     */
-    hideIdleCursor?: boolean;
   }
 
   let {
@@ -141,7 +131,6 @@
     onEnded,
     startAt = 0,
     overlay,
-    hideIdleCursor = true,
   }: Props = $props();
 
   let playerEl = $state<HTMLElement | null>(null);
@@ -301,12 +290,6 @@
   let bar: PlayerBar | null = null;
   let barTries = 0;
   let barTimer: number | undefined;
-  /** `fullscreenchange` 的摘钩函数（见 watchFullscreen） */
-  let fullscreenCleanup: (() => void) | undefined;
-  /** 盯着皮肤内部「控制条这会儿显示着没有」的观察器，见 watchControls() */
-  let controlsObserver: MutationObserver | undefined;
-  let controlsTimer: number | undefined;
-  let controlsTries = 0;
 
   function store(): Store | undefined {
     return (playerEl as unknown as { store?: Store } | null)?.store;
@@ -694,71 +677,8 @@
       // 恢复进度的那一两秒里元素的 currentTime 是 0：控制条这时候显示出来就是「进度条归 0」，
       // 干脆跟加载态一起收起来（键盘快捷键照旧可用，热键挂在 player 上、不在这条控制条里）
       ":host([data-resuming='true']) media-controls-content{visibility:hidden !important}",
-      // 想留住光标的地方（弹窗）把皮肤的 `cursor:none` 按掉；全屏照旧藏起来。
-      // 未分层的内联样式压得过皮肤那几条（它们在 `@layer` 里），不用 `!important`。
-      ...(hideIdleCursor
-        ? []
-        : [
-            '@media (pointer:fine){.video-skin:not([data-controls-visible]){cursor:auto}' +
-              ':host([data-fullscreen]) .video-skin:not([data-controls-visible]){cursor:none}}',
-          ]),
     ].join('\n');
     root.append(style);
-  }
-
-  /**
-   * 把皮肤内部「控制条现在显示着没有」反射到宿主元素上：`video-skin[data-controls-visible]`。
-   *
-   * 皮肤把可见态写成 shadow root 里 `.media-container` 上的 `data-controls-visible`（它自己拿这个属性
-   * 隐藏光标：`@media (pointer:fine){.video-skin:not([data-controls-visible]){cursor:none}}`）。
-   * 光 DOM 里读不到 shadow 里的属性，于是**页面在外面没有任何办法知道控制条已经藏了**——
-   * YouTube 弹窗右上角那颗关闭键就只能按 hover 显隐：鼠标停在画面上不动，控制条 4 s 后自己收起来了，
-   * 关闭键还亮在那儿（2026-11-01 用户报的）。属性搬一份到宿主上，页面用
-   * `.yt-media:has(video-skin[data-controls-visible])` 就能跟控制条同进同出。
-   *
-   * 观察器只盯着那一个属性（`attributeFilter`）：皮肤的 `data-controls-visible` 每次显隐都会重写，
-   * 静止时不触发，成本可忽略。shadow root 有时比 onMount 晚一步，所以照 mountBar 的办法按 50ms 重试。
-   */
-  function watchControls(): void {
-    const host = skinEl;
-    const container = host?.shadowRoot?.querySelector('.media-container');
-    if (!host || !(container instanceof HTMLElement)) {
-      if (controlsTries < 40) {
-        controlsTries += 1;
-        if (controlsTimer === undefined) {
-          controlsTimer = window.setTimeout(() => {
-            controlsTimer = undefined;
-            watchControls();
-          }, 50);
-        }
-      }
-      return;
-    }
-    controlsTries = 0;
-    const sync = (): void => {
-      host.toggleAttribute('data-controls-visible', container.hasAttribute('data-controls-visible'));
-    };
-    sync();
-    controlsObserver?.disconnect();
-    controlsObserver = new MutationObserver(sync);
-    controlsObserver.observe(container, { attributes: true, attributeFilter: ['data-controls-visible'] });
-  }
-
-  /**
-   * 把「现在是不是全屏」写到宿主上：`video-skin[data-fullscreen]`。
-   *
-   * 不用 CSS 的 `:fullscreen`：无头浏览器里 `el.matches(':fullscreen')` 恒为 false
-   * （`document.fullscreenElement` 明明就是它），靠它写的样式在本机没法验；
-   * 而页面那边（YouTube 弹窗要把关闭键藏起来）也只能看见光 DOM 的属性。
-   * `fullscreenchange` 在无头里照常触发，所以这条路子量得到。
-   */
-  function watchFullscreen(): void {
-    const sync = (): void => {
-      skinEl?.toggleAttribute('data-fullscreen', !!document.fullscreenElement);
-    };
-    sync();
-    document.addEventListener('fullscreenchange', sync);
-    fullscreenCleanup = () => document.removeEventListener('fullscreenchange', sync);
   }
 
   // ---------- 加载态：糊封面 + 加载环 ----------
@@ -1600,18 +1520,11 @@
     });
     window.addEventListener('keydown', onKeydown);
     mountBar();
-    watchControls();
-    watchFullscreen();
     return () => {
       unsubscribe();
       window.removeEventListener('keydown', onKeydown);
       if (retryTimer !== undefined) clearTimeout(retryTimer);
       if (kickTimer !== undefined) clearTimeout(kickTimer);
-      if (controlsTimer !== undefined) clearTimeout(controlsTimer);
-      controlsObserver?.disconnect();
-      controlsObserver = undefined;
-      fullscreenCleanup?.();
-      fullscreenCleanup = undefined;
       stopSeekWatch();
       stopStallWatch();
       if (barTimer !== undefined) clearTimeout(barTimer);

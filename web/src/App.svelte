@@ -22,14 +22,15 @@
   type IdPage = Component<{ id: string }>;
   type PlainPage = Component<Record<string, never>>;
 
-  const ID_PAGE_LOADERS: Record<'video' | 'performer', () => Promise<{ default: IdPage }>> = {
+  const ID_PAGE_LOADERS: Record<'video' | 'ytvideo' | 'performer', () => Promise<{ default: IdPage }>> = {
     video: () => import('./routes/Video.svelte') as Promise<{ default: IdPage }>,
+    ytvideo: () => import('./routes/YoutubeVideo.svelte') as Promise<{ default: IdPage }>,
     performer: () => import('./routes/Performer.svelte') as Promise<{ default: IdPage }>,
   };
 
   const idPageCache = new Map<string, Promise<{ default: IdPage }>>();
 
-  function loadIdPage(name: 'video' | 'performer'): Promise<{ default: IdPage }> {
+  function loadIdPage(name: 'video' | 'ytvideo' | 'performer'): Promise<{ default: IdPage }> {
     const cached = idPageCache.get(name);
     if (cached) return cached;
     const pending = ID_PAGE_LOADERS[name]();
@@ -58,7 +59,8 @@
     return bilibiliPage;
   }
 
-  /** YouTube 视频墙同样懒加载（播放弹窗、下载入口都在里面） */
+  /** YouTube 视频墙同样懒加载（频道筛选、下载入口都在里面；单条播放已经搬去 `/youtube/:videoId`，
+   *  那一页由 ID_PAGE_LOADERS 里的 `ytvideo` 懒加载） */
   let youtubePage: Promise<{ default: PlainPage }> | null = null;
   function loadYoutube(): Promise<{ default: PlainPage }> {
     youtubePage ??= import('./routes/Youtube.svelte') as Promise<{ default: PlainPage }>;
@@ -82,6 +84,7 @@
     bilibili: '',
     manage: '管理',
     video: '',
+    ytvideo: '',
     settings: '',
     login: '登录',
     'not-found': '',
@@ -154,6 +157,15 @@
       {:then mod}
         {@const VideoPage = mod.default}
         <VideoPage id={shown.params.id} />
+      {:catch}
+        <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
+      {/await}
+    {:else if shown.name === 'ytvideo'}
+      {#await loadIdPage('ytvideo')}
+        <p class="py-16 text-center text-ui text-dim">正在载入…</p>
+      {:then mod}
+        {@const YtVideoPage = mod.default}
+        <YtVideoPage id={shown.params.videoId} />
       {:catch}
         <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
       {/await}

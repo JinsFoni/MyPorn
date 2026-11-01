@@ -305,7 +305,7 @@ func (s *Server) handleYtSeen(w http.ResponseWriter, r *http.Request) {
 
 // handleYtVideoLookup 按 YouTube 视频 id（不是行 id）取一条。
 //
-// 用途只有一个：站内播放页的深链接 `/youtube?v=<videoId>`。刷新或从别处贴进来时，
+// 用途只有一个：站内播放页 `/youtube/<videoId>`（2026-11-02 起是独立页，之前是墙上的 `?v=`）。刷新或从别处贴进来时，
 // 墙上那一页（36 条、还可能带着频道筛选）未必包含这条，得能单取。
 func (s *Server) handleYtVideoLookup(w http.ResponseWriter, r *http.Request) {
 	videoID := strings.TrimSpace(r.URL.Query().Get("videoId"))

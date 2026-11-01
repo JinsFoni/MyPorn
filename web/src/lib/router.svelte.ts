@@ -4,15 +4,16 @@
  * - 路径参数（:id）
  * - 404 兜底
  * - document.title 随路由更新
- * - 滚动位置：换页回顶，「返回」回原位，只改查询串（页内筛选 / YouTube 弹窗的 `?v=`）不动
+ * - 滚动位置：换页回顶，「返回」回原位，只改查询串（页内筛选）不动
  *
  * 滚动这块的三个坑（2026-11-01 全部实测过，见 ARCHITECTURE.md）：
  *  · 历史状态里的 `scrollY` 必须在**离开那一条历史记录之前**写好。浏览器不替你记，
  *    push 时塞个 0 进去，退回就是 0——原来「退出播放回顶部」正是这么来的。
  *  · 目标页是重建的（InfiniteList 只拉了第一页），一次 `scrollTo` 会被夹到底，
  *    所以要交给 lib/scrollRestore.ts 追着补，不是滚一次。
- *  · 只改查询串时**不能**滚：YouTube 的播放弹窗就是 `?v=<id>`，
- *    原来开一次弹窗滚一次顶，关掉后人就停在顶部了。
+ *  · 只改查询串时**不能**滚：墙上的筛选胶囊（`?up=` / `?channel=` / `?mode=`）就是只改查询串，
+ *    原来换一次筛选就滚一次顶。（YouTube 播放曾经也是这样：弹窗是 `?v=<id>`，
+ *    2026-11-02 换成独立页 `/youtube/:videoId` 之后那条路没有了，机制留着。）
  */
 import { restoreScroll } from './scrollRestore';
 export type RouteName =
@@ -23,6 +24,7 @@ export type RouteName =
   | 'downloads'
   | 'moments'
   | 'youtube'
+  | 'ytvideo'
   | 'bilibili'
   | 'manage'
   | 'video'
@@ -39,6 +41,9 @@ const ROUTES: readonly RouteDef[] = [
   { name: 'downloads', pattern: '/downloads', title: '下载' },
   { name: 'moments', pattern: '/moments', title: '动态' },
   { name: 'youtube', pattern: '/youtube', title: 'YouTube' },
+  // 单条 YouTube 视频：和 `/video/:id` 一样是整页播放（2026-11-02 从墙上的弹窗搬过来的）。
+  // 参数是 YouTube 自己的视频 id（`dQw4w9WgXcQ` 那种字符串），不是 `yt_videos` 的行 id。
+  { name: 'ytvideo', pattern: '/youtube/:videoId', title: '播放' },
   { name: 'bilibili', pattern: '/bilibili', title: 'B 站' },
   { name: 'manage', pattern: '/manage', title: '管理' },
   { name: 'video', pattern: '/video/:id', title: '播放' },
@@ -137,7 +142,7 @@ export function navigate(
   const url = new URL(to, window.location.origin);
   if (url.pathname === loc.path && url.search === loc.search) return;
   const y = Math.round(window.scrollY);
-  // 同一页只换查询串（页内筛选、YouTube 弹窗的 ?v=）：DOM 没重建，位置就不该动
+  // 同一页只换查询串（页内筛选）：DOM 没重建，位置就不该动
   const keep = opts.keepScroll === true && url.pathname === loc.path;
   // 「离开的这一条」先把真实位置记下来：push 进去的 0 是给新页用的，别让它顶掉旧页的
   scrollMemory.set(key(loc.path, loc.search), y);

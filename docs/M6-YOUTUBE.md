@@ -362,7 +362,7 @@ yt-dlp -J --flat-playlist --playlist-end 200 https://www.youtube.com/channel/<UC
 | 首次回填 200 条上限 | 老频道历史远多于此 | 可配；管理页提供「再拉一批」（改 `--playlist-start` 续接） |
 | AV1 只有视频轨 | 必须封装一次 | 已是既定方案；`-c copy` 不损画质，产物单 mp4 兼容 Chrome / Firefox / Safari 17+ / Emby |
 | 高分辨率体积 | 8K AV1 90 秒就有 358 MB（实测），整频道批量下载很容易把盘吃满 | 不设高度上限（用户要「最高画质」）；`CheckSpace` 兜底 + 只做手动/整频道批量，不做全自动 |
-| 站内播放依赖出口 | HLS 分片要服务端去 googlevideo 拉，断网/代理挂了就是黑框 | 弹窗里留「重试」与「改用 YouTube 播放器」两条退路，卡片始终保留「在 YouTube 打开」 |
+| 站内播放依赖出口 | HLS 分片要服务端去 googlevideo 拉，断网/代理挂了就是黑框 | 播放页的浮层里留「重试」与「改用 YouTube 播放器」两条退路，标题行始终保留「在 YouTube 打开」 |
 | 没有 adapter 的 platform 进「关注」 | 刷新 / 在线播放 / 重下三条路径都可能踩空 | `reg.Get` 失败按「只有本地文件」降级，补单测 |
 | 法律 / 条款 | 下载 YouTube 内容与 ToS 冲突 | 只做用户在自己机器上的自选行为，不做分发；默认手动下载，不自动批量 |
 
@@ -382,7 +382,7 @@ yt-dlp -J --flat-playlist --playlist-end 200 https://www.youtube.com/channel/<UC
 | 未读数 | `yt_videos.seen` + `stats.unseen`，侧边栏角标复用 `live.ytUnseen` | 与动态页同一套手感 |
 | 下载页 | 混入 `yt_download`；`target_id` 用 `videos.id` | 用户在「下载」页应该看到同一件事 |
 | 完成后进度 | `FinishJob` 落库时把进度补成 100 | 最后一次 `Progress` 常被 800ms 节流吞掉，否则页面出现「完成 · 92.0%」 |
-| 隐私模式 | 弹窗里默认走**站内播放**（同源 HLS，浏览器不直连 YouTube）；只有解析失败时的「改用 YouTube 播放器」兜底按钮在隐私模式下隐藏 | §14 之后站内播放本身就是隐私友好的：一嵌 iframe 就等于让浏览器直连 YouTube 拉整段视频 |
+| 隐私模式 | 播放页默认走**站内播放**（同源 HLS，浏览器不直连 YouTube）；只有解析失败时的「改用 YouTube 播放器」兜底按钮在隐私模式下隐藏 | §14 之后站内播放本身就是隐私友好的：一嵌 iframe 就等于让浏览器直连 YouTube 拉整段视频 |
 | 详情页播放 | **新增本地播放**：`GET /api/videos/{id}/file`（ServeFile，支持 Range），`/playback` 把本地档排第一并作默认档 | 下完点开详情页原来是 `unsupported_platform`——没有 adapter 就没有播放地址，这是 §6.3 预警过的那条路，实测确实踩到了 |
 | 详情页下载 | `POST /api/videos/{id}/download` 在没有 adapter 时用 `platform_video_id` 反查 `yt_videos`，落到 `yt_download` | 否则详情页那个「下载到本地库」按钮点了就报错 |
 | 取消 / 暂停 | 下载期间每秒查一次取消标志；`Download` 先 `cmd.Wait()` 再收管道（`WaitDelay=3s`） | 原来点了取消要等整段下完：yt-dlp 调起来的 ffmpeg 也攥着管道，只等 EOF 会一直挂着（实测 60 秒） |
@@ -392,7 +392,7 @@ yt-dlp -J --flat-playlist --playlist-end 200 https://www.youtube.com/channel/<UC
 
 ### 14.1 起因：iframe 会拒播
 
-M6 上线时弹窗里放的是 `https://www.youtube-nocookie.com/embed/<id>`。实测发现**一批版权音乐视频
+M6 上线时播放页里放的是 `https://www.youtube-nocookie.com/embed/<id>`（当时还是个弹窗）。实测发现**一批版权音乐视频
 在嵌入里直接被拒**，显示「此视频不能观看 / この動画は再生できません」：
 
 | 视频 | iframe 嵌入 | 直接打开 watch 页 |
@@ -469,23 +469,29 @@ M6 上线时弹窗里放的是 `https://www.youtube-nocookie.com/embed/<id>`。�
   13.5 Mbps，但我们走 HLS 拿不到（见 §14.9）。软件解码的老机器上 4K 会卡——那是本地解码能力，手动降到 1080p 即可。
 - 后台标签页播放会被浏览器的节能策略降频（与本应用无关）。
 
-### 14.7 播放地址就是 URL（深链接）
+### 14.7 播放是一条独立页（`/youtube/:videoId`）
 
-弹窗不再是个纯粹的界面状态——地址栏里写清楚了在看哪一条：
+2026-11-02 之前这里盖的是一层弹窗（`/youtube?v=<videoId>`），现在整页跳转：
 
 ```
-/youtube?v=<videoId>       例如 /youtube?v=s8OtOH_Vfa0
+/youtube/<videoId>         例如 /youtube/s8OtOH_Vfa0
 ```
 
-- **URL 是唯一真相**：点卡片 → `pushState` 带上 `?v=`；关弹窗 → `replace` 去掉（后退不会又弹一次）；
-  浏览器后退直接关掉弹窗。`$effect` 监听 `router.query`，所以刷新、后退、贴链接走的是同一条路。
-- 标题也换成视频名（`document.title`），浏览器标签页一眼能认出是哪条。
-- 深链接进来时墙上那一页（36 条 + 可能带着频道筛选）未必有这条，所以补了
-  `GET /api/yt/videos/lookup?videoId=…` 单取（见 `docs/API.md` C20）。
-- 弹窗里加了「复制链接」，复制出来的就是上面这个站内地址（不是 YouTube 的 watch 链接）。
-
-为什么不另开一个 `/youtube/v/:id` 独立页：视频墙是浏览场景，弹窗能保留墙、关掉就接着挑；
-真要独立页的话路由加一条、把这套 `?v=` 逻辑搬过去就行，但会丢掉「边看边翻墙」。
+- **和关注流、B 站点开影片同一种形态**（`/video/:id`）：整页播放器、标题行右端一排图标键、
+  右侧 14rem 资料列、底部一排同频道的其它视频（见 `ARCHITECTURE.md`「YouTube 单条播放页」那一行）。
+  改的理由不是审美：弹窗最宽 1024px、标题小一号、资料挤在标题下面一行，同一部片在两个入口下长得不一样。
+- **URL 是唯一真相**：点卡片 → `pushState` 到 `/youtube/<id>`；浏览器后退回墙（墙的 `?channel=` / `?mode=`
+  因为写在地址栏上，回来还是同一个视角，滚动位置由 `popstate` 里的 `state.scrollY` 还原）。
+  标题换成视频名（`document.title`），浏览器标签页一眼能认出是哪条。
+- 参数是 **YouTube 自己的 `videoId` 字符串**（`dQw4w9WgXcQ` 那种），不是 `yt_videos` 的行 id；
+  取数走 `GET /api/yt/videos/lookup?videoId=…`（见 `docs/API.md` C20），播放地址走
+  `GET /api/yt/videos/{id}/stream`。
+- 标题行的「复制链接」复制的是上面这个站内地址（不是 YouTube 的 watch 链接）。
+- **旧链接照样能用**：`/youtube?v=<id>` 一进墙就 `replace` 成 `/youtube/<id>`，
+  频道 / 筛选参数原样带过去，历史里不会留一条「一进来就跳走」的记录。
+- 「上一个 / 下一个」按**视频所属频道**的列表算（`GET /api/yt/videos?channelId=&limit=60`），
+  不跟墙上的筛选：`?mode=unseen` 会和「进页面就标已看」打架（标完再按未看查，这条根本不在结果里，
+  前后两格全灰）。同一份列表顺带就是底部那排「同频道的其它视频」。
 
 ### 14.8 起播为什么慢，后来做了什么
 
@@ -499,7 +505,7 @@ M6 上线时弹窗里放的是 `https://www.youtube-nocookie.com/embed/<id>`。�
 实际做的调整（按贡献排序）：
 
 1. **预热（最大的一项）**：`GET /api/yt/videos/{id}/stream` 拿到解析结果后，立刻在后台把
-   两条子清单和头两个分片取回来；点开弹窗、播放器开口时这些已经在本机内存里。
+   两条子清单和头两个分片取回来；点开一条进播放页、播放器开口时这些已经在本机内存里。
    内存里这份缓存按视频存（`ytstream.Warm`，15 分钟、最多 8 条 / 32 MB），
    与播放会话无关——会话负责发号，预热负责字节。
 2. **预热要比播放器早**：前端在视频墙渲染出来时就预热头三张（错开 1.5 秒发，
@@ -509,7 +515,7 @@ M6 上线时弹窗里放的是 `https://www.youtube-nocookie.com/embed/<id>`。�
    （sig/lsig 每次都不同）。原来 info 和 master 各拉一次 master，预热存下的地址和播放器
    手里的地址是两个字符串，缓存永远打不中。现在解析结果按视频缓存（`cachedYtSource`，
    跟着签名到期），全流程共用同一份 URL。
-4. **解析单飞**：悬停、弹窗、拉清单会在同一两秒里发出，没去重就并发跑三四个 yt-dlp，
+4. **解析单飞**：悬停、进播放页、拉清单会在同一两秒里发出，没去重就并发跑三四个 yt-dlp，
    互相抢 CPU 和连接。`ytstream.Manager` 现在对同一 videoID 只跑一次，其余等结果。
 5. **预热字节也单飞**：`ytstream.Warm` 原来只有「取回来的字节」这一层缓存，在途的那份看不见——
    起播时预热正在下 init 段和第一个分片，播放器自己也去要同一段，两条请求平分同一根出口带宽，
@@ -625,10 +631,10 @@ YouTube 原站点同一台机器流畅，说明链路够、也说明问题在我
 #### 上游解析不出来时，已经合好的 4K 照样能看
 
 YouTube 的 IP 级风控（见上）会让 `yt-dlp -j` 连着几分钟拿不到任何地址，于是
-`GET /api/yt/videos/{id}/stream` 直接 502、弹窗里只剩「没有可用的 HLS 清单」——
+`GET /api/yt/videos/{id}/stream` 直接 502、播放页里只剩「没有可用的 HLS 清单」——
 可盘上那份 `yt-<videoID>-2160p.mp4` 跟上游一点关系都没有。所以解析失败时改成：
 把 `muxcache` 里已经就绪的档位折成画质菜单返回（`cachedOnly: true`，`src` 为空，
-只有 `progressive` 那几档），弹窗照样原生播放，并在画面下方注明「先放已经合好的本地副本；
+只有 `progressive` 那几档），播放页照样原生播放，并在画面下方注明「先放已经合好的本地副本；
 换档要等它能解析」。实测（限流中）：`currentTime` 50 秒内 0.98 → 50.17、0 次卡顿、
 0 条媒体错误，`currentSrc` 就是 `/api/yt/videos/987/file?q=2160`。
 
@@ -953,7 +959,12 @@ hls.js 自带 `recoverMediaError()`（`detachMedia` → `attachMedia` → `start
 `playwright-cli` 的 `run-code` 在**上一个客户端进程卡死**时会一起卡住（`eval` 还能用、`run-code` 永远不返回），
 先 `ps aux | grep "playwright-cli -s"` 清掉再跑。
 
-### 14.15 弹窗右上角的关闭键不跟控制条一起收（2026-11-01 修）
+### 14.15 弹窗右上角的关闭键不跟控制条一起收（2026-11-01 修；2026-11-02 弹窗已不存在）
+
+> 下面这段记录的是弹窗时代那颗关闭键。播放改成独立页之后关闭键没有了（退回＝浏览器后退），
+> `.yt-close` / `.yt-media` 的选择器、以及给它用的 `watchControls()` / `watchFullscreen()` / `hideIdleCursor`
+> 反射一起删掉了（`Youtube.svelte` 里不再有 `<style>` 块，`VideoPlayer.svelte` 里也不再写
+> `video-skin[data-controls-visible]`）。原文保留只当结论与排查记录，**不要再照着它去读那两个属性**。
 
 用户报：「鼠标悬停在播放器上时，过了一会，鼠标和菜单栏都自动隐藏了，但是右上角的关闭按钮没有自动隐藏」。
 

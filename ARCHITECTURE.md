@@ -159,8 +159,9 @@
 | 管理页 | **统计 + 关注管理**一页（`/manage`，侧边栏第五项 / 移动端第五格）：整页只打**一个请求**（`GET /api/manage`），上面那排读数、下面的分项与关注列表都是**同一份快照**，不会这块新那块旧（参考 peach 的统计页做法）。结构是「六格读数条 → 页签 → 明细」：读数条 `grid-cols-2 sm:grid-cols-3 xl:grid-cols-6`（关注艺人 / 已收录影片 / 已落盘 / 占用空间 / 下载完成 / 同步异常），每格是名字 + 大数 + 一句脚注（数字用 `tabular-nums`）；页签是药丸分段控件（**统计 / 关注管理**），**不进地址栏**——两个页签看的是同一份数据，刷新回「统计」。统计页＝横向条形排行（`BarList.svelte`：平台、本地库、时长、最高清晰度、发布年份，条形只用白色、按本组最大值归一，**计数为 0 的档不画**）＋ 入库趋势柱状图 ＋ 下载任务读数 ＋ 热门标签药丸 ＋ 最近入库 8 条；关注管理页＝搜索框 + 排序药丸（最近同步 / 未看 / 影片数 / 名字）+ 全部同步 + 每行（40px 圆头像、名字、平台图标、`本地 N 部 · 已落盘 M（体积） · 未看 K`、上次/下次同步、错误文案、同步按钮、启用开关、取消关注）。**取消关注点第一次只把按钮换成「确认取消」**（5 秒后自动退回），不弹窗；「正在同步」读 SSE 的 `live.isSyncing(performerId)`，同步完成时 `live.feedVersion` +1 会让本页静默重取快照。**观看进度**（`resume_sec`）暂时没进统计：播放器还没上报续播位置，这一档永远全是 0，等续播做出来再加。**订阅相关的写操作全部收在这一页**（同步 / 启停 / 取消关注）；艺人主页因此变成**纯只读页**——原来那排动作按钮（立即同步、全量回填、暂停同步、取消订阅）连同「全量回填？」「取消订阅？」两个确认弹窗一起删掉了。艺人页现在是「一块面板＝头像 + 名字/平台图标/元信息/身材 + 资料行，一道发丝线，然后是简介 + 社交药丸；下面是影片列表」，元信息**只留 `N部影片 · N订阅`**（`未看`、上次/下次同步、`已暂停` / `同步出错` 药丸、同步进度条全部去掉）；「N部影片」用 `localVideoCount`（本地收录数，和下面列表一一对应）而不是平台的 `videoCount`——Pornhub 资料页根本没有影片总数，只有播放量与订阅者。**同步进度改在关注管理里就地显示**：正在同步的那一行把「上次/下次同步」换成进度条（`回填历史 · 第 3/18 页` + 1px 白色进度条 + `已入库 42 部`，页数未知时是 1/3 宽的脉冲条），读的是 SSE 的 `live.syncState(performerId)`，20 秒没新事件自动收起。 | `web/src/routes/Manage.svelte`、`web/src/components/StatTile.svelte`、`web/src/components/BarList.svelte`、`web/src/components/SubscriptionRow.svelte`、`internal/store/stats.go`、`internal/httpapi/handlers_manage.go` |
 | 滚动条 | **一根冷白发丝药丸**：颜色 `--color-line-strong`（冷白 **20%**）、槽 **10px**、滑块靠 `border:3px solid transparent` + `background-clip:content-box` 收成可见 **4px**（不加这两行会糊满整格）、全圆角 999px，轨道一点颜色都不给（页面背景就是滚动条的背景）。这是站点原来的口径，**别加粗也别提亮**——2026-11-01 试过一版参考截图的玻璃色（45%/65%/80%、12px 宽，参考图里滑块 (188,179,170) 压在 (133,115,101) 底上反解出冷白 ≈47%），用户看完要求「颜色和宽度改回原来的」，所以回到 4px + 20%。分两条路：① **文档那一根自己画**——`components/ScrollThumb.svelte` 是 `fixed` 浮层（命中区 10px 宽＝原来的槽宽，里面那根 4px 居中、两侧各留 3px），按 `window.scrollY / scrollHeight` 定长度和位置，滚动时淡入、停手 900ms 淡出、悬停或拖动时保持；`app.css` 里把 `html` 的原生条关掉（`scrollbar-width:none` + `html::-webkit-scrollbar{display:none}`，**写 `width:0` 会被忽略**，实测槽照旧占 16px）。为什么非自己画不可：经典滚动条在右边缘吃出一条槽，而**根元素的背景图铺不进那条槽**——给 `html` 挂 400px 高的纯红带、`background-size:100vw` 后截图，内容区 x≤783 全是 (255,0,0)，槽 x=784..799 仍是 `html` 的 `background-color` (2,4,8)；也就是根滚动条的底永远是一块纯色，顶部环境光铺不过去，卡片贴到右边缘时就成了一条黑竖条。② **对话框、面板里的原生条留着**——非根容器没有那个限制（同一个实验里 800px 宽的 `overflow-y:scroll` 容器在 x=784..799 仍是渐变红，它自己的背景会画到条底下），那些地方用 `::-webkit-scrollbar` 定制即可。Firefox 那套 `scrollbar-color` 必须包在 `@supports not selector(::-webkit-scrollbar)` 里，否则 Chrome 121+ 认了它就把 `::-webkit-scrollbar` 定制整体丢掉 | `web/src/components/ScrollThumb.svelte`、`web/src/app.css` |
 | 复用类 | `.btn` / `.btn-primary`（白底黑字药丸）/ `.btn-ghost` / `.btn-danger` / `.field` / `.panel` / `.chip` / `.label-meta` / `.icon-act` | `web/src/app.css` |
-| 标题行图标键 | **YouTube 弹窗和影片播放页共用一套** `icon-act`：**36×36 圆点、图标 20px**（图标/按钮 0.55，再大曲线细节糊、再小点不准），默认不铺底，hover / 键盘聚焦才浮一层 `--color-panel`（冷白 5%）并提亮到 `fg`；`data-emphasis="primary"` 给写操作（下载），`data-saved` 把星星填实提亮到纯白。两颗/四颗都挂在**标题同一行的右端**（标题 `min-w-0 flex-1`，图标串 `shrink-0`），原来标题下面那排带字药丸和侧栏整宽按钮都撤了——同一个下载动作不再写两遍。对齐靠「把图标串的高度钉成标题首行的行高」：影片页 `h-[var(--text-film-title--line-height)] lg:h-[var(--text-film-title-lg--line-height)]`（24 / 34px，直接读标题自己也用的那两个令牌，不再手写 1.375 的倍数），YouTube 弹窗 `h-[1.375rem]`（22px），36px 的键从上下均分溢出，圆心正好落在首行中线（实测 1600×950 影片页：标题首行中线 y=792.5、两颗键中线 792.5；长标题折成 2 行时仍是 792.5 / 792.5；390×844：305.9 / 305.9） | `web/src/app.css`、`web/src/routes/Youtube.svelte`、`web/src/routes/Video.svelte` |
+| 标题行图标键 | **YouTube 播放页和影片播放页共用一套** `icon-act`：**36×36 圆点、图标 20px**（图标/按钮 0.55，再大曲线细节糊、再小点不准），默认不铺底，hover / 键盘聚焦才浮一层 `--color-panel`（冷白 5%）并提亮到 `fg`；`data-emphasis="primary"` 给写操作（下载），`data-saved` 把星星填实提亮到纯白。两颗/四颗都挂在**标题同一行的右端**（标题 `min-w-0 flex-1`，图标串 `shrink-0`），原来标题下面那排带字药丸和侧栏整宽按钮都撤了——同一个下载动作不再写两遍。对齐靠「把图标串的高度钉成标题首行的行高」：影片页和 YouTube 播放页（`/youtube/:videoId`）都是 `h-[var(--text-film-title--line-height)] lg:h-[var(--text-film-title-lg--line-height)]`（24 / 34px，直接读标题自己也用的那两个令牌，不再手写 1.375 的倍数），36px 的键从上下均分溢出，圆心正好落在首行中线（实测 1600×950 影片页：标题首行中线 y=792.5、两颗键中线 792.5；长标题折成 2 行时仍是 792.5 / 792.5；390×844：305.9 / 305.9；YouTube 播放页 1600×950：四颗键串高 34、中线 792.5，标题首行中线 792.5；390×844：305.9 / 305.9） | `web/src/app.css`、`web/src/routes/YoutubeVideo.svelte`、`web/src/routes/Video.svelte` |
 | 影片页标题与信息列 | 标题走 `--text-film-title`（18 / `lg` 25px）——**B 站标题动辄 50 字**，28px 排下来两行就压掉半屏；右边那列资料 **17rem → 14rem**：全站最短的五条「标签 — 值」，17rem 让每行标签和值之间空出一百多像素，收窄后标签贴着值、标题栏还多出 48px，右边缘仍落在 1568（＝播放器右边缘），与图标串（右端 1320）之间照旧 24px。**首行资料和标题首行同一条上沿**：`mt-4` / `lg:pt-1` 撤掉（`lg:mt-0` / `lg:pt-0`），原来整列被压低 20px、跟标题凭空错开半行；实测 1600×950 资料首行文字中线 793.5 vs 标题首行中线 792.5（差 1px = 行内 `py-2` 的整数取整）。**播放快捷键提示全撤**（信息列底部那一段、解析失败浮层那一行）：空格 / ←→ / ↑↓ / F / M 是播放器皮肤本来就有的习惯，写成文字只是占版面；页面上也不再画「返回关注 / 返回 B 站」（见 §13.6） | `web/src/routes/Video.svelte`、`web/src/app.css` |
+| YouTube 单条播放页 | **`/youtube/:videoId` 是一页，不再是墙上的弹窗**（2026-11-02 改）：和 `/video/:id` 逐项同构——整页 16:9 播放器 → 标题行（`--text-film-title` 18/25px）右端四颗 `icon-act`（下载 / 收藏 / 复制链接 / 在 YouTube 打开）→ 频道 + 相对时间一行 → 简介（`line-clamp-[10]`，YouTube 的简介能到几千字）→ 右侧 **14rem** 资料列（时长 / 清晰度 / 观看 / 发布 / 频道，`mt-4 divide-y divide-line lg:mt-0`，与标题首行同一条上沿）→ 底部「同频道的其它视频」8 张 `YtCard`。弹窗里那套（1024px 宽的画面、`text-title` 16px 标题、`hideIdleCursor=false`、右上角关闭键、`Esc` 关闭、`?v=` 开关）全部撤掉：它和 `/video/:id` 放的是同一部片，却长得不一样。参数是 YouTube 自己的 `videoId` 字符串（不是 `yt_videos` 的行 id），取数走 `GET /api/yt/videos/lookup?videoId=`，播放地址走 `GET /api/yt/videos/{id}/stream`。旧链接 `/youtube?v=<id>` 进页面即 `replace` 成新地址（频道 / 筛选参数原样带过去）。实测 1600×950：标题 25px/34px、四颗键串高 34 中线 792.5 = 标题首行中线 792.5；资料列 x=1344 w=224 右边缘 1568（＝播放器右边缘），首行上沿 775.5 与标题首行共线；390×844：标题 18px/24px 四行 96px、中线 305.9 / 305.9，资料列落到标题下面 `mt-4` | `web/src/routes/YoutubeVideo.svelte`、`web/src/routes/Youtube.svelte`、`web/src/lib/router.svelte.ts`、`web/src/App.svelte` |
 
 约定：交互元素一律药丸，媒体与容器一律 12px 圆角；不用边框区分层级，只靠白 5%/9% 的底与间距（悬浮侧边栏也一样：不描边，靠 12px 圆角 + 四边空隙 + 毛玻璃从画布里"浮"起来）；流式页面里的**艺人页**标题由外壳 `TopBar` 渲染（**关注页没有标题**，顶部直接是订阅艺人头像条），**发现 / 下载 / 管理三页是居中单栏**（`mx-auto` + `max-w-2xl / 5xl`），标题连同内容一起放进这一栏里，所以外壳标题留空（**设置不是页面，是弹窗**，见 §7.7）；详情页（影片/艺人）也不渲染外壳标题，改由页面自己带标题；**影片播放页和艺人主页顶部都不再有「返回」那一行**——内容（播放器 / 艺人信息）直接顶到内容区上沿，回退靠浏览器后退、侧边栏或移动端底部 tab（**播放页现在一颗「返回」都没有**：点进来的那一页记在 `?back=` 里，只用来决定「上一个 / 下一个」按哪份列表算，见 §13.6）。
 
@@ -392,15 +393,17 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
   77px 的药丸压在画面下沿，比画面本身还抢眼。全屏不是电视遥控器场景，所以封顶 `1.1`：同一条
   `style[data-myporn-skin]` 里写 `.media-skin:fullscreen{--media-scale:1.1}`，实测三种屏宽都落到
   48px / 按钮 40 / 槽 35。**不用 `!important`**：皮肤那几条在 `@layer base` 里，未分层的样式一律压过分层的。
-- **控制条显隐要能从光 DOM 读到**：皮肤把「控制条这会儿显示着没有」写成 shadow root 里 `.media-container` 上的
-  `data-controls-visible`（它自己拿这个属性隐藏光标）。外面的页面读不到 shadow 里的属性，于是 YouTube 弹窗右上角
-  那颗关闭键只能按 `.yt-media:hover` 显隐——鼠标停在画面上不动、控制条几秒后自己收了，关闭键还亮着（用户报的）。
-  现在 `watchControls()` 用 `MutationObserver`（只 filter 这一个属性）把可见态**反射到宿主**：
-  `video-skin[data-controls-visible]`，页面写 `:global(.yt-media:has(video-skin[data-controls-visible])) .yt-close`
-  就跟控制条同进同出；暂停时皮肤不藏控制条，关闭键也就一直在（实测暂停 8 秒仍是 `ccVisible=true`、
-  `closeOpacity=1`）。**那条选择器必须包在 `:global()` 里**：`video-skin` 在 `VideoPlayer` 里，页面组件的模板里
-  看不见它，svelte 会当成「没用到的选择器」直接删掉（实测构建产物里那条确实消失了）。没有播放器时
-  （解析中 / 失败 / 兜底 iframe）退回 `.yt-media:not(:has(video-skin)):hover`。
+- **控制条显隐曾用「反射到光 DOM」解决，2026-11-02 随弹窗一起删掉**：皮肤把「控制条这会儿显示着没有」写成
+  shadow root 里 `.media-container` 上的 `data-controls-visible`，光 DOM 读不到。弹窗时代的关闭键因此只能按
+  `.yt-media:hover` 显隐——鼠标停在画面上不动、控制条几秒后自己收了，关闭键还亮着（用户报的）。
+  当时的解法是 `watchControls()`（一个只 filter 这一个属性的 `MutationObserver`）把可见态反射成
+  `video-skin[data-controls-visible]`，页面用 `:global(.yt-media:has(video-skin[data-controls-visible])) .yt-close`
+  跟控制条同进同出；同一个 prop `hideIdleCursor` 还按掉了皮肤的 `cursor:none`（弹窗不是影院，指针一没影
+  就找不着北）。**YouTube 播放改成独立页（`/youtube/:videoId`）之后这两个消费者都不存在了**——关闭键没有了，
+  页面上也没有别的浮层要看控制条状态——所以 `watchControls` / `watchFullscreen` / `hideIdleCursor`
+  三样一起删了（Git 历史里有原样代码）。将来真要在页内做浮层再按这条重写：`MutationObserver` + `:global()`，
+  `:global()` 那一条不能省（`video-skin` 在 `VideoPlayer` 内部，页面组件模板里看不见它，svelte 会把整条
+  选择器当成「没用到」从产物里删掉，实测构建产物里那条确实消失了）。
 - **进度条的「已缓冲」段必须自己调色**：默认皮肤把轨槽 `.media-slider-track:before` 和已缓冲
   `.media-slider-buffer:before` 画成**同一个** `color-mix(in oklab, currentcolor 20%, transparent)`，
   两层又完全重合、圆角和高度都一样——「已缓冲」跟空槽同色，等于不存在（用户报的「当前播放位置后面基本没有
@@ -795,7 +798,7 @@ bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源�
 内存里的选中态就没了——「翻了三屏、选了某位 UP 主，点开一部再退回来，全没了」。
 
 - 写：`patchQuery()`（`lib/router.svelte.ts`）只改指定参数并**默认 replace**，所以换筛选条件不堆历史；
-  点影片才是 push。YouTube 的播放弹窗 `?v=` 也走它，因此打开影片不会把 `channel=` 甩掉。
+  点影片才是 push（`/video/:id`、`/youtube/:videoId` 都算「换页」）。
 - 读：组件初始化时读一次；另有 `$effect` 盯着 `router.search`，后退/前进/贴链接进来也能跟上
   （值相等就跳过，所以「点胶囊 → 改地址栏 → effect 再跑一次」不会打转）。
 - 卡片链接带 `?back=<编码后的整条路径+查询>`，`/video/:id` 据此决定「上一个 / 下一个」按哪份列表算
@@ -804,9 +807,11 @@ bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源�
   侧边栏 / 移动端 tab / 浏览器后退本来就在，再写一遍只是把导航写两遍，还占掉那半行；
   「相关影片」的卡片不带这个参数（否则会链回自己）。
 - 播放器的「上一个 / 下一个」同样认来源，只是两条路各走各的：`/video/:id` 按 `?back=` 换成
-  `/api/videos/{id}/adjacent` 的筛选条件（§7.4.2）；**YouTube 弹窗不离开这一页**（`?v=` 只是换个参数），
-  所以直接在当前墙上已经加载出来的那份列表里前后挪一格，不额外问后端——用户看见的顺序就是它。
-  深链接进来的片子可能不在墙上（`findIndex` 为 -1），那时两个按钮都按不动，没有上下文就不猜。
+  `/api/videos/{id}/adjacent` 的筛选条件（§7.4.2）；`/youtube/:videoId` **不看来源，只按视频所属频道**
+  （`/api/yt/videos?channelId=<行 id>&limit=60`，同一份列表顺带就是页面底部那排「同频道的其它视频」）。
+  为什么不跟墙上的筛选走：`?mode=unseen` 会和「进页面就标已看」打架——标完再按未看查，
+  这一条根本不在结果里，前后两格全灰；而墙的筛选本来就写在地址栏上，后退自己还原得回来。
+  片子不在前 60 条里时（`findIndex` 为 -1）两个按钮按不动，没有上下文就不猜。
 
 ### 13.7 滚动位置：换页回顶，「返回」回原位
 
@@ -824,9 +829,10 @@ bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源�
   2026-11-02 撤掉之后，退回原位实际只剩浏览器后退 / 前进这一条路（走 `popstate` 里的 `state.scrollY`，
   与 `data-restore` 无关），机制留着给以后页内的返回入口。改筛选胶囊（`patchQuery` 不带 `keepScroll`）
   也仍然回顶——换了一份列表还停在中间没有意义。
-- **只改查询串不许动滚动**：YouTube 的播放弹窗就是 `?v=<id>`（同一页上的浮层），
-  `patchQuery(..., { keepScroll: true })` 之外的地方一律会把页面滚回顶部，
-  于是「开一次弹窗滚一次顶，关掉人就停在顶部」。
+- **只改查询串不许动滚动**：墙上换筛选胶囊（`?up=` / `?channel=` / `?mode=`）是同一页只换查询串，
+  `patchQuery(..., { keepScroll: true })`；别处一律会把页面滚回顶部（换一份列表还停在中间没有意义）。
+  这条机制原来是给 YouTube 播放弹窗的 `?v=` 用的，2026-11-02 播放搬成独立页之后，
+  `?v=` 只剩旧链接重定向，机制留着给别的页内筛选。
 - **一次 `scrollTo` 不够，要追**：退回时列表是重建的，只拉了第一页，文档高度不到目标位置，
   `scrollTo` 会被夹到当前底部。`restoreScroll()` 每帧滚到「min(目标, 当前能到的最大)」，
   列表补上一页就继续追，直到到位或长不高（2.5 秒没有进展 / 12 秒兜底）；
@@ -847,7 +853,7 @@ bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源�
 | 关注 / B 站 → 影片 → 浏览器后退 | 2000 → **0** | 2000 → **2000** |
 | 上一步之后再前进 / 再后退 | 0 → 0 | 2000 → 0（影片页）→ **2000**（列表页） |
 | 影片 → 点「相关影片」里的卡片（普通链接） | 回顶 | 回顶（不变，实测 530 → 0） |
-| YouTube 点卡片开弹窗 / `Esc` 关 | 1600 → **0** → 0 | 1600 → **1600** → 1600 |
+| YouTube 点卡片进 `/youtube/:videoId` → 浏览器后退 | 1600 → **0** → 0 | 1600 → **0**（播放页）→ **1600**（墙，`scrollHeight` 4938） |
 | 关注滚到 4900 再退回（要补 4 页） | **0** | **4900**（`scrollHeight` 追到 10498） |
 | 换筛选胶囊（关注流 / B 站 / YouTube） | 回顶 | 回顶（不变） |
 
