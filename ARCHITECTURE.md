@@ -332,6 +332,31 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
   （`.media-buffering-indicator`，带自己的转环）也多余：跟我们那个环叠在一起、粗细和转速还不一样，
   所以往 shadow root 里塞一条 `style[data-myporn-skin]` 把它 `display: none` 掉
   （和 `playerBar` 注入按钮同一招；非分层样式压得住它的 `@layer`）。两者吃的是同一批事件（`waiting` / `seeking`），关掉不丢状态。
+- **卡住 / 进度条归 0 不许「救回来却从头放」**（2026-11-01 修，用户报的「YouTube 播放有时候会卡住，然后进度条就会归 0」）：
+  失败自愈原来只有一条路——把片源拆了重装。重装时 `MediaSource` 是新的，元素的 `currentTime` 一定回 0，
+  而重装又没告诉 hls.js「从第几秒开始拉」，于是它从 0 号分片开始拉；等我们把进度拨回原位时缓冲里只有开头那几秒，
+  拨不过去，进度条就停在 0。四条一起改：
+  - **重装必须带起点**：`applySource()` 接收 `startAt`，`hlsEngineConfig()` 在 `startAt > 1` 时把
+    `startPosition` 塞进 `hlsJs` 配置（和 `maxBufferLength/Szie/backBufferLength` 同一份对象）。实测拆一次管线
+    从 0 拉到 `[[0,6],[30,36]]` 两段，带上起点后缓冲直接长在原位。
+  - **续播点不能被提前吃掉**：`pendingSeek` 是给 store 订阅里那段「片源一就绪就 seek」用的，而自愈等待窗口里
+    `canPlay/duration` 还是**上一条管线**的，那段代码会抢先 seek 一次并把 `pendingSeek` 清零，
+    等新片源真装上时已经没有位置可去（日志实测 `recover at=12.187` → `apply resumeFrom=0`）。现在加一道
+    `appliedSrc !== '' && Date.now() >= holdUntil` 的闸，同一次自愈变成 `recover at=12.187 → apply resumeFrom=12.187`、
+    `recover at=18.477 → apply resumeFrom=18.477`。
+  - **先原地自愈，拆管线是兜底**：`recoverInPlace()` 调 hls.js 自己的 `recoverMediaError()`
+    （`detachMedia` → `attachMedia` → `startLoad(currentTime)`），元素和进度都不动——实测调用后 `video.error` 变 null、
+    `currentTime` 5.94 → 5.03，`play()` 一次就接着放。第一个错误走这条路，第二次起才拆片源重装。
+    重装期间 `video-skin` 挂 `data-resuming="true"`，`style[data-myporn-skin]` 里一条
+    `:host([data-resuming='true']) media-controls-content{visibility:hidden}` 把控制条收起来：
+    那几秒元素的 `currentTime` 是 0，让进度条显示出来就是用户说的「归 0」。
+  - **看门狗只看元素，不看 `engine.currentLevel`**：hls.js 自动选档时 `currentLevel` **一直是 -1**
+    （实测一边正常推进 7.2→11.2 s、`readyState=4`，一边 `currentLevel=-1` 不变），拿它当「没在拉流」会每 4 秒
+    把健康的管线掐一次——第一版看门狗就是这么帮倒忙的。现在判据是元素：`(!paused || wantPlay) && readyState < 2`
+    或「有数据但 6 秒没推进」，连中 3 拍（1 秒一拍）且距上次推它 ≥4 秒才 `engine.startLoad(at)` + `kickPlay()`。
+    **`video.seeking` 不能当「正常」放过去**：拖到没缓冲的地方卡住时 `seeking` 会一直是 true（实测 `t=200`、
+    `readyState=1`、16 秒不动，看门狗一声不响）；去掉这条豁免后同样的卡死 5 秒被推起来（200.0 → 200.4，`readyState` 回 4，
+    之后一路 201→208）。
 - **进度条的「已缓冲」段必须自己调色**：默认皮肤把轨槽 `.media-slider-track:before` 和已缓冲
   `.media-slider-buffer:before` 画成**同一个** `color-mix(in oklab, currentcolor 20%, transparent)`，
   两层又完全重合、圆角和高度都一样——「已缓冲」跟空槽同色，等于不存在（用户报的「当前播放位置后面基本没有

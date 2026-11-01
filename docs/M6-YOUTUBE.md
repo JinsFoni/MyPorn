@@ -842,3 +842,75 @@ yt-dlp 默认并发问 tv samsung + visionos 再把结果并起来。实测 **vi
 
 剩下的两三秒是结构性的：网页 + 播放器 API + 播放器 JS + deno。真要再快，只能是「提前问」
 （视频墙预热、悬停预热已经这么做了）或者「拿账号/PO token 换掉 JS 求解」，不是继续调参。
+
+### 14.14 「卡住，然后进度条归 0」：自愈把管线重装从 0 开始拉了（2026-11-01 修）
+
+用户报的现象：站内播放放到一半卡住，进度条掉回 0，再等也不动（有时候过一会儿从头开始放）。
+复现靠 `SdVI6xIwuqk`（VP9 2100p + 1400p 音轨，290 s）：无头 Chromium 每次都能在 15–35 s 之间甩出一个
+`PIPELINE_ERROR_DECODE` / `bufferAppendError`，正好是「自愈」这条路的入口。
+
+原来自愈只有一招：清 `source`、等一会儿、重新装。量下来问题在三个地方，逐个说。
+
+#### 一、重装后的管线从第 0 秒开始拉
+
+`attach()` 重装片源时没告诉 hls.js 起点，`HlsJsOnlyAdapterCore` 建的 `Hls` 又是 `autoStartLoad: false`，
+`startLoad()` 不带位置就按 0 起。日志实测那一轮：buffer 变成 `[[0,6],[30,36]]` 两段互不相连，
+我们把 `currentTime` 设回 33.3，缓冲里没有 33.3 的东西，`readyState` 卡在 0、`paused` 一直是 true —— 55 秒没动静。
+
+改：`applySource(el, src, startAt)` 一路把位置传到 `hlsEngineConfig()`，`startAt > 1` 时给 `hlsJs` 加
+`startPosition`（和 `maxBufferLength:60 / maxBufferSize:250e6 / backBufferLength:30` 同一份配置）。
+配置一变 hls.js 会重建实例（`sameEngine:false`，实测），也就是说起点是跟着实例一起生效的。
+
+#### 二、续播点在管线装好之前就被消费掉了
+
+`pendingSeek` 由 store 订阅里那段「片源一就绪就 seek」消费。自愈的等待窗口里 `canPlay`/`duration` 还是**上一条管线**
+留下的值，于是这段代码抢先 seek 了一次并把 `pendingSeek` 清零，等新片源真装上时已经没有位置可去。日志对照：
+
+| | 日志 |
+|---|---|
+| 改前 | `[dbg] recover at= 12.187499` → `[dbg] apply resumeFrom= 0` |
+| 改后 | `[dbg] recover at= 12.187499` → `[dbg] apply resumeFrom= 12.187499` |
+
+闸门是 `appliedSrc !== '' && Date.now() >= holdUntil`（自愈时 `appliedSrc` 清空、`holdUntil` 推到等待结束）。
+
+#### 三、看门狗第一版拿 `engine.currentLevel` 当判据，反倒在掐好管线
+
+「卡住但没报错」这一类（hls.js 的 `StreamController` 停在 STOPPED，`currentLevel = -1`、`readyState = 0`、
+`paused = false`、时间不动）需要一个定时兜底。第一版判据是 `currentLevel === -1 && levels.length > 0`，结果实测
+**自动选档时 `currentLevel` 一直是 -1**：一边正常推进 7.2 → 8.2 → 9.2 → 10.2 → 11.2 s、`readyState=4`，
+一边 `noLevel= true` 一直亮着，于是每 4 秒冷却一到就 `startLoad()` 一次，把在飞的管线掐了自己重来 —— 进度条就这么跳的。
+现在判据只看元素：`(!paused || wantPlay) && readyState < 2`（在播却没数据）或「`readyState >= 3` 但 6 秒没推进」，
+连中 3 拍（1 秒一拍）、距上次推它 ≥4 秒才动手。
+
+还有一条豁免是错的：`video.seeking` 时跳过看门狗。拖到没缓冲的地方卡住时 `seeking` 会一直是 true —— 实测
+`pauseBuffering()` + `currentTime = 200`，`t=200 / readyState=1 / paused=false` 整整 16 秒纹丝不动，看门狗一声不响。
+去掉这条豁免后同一场景 5 秒被推起来：`t+0..t+4` 停在 200.0，`t+5` 变 200.4、`readyState` 回 4，之后 201→208 一路正常。
+
+#### 四、第一个错误先原地自愈，拆管线是兜底
+
+hls.js 自带 `recoverMediaError()`（`detachMedia` → `attachMedia` → `startLoad(currentTime)`），元素不换、
+`currentTime` 不丢——实测调用后 `video.error` 变 null、`currentTime` 5.94 → 5.03、buffer 重新长起来，
+当时「没救回来」的真实原因只是没人再 `play()` 一次（元素被之前的失败留在 paused）。所以现在的顺序是：
+第一个错误 → `recoverInPlace()` + `wantPlay` + 盯住原位；第二个错误起才拆片源重装（延迟 2500 / 8000 ms）。
+
+#### 五、重装那几秒不许把 0 显示出来
+
+拆了重装，元素的 `currentTime` 必然是 0，控制条照着显示就是「进度条归 0」。重装/原地自愈期间 `video-skin` 挂
+`data-resuming="true"`，`style[data-myporn-skin]` 里加一条
+`:host([data-resuming='true']) media-controls-content{visibility:hidden}` 把控制条收起来（加载态的糊底图 + 转环本来就在，
+键盘快捷键挂在 player 上，不受影响）。同时 `onTime` 在目标位置没到之前不往外报，页面的 `lastPos` 也就不会被 0 覆盖
+——否则下一次重试会从 0 起。
+
+#### 实测回归（2026-11-01，`x87vdLgzq0I` / 1080p H.264）
+
+| 场景 | 结果 |
+|---|---|
+| 起播 → 16 s 正常推进 | 0.9 → 14.0 s 连续，`readyState=4`，无 `resuming` 闪烁 |
+| 清晰度 1080p → 720p（30.3 s 处） | `t=30.2 / rs=0 / resuming=true` → 1 秒后 `rs=4 / resuming=false`，30.4 → 36.4 连续，**位置没丢、没有归 0** |
+| 人为冻住拉流（`pauseBuffering()` + 拖到 200 s） | 冻 5 秒后被看门狗推起来：200.0 → 200.4，之后 201 → 208 正常 |
+| 拆管线重装（旧构建上的解码错误） | `recover at=12.187 → apply resumeFrom=12.187`、`recover at=18.477 → apply resumeFrom=18.477`，都在原位接上 |
+
+顺带记两个排查坑：**换构建后必须先 unregister SW + 清 caches**，否则页面一直在跑旧 chunk
+（这次测出的第一版看门狗「没生效」就是旧 chunk 干的：dist 里是 `VideoPlayer-BF1lATrS.js`，页面跑的是 `BJgWMylf`）；
+`playwright-cli` 的 `run-code` 在**上一个客户端进程卡死**时会一起卡住（`eval` 还能用、`run-code` 永远不返回），
+先 `ps aux | grep "playwright-cli -s"` 清掉再跑。

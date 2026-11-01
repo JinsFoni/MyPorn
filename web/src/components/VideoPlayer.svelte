@@ -33,7 +33,17 @@
   import { fade } from 'svelte/transition';
 
   /** hlsjs-video 的 `source` 属性（原生 <video> 没有；按需断言） */
+  /** hls.js 实例上这里用到的那几项（`@videojs/hlsjs-video` 会把 engine 原样挂在元素上） */
+  interface HlsEngineLike {
+    /** 从 `at` 那一秒开始拉流（`-1` = 让引擎自己挑）：`StreamController` 停在 STOPPED 时靠它推起来 */
+    startLoad?: (at: number) => void;
+    /** hls.js 自带的原地自愈：换一个 MediaSource 再挂回同一个元素，`currentTime` 不丢 */
+    recoverMediaError?: () => void;
+  }
+
   interface EngineSourceHost extends HTMLElement {
+    /** 适配器上的 hls.js 实例（实测：`document.querySelector('hlsjs-video').engine` 拿得到） */
+    engine?: HlsEngineLike | null;
     source: {
       src: string;
       type: string;
@@ -167,7 +177,14 @@
   let pendingPlay = false;
   /** 首帧起播还没成功：HLS 引擎要等清单解析完才能 play，所以先挂个待播标记 */
   let wantPlay = false;
-  let wantPlayTries = 0;
+  /**
+   * 「该播」的重试截止时刻（0 = 还没开始算）。
+   *
+   * 原来按次数封顶（40 次 × 120ms ≈ 5 秒），可自愈重装一条 4K 管线实测要 5~8 秒才
+   * `canplay`，预算用尽后再没人调 play()——播放器就躺在那儿一动不动，也不报错。
+   */
+  let kickDeadline = 0;
+  const KICK_BUDGET = 20000;
   let kickTimer: number | undefined;
   let appliedSrc = '';
   let attempts = 0;
@@ -189,11 +206,43 @@
   let mediaRecoveries = 0;
   let recoverResumeAt = -1;
   /**
+   * 这一轮自愈还没接上（起播重试用尽就算失败，交给页面弹错）。
+   * 没有它的话，救不回来的表现是「画面停住、加载环也收了、什么都不说」——2026-11-01 实测就是这样。
+   */
+  let recovering = false;
+  /**
    * 自愈后要回到的位置。光设一次 `currentTime` 不保险：刚重装的管线还没缓冲到那里时，
-   * 浏览器会把这次 seek 丢掉，于是「救回来」变成「从头再放一遍」（实测就是这样丢的进度）。
-   * 所以盯着它，直到真的落在目标附近，或者试满 6 次放弃。
+   * 浏览器会把这次 seek 丢掉或夹到 0 附近那一小截缓冲上，于是「救回来」变成「从头再放一遍」
+   * （实测：重装后 5 秒内只有 [0,6] 这段可 seek，此时把 currentTime 拨到 33 会被夹回去）。
+   * 所以每 1.2 秒盯着它重来一次，直到真的落在目标附近，最多 15 次。
    */
   let seekWatch: { target: number; tries: number; last: number } | null = null;
+  let seekTimer: number | undefined;
+  /** 正在把进度拨回原位：这段时间元素的 currentTime 是 0，控制条别把它显示出来（见 patchSkin） */
+  let resuming = $state(false);
+  /**
+   * 自愈等待窗口的截止时刻：在这之前不许重新装片源。
+   *
+   * 光把 source 摘掉、再 setTimeout 装回去是不够的——store 每 250ms 就会通知一次，
+   * 每次通知都会走 `attach()`，而那时 `appliedSrc` 正好被清空了，于是「立刻重装」抢先发生，
+   * 真正的延迟重装再来一遍：同一条管线被建了两次，第二次把第一次刚缓冲好的那段连同
+   * 回位 seek 一起清掉。实测（`SdVI6xIwuqk` 2100p）第 3 次自愈就是这样把播放器丢在
+   * 「readyState=1、停在 8.36 秒、不播也不报错」的状态里的。
+   */
+  let holdUntil = 0;
+  /** 「卡住」看门狗的心跳（见 stallTick） */
+  let stallTimer: number | undefined;
+  let stallTicks = 0;
+  let lastNudgeAt = 0;
+  /**
+   * 上一次「确实在播」时的位置。
+   *
+   * 解码器挂掉时元素有可能在报错前就把 `currentTime` 抹成 0（用户看到的就是「进度条归 0」），
+   * 这时候按 `s.currentTime` 自愈等于从头开始。所以留一份最后已知的播放位置兜底。
+   */
+  let lastPlayHead = 0;
+  /** 上一帧真的在推进的时刻（timeupdate 里刷），「卡住」看门狗拿它判断时间是不是停了 */
+  let lastProgressAt = 0;
   let startedSent = false;
   /** 上次的音量/静音：等媒体就绪后再套用一次，避免被播放器默认值（满音量）覆盖 */
   const savedVolume = readVolume();
@@ -325,7 +374,15 @@
     backBufferLength: 30,
   };
 
-  function applySource(el: HTMLElement, next: { src: string; type: string }): void {
+  /**
+   * `startAt > 1` 时给新引擎一个 `startPosition`，让它**直接从这一秒拉流**。
+   *
+   * 不给的后果实测（本机无头 Chromium、2100p VP9、`SdVI6xIwuqk`）：解码器在 33 秒挂掉后自愈，
+   * 新引擎按 `currentTime = 0` 起，于是把第 0~4 段又下了一遍，之后才靠一次 seek 拨回去；
+   * 那次 seek 落在「只有 0~6 秒可 seek」的窗口里就被夹回 0——用户看到的就是
+   * 「卡一下，进度条归 0，从头再放」。引擎自己从目标点起，这个窗口就不存在了。
+   */
+  function applySource(el: HTMLElement, next: { src: string; type: string }, startAt = 0): void {
     if (el instanceof HTMLVideoElement) {
       el.src = next.src;
       return;
@@ -335,13 +392,14 @@
       src: next.src,
       type: next.type,
       capRenditionToPlayerSize: false,
-      engine: hlsEngineConfig(next.type),
+      engine: hlsEngineConfig(next.type, startAt),
     };
   }
 
   /** 只有 HLS 才带 hls.js 配置；mp4 直链走原生解码，给了也没人看。 */
-  function hlsEngineConfig(type: string) {
-    return type.includes('mpegurl') ? { hlsJs: HLS_BUFFER_CONFIG } : undefined;
+  function hlsEngineConfig(type: string, startAt = 0) {
+    if (!type.includes('mpegurl')) return undefined;
+    return { hlsJs: startAt > 1 ? { ...HLS_BUFFER_CONFIG, startPosition: startAt } : HLS_BUFFER_CONFIG };
   }
 
   /**
@@ -358,9 +416,9 @@
     pendingSeek = Number.isFinite(at) && at > 1 ? at : 0;
     pendingPlay = true;
     wantPlay = true;
-    wantPlayTries = 0;
+    kickDeadline = 0;
+    recovering = true;
     recoverResumeAt = pendingSeek;
-    seekWatch = pendingSeek > 0 ? { target: pendingSeek, tries: 0, last: 0 } : null;
     sawError = null;
     appliedSrc = '';
     beginBuffering();
@@ -373,17 +431,108 @@
     // 给引擎一点时间把上一条 SourceBuffer / hls 实例拆干净；越往后等越久，
     // 因为「立刻重装」实测会在解码器还没复位时又撞一次同样的错
     const wait = recoveryDelay(mediaRecoveries);
-    const reattach = () => {
-      appliedSrc = '';
-      attach();
-    };
-    if (wait > 0) window.setTimeout(reattach, wait);
-    else requestAnimationFrame(reattach);
+    holdUntil = Date.now() + wait;
+    // 等窗口一过再装。注意这里**不能**再清一次 appliedSrc：store 每 250ms 通知一次，
+    // 通知里那次 attach() 往往已经先把片源装上了，这里再清一次就成了「同一条管线建两遍」。
+    window.setTimeout(
+      () => {
+        holdUntil = 0;
+        attach();
+      },
+      wait + 16,
+    );
+  }
+
+  /**
+   * 第一线自愈：让 hls.js 自己 reconstruction（`detachMedia` → `attachMedia` → `startLoad(currentTime)`）。
+   *
+   * 为什么不直接拆片源：拆了就要重装，元素 `currentTime` 归 0，进度条先掉到 0 再跳回来——
+   * 那正是用户报的「卡住然后进度条归 0」。原地自愈不动元素，实测（`SdVI6xIwuqk` 2100p）
+   * 调用后 `video.error` 变 null、`currentTime` 留在原位（5.94 → 5.03），buffer 重新长起来，
+   * 缺的只是没人再 `play()` 一次——所以这里补上 `wantPlay`。
+   */
+  function recoverInPlace(): boolean {
+    const eng = (mediaEl as EngineSourceHost | null)?.engine;
+    if (typeof eng?.recoverMediaError !== 'function') return false;
+    try {
+      eng.recoverMediaError();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 自愈/换档之后的「回到原位」看门狗。
+   *
+   * 为什么不靠一次 seek：新管线的 seekable 一开始是空的，浏览器要么丢掉这次 seek、
+   * 要么把它夹到已经缓冲的那一小截尾巴上（实测重装后 5 秒里只有 [0,6]，把 currentTime
+   * 拨到 33 会被夹回 6）。以前这个看门狗挂在 `timeupdate` 上——可停住的播放器根本不发
+   * timeupdate，于是「卡住」之后一次重试都没有。改成自己的定时器，1.2 秒一轮、最多 15 轮。
+   */
+  function startSeekWatch(target: number): void {
+    seekWatch = target > 1 ? { target, tries: 0, last: 0 } : null;
+    if (seekWatch === null) return;
+    resuming = true;
+    if (seekTimer !== undefined) window.clearTimeout(seekTimer);
+    // 第一轮立刻跑：新管线一装上就把进度拨到原位，进度条少停在 0 一秒是一秒
+    seekTimer = window.setTimeout(runSeekWatch, 0);
+  }
+
+  function stopSeekWatch(): void {
+    seekWatch = null;
+    resuming = false;
+    if (seekTimer !== undefined) {
+      window.clearTimeout(seekTimer);
+      seekTimer = undefined;
+    }
+  }
+
+  function runSeekWatch(): void {
+    seekTimer = undefined;
+    const watch = seekWatch;
+    if (watch === null) return;
+    const video = boundVideo;
+    // 已经落在目标附近：位置守住了，看门狗收工。
+    // 但「自愈成功」要等真的重新播起来（见 mediaTicking 的 20 秒判定）：
+    // 位置到位、画面却一直不动也是实测见过的，那种情况得让 kickPlay 的预算兜底报错。
+    if (video !== null && Math.abs(video.currentTime - watch.target) <= 1.5) {
+      seekWatch = null;
+      resuming = false;
+      if (wantPlay) kickPlay();
+      return;
+    }
+    if (watch.tries >= 15) {
+      seekWatch = null;
+      resuming = false;
+      // 15 轮（约 18 秒）都拨不回原位：别再让它闷头从 0 放下去，交给页面弹错让人选重试
+      if (recovering) {
+        recovering = false;
+        onFailed?.('播放中断后没能接上，请重试。');
+      }
+      return;
+    }
+    watch.tries += 1;
+    watch.last = Date.now();
+    // 第一轮让引擎自己从目标点起（它才是决定「从哪段开始拉」的那个），
+    // 之后只拨 currentTime：每轮都 startLoad 会不停把在飞的分片掐掉。
+    const eng = (mediaEl as { engine?: { startLoad?: (at: number) => void } } | null)?.engine;
+    if (watch.tries === 1) eng?.startLoad?.(watch.target);
+    if (video !== null) {
+      try {
+        video.currentTime = watch.target;
+      } catch {
+        /* 目标点还不可 seek：下一轮再来 */
+      }
+    }
+    seekTimer = window.setTimeout(runSeekWatch, 1200);
   }
 
   /** 第 n 次自愈前的等待：第 1 次立刻，之后 2.5 s、8 s（实测解码器复位需要时间） */
   function recoveryDelay(n: number): number {
-    if (n <= 1) return 0;
+    // 第一次也要等一拍：实测（`SdVI6xIwuqk` 2100p）立刻重装会在解码器还没复位时
+    // 一秒内又撞同一条 bufferAppendError，把宝贵的自愈额度白烧掉一次；600ms 就够它复位。
+    if (n <= 1) return 600;
     if (n === 2) return 2500;
     return 8000;
   }
@@ -454,6 +603,9 @@
     style.textContent = [
       '.media-buffering-indicator{display:none !important}',
       '.media-slider-buffer:before{background-color:color-mix(in oklab,currentcolor 62%,transparent) !important}',
+      // 恢复进度的那一两秒里元素的 currentTime 是 0：控制条这时候显示出来就是「进度条归 0」，
+      // 干脆跟加载态一起收起来（键盘快捷键照旧可用，热键挂在 player 上、不在这条控制条里）
+      ":host([data-resuming='true']) media-controls-content{visibility:hidden !important}",
     ].join('\n');
     root.append(style);
   }
@@ -527,9 +679,12 @@
     // 换了片子就是新的一条：上一部「已经播完」的状态不能带过来，否则新的这一部
     // 一开播就被当成播完、直接跳走
     endedSent = false;
-    // 换了片子就是新的一条管线：自愈额度重新算
+    // 换了片子就是新的一条管线：自愈额度、自愈状态、回位看门狗全部重来
     mediaRecoveries = 0;
     recoverResumeAt = -1;
+    recovering = false;
+    lastPlayHead = 0;
+    stopSeekWatch();
   });
 
   /**
@@ -559,36 +714,24 @@
       busyTimer = undefined;
     }
     buffering = false;
+    // 自愈之后「该播」不能因为一次 play() 被拒就丢了：管线一就绪就再催一次
+    if (wantPlay) kickPlay();
   }
 
   /** 兜底：时间在走就说明数据是通的，别让加载态一直挂着（个别引擎只发 waiting 不发 playing） */
   function mediaTicking(): void {
     captureFrame();
+    // 记下最后已知的播放位置（见 lastPlayHead 的注释）
+    if (boundVideo !== null && !boundVideo.paused && boundVideo.currentTime > 0.5) {
+      lastPlayHead = boundVideo.currentTime;
+      lastProgressAt = Date.now();
+    }
     // 自愈之后又顺畅播了 20 秒：说明这次救回来了，把次数还回去，
     // 免得一条长片子里偶发三次就把额度用光
     if (recoverResumeAt >= 0 && boundVideo !== null && boundVideo.currentTime > recoverResumeAt + 20) {
       recoverResumeAt = -1;
       mediaRecoveries = 0;
-      seekWatch = null;
-    }
-    // 自愈后的回位：没落到位就再要一次（见 seekWatch 的注释）
-    if (seekWatch !== null && boundVideo !== null && boundVideo.readyState >= 1) {
-      if (Math.abs(boundVideo.currentTime - seekWatch.target) > 1.5) {
-        // 每秒最多试一次，最多 10 秒：4K 一段要下两三秒，急着连点只会全被浏览器丢掉
-        const nowMs = Date.now();
-        if (seekWatch.tries < 10 && nowMs - seekWatch.last > 1000) {
-          seekWatch.tries += 1;
-          seekWatch.last = nowMs;
-          // 先让引擎从目标点开始拉（hls.js 默认从 0 开始，光设 currentTime 它不认）
-          const eng = (mediaEl as { engine?: { startLoad?: (at: number) => void } } | null)?.engine;
-          eng?.startLoad?.(seekWatch.target);
-          boundVideo.currentTime = seekWatch.target;
-        } else if (seekWatch.tries >= 10) {
-          seekWatch = null;
-        }
-      } else {
-        seekWatch = null;
-      }
+      recovering = false;
     }
     if (buffering && boundVideo !== null && boundVideo.readyState >= 3) mediaReady();
   }
@@ -621,6 +764,62 @@
     mediaBusy();
   }
 
+  /**
+   * 「卡住」兜底：每秒看一眼引擎到底在不在拉流，不在就推它一把。
+   *
+   * 实测（`x87vdLgzq0I` 1080p→720p 切档，2026-11-01）：hls.js 的新实例会停在
+   * `currentLevel = -1`、`readyState = 0`、`paused = false`、`currentTime` 一秒不动，
+   * **不报错也不缓冲**——用户看到的就是「卡住」，然后进度条归 0。这时从外面调一次
+   * `engine.startLoad(currentTime)` 立刻恢复（实测 1 秒内 readyState 4、时间继续走）。
+   * 成因在 `@videojs/hlsjs-video` 的 preload mixin：`autoStartLoad: false`，它只在新实例的
+   * `MANIFEST_LOADING`/`MEDIA_ATTACHED` 里调一次 `startLoad()`，撞上清单还没解析完就被
+   * 丢掉（hls.js 的 `StreamController.startLoad` 在没有 levels 时直接 STOPPED，之后没人再叫它）。
+   */
+  function stallTick(): void {
+    const video = boundVideo;
+    const eng = (mediaEl as EngineSourceHost | null)?.engine;
+    const s = store();
+    if (!video || !eng || !s || s.error) {
+      stallTicks = 0;
+      return;
+    }
+    // 用户自己按了暂停就别替他加载。
+    // 注意这里**不能**因为 `video.seeking` 就跳过：拖到没缓冲的地方卡住时，`seeking` 会一直是 true，
+    // 拿它当「正常」正好把最该救的那种卡死放过去了（实测：t=200、readyState=1、16 秒不动）。
+    if (s.paused && !wantPlay && !recovering) {
+      stallTicks = 0;
+      return;
+    }
+    // 判据只看元素：`engine.currentLevel` 在自动选档时**一直是 -1**（实测一边正常播一边 -1），
+    // 拿它当「没在拉流」会每 4 秒把在飞的管线掐一次——那是帮倒忙。
+    const starving = (!video.paused || wantPlay) && video.readyState < 2;
+    const frozen = !video.paused && video.readyState >= 3 && Date.now() - lastProgressAt > 6000;
+    if (!starving && !frozen) {
+      stallTicks = 0;
+      return;
+    }
+    stallTicks += 1;
+    if (stallTicks < 3 || Date.now() - lastNudgeAt < 4000) return;
+    stallTicks = 0;
+    lastNudgeAt = Date.now();
+    const at = video.currentTime > 1 ? video.currentTime : lastPlayHead;
+    eng.startLoad?.(at > 1 ? at : -1);
+    if (wantPlay) kickPlay();
+  }
+
+  function startStallWatch(): void {
+    if (stallTimer !== undefined) return;
+    stallTimer = window.setInterval(stallTick, 1000);
+  }
+
+  function stopStallWatch(): void {
+    if (stallTimer !== undefined) {
+      window.clearInterval(stallTimer);
+      stallTimer = undefined;
+    }
+    stallTicks = 0;
+  }
+
   /** 媒体元素一出现就挂上（HLS 的内层 <video> 要等 shadow root 有；attach 会反复进来，总会挂上） */
   function bindMediaLoad(): void {
     const video = innerVideo();
@@ -637,6 +836,7 @@
     video.addEventListener('seeked', captureFrame);
     video.addEventListener('emptied', mediaCleared);
     video.addEventListener('loadstart', mediaCleared);
+    startStallWatch();
   }
 
   function unbindMediaLoad(): void {
@@ -677,6 +877,16 @@
     attempts = 0;
 
     if (src === appliedSrc) return;
+    // 自愈等待窗口内不装片源：等解码器复位，别和延迟重装抢（见 holdUntil）
+    if (Date.now() < holdUntil) {
+      if (retryTimer === undefined) {
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          attach();
+        }, Math.max(16, holdUntil - Date.now()));
+      }
+      return;
+    }
     const switching = appliedSrc !== '';
     appliedSrc = src;
     // 只有「切清晰度/切代理」才续播；第一次挂载交给自动播放（被拦就停在海报上）
@@ -686,13 +896,23 @@
       pendingPlay = !s.paused;
       // 换片源（切清晰度 / 切代理）必然要重新缓冲，立刻盖上，别让中间那截黑屏露出来
       beginBuffering();
-    }
-    applySource(el, { src, type });
-    if (!switching) {
+    } else if (Number.isFinite(startAt) && startAt > 1 && pendingSeek < 1) {
       // 首帧挂载：页面可能要求从某个位置起播（见 startAt 的注释）
-      if (Number.isFinite(startAt) && startAt > 1) pendingSeek = startAt;
+      pendingSeek = startAt;
+    }
+    // 续播的位置直接交给引擎：它决定「从哪一段开始拉」，比事后 seek 可靠得多（见 applySource）
+    const resumeFrom = pendingSeek > 1 ? pendingSeek : 0;
+    applySource(el, { src, type }, resumeFrom);
+    if (resumeFrom > 0) {
+      startSeekWatch(resumeFrom);
+      // HLS 引擎已经按 startPosition 起播：这次 seek 就别再发了。
+      // 新管线的 seekable 一开始是空的，这时 seek 会被浏览器夹到 0 附近，反倒把位置拽回去。
+      // 原生 mp4 没有 startPosition 这个口子，仍然走下面的 seek。
+      if (engine === 'hls') pendingSeek = 0;
+    }
+    if (!switching) {
       wantPlay = true;
-      wantPlayTries = 0;
+      kickDeadline = 0;
       // 立刻试一次（mp4 会马上起播）；HLS 这时引擎还没接上媒体，失败后由 kickPlay 重试
       kickPlay();
     }
@@ -721,45 +941,60 @@
 
   function scheduleKick(): void {
     if (!wantPlay) return;
-    if (wantPlayTries >= 40) {
+    if (kickDeadline === 0) kickDeadline = Date.now() + KICK_BUDGET;
+    if (Date.now() > kickDeadline) {
       wantPlay = false;
+      kickDeadline = 0;
+      // 自愈之后连 play() 都催不起来：别把「停住的画面 + 收掉的加载环」当正常状态挂着
+      if (recovering) {
+        recovering = false;
+        onFailed?.('播放中断后没能接上，请重试。');
+      }
       return;
     }
-    wantPlayTries += 1;
     if (kickTimer !== undefined) clearTimeout(kickTimer);
     kickTimer = window.setTimeout(() => {
       kickTimer = undefined;
       kickPlay();
-    }, 120);
+    }, 200);
   }
 
   /**
    * 首帧起播。原生 mp4 一次就能成；HLS 引擎要先解析清单、挂上 MediaSource，
-   * 在这之前 play() 会被 AbortError 打断，所以这里按 120ms 的间隔重试，直到真正开播、
-   * 被浏览器拦自动播放，或者试够 40 次为止（约 5 秒）。
+   * 在这之前 play() 会被 AbortError 打断，所以这里每 200ms 重试一次，直到真正开播、
+   * 被浏览器拦自动播放，或者用完 KICK_BUDGET（20 秒）为止。
    */
   function kickPlay(): void {
     const s = store();
     if (!s || !wantPlay) return;
     if (!s.paused && s.currentTime > 0) {
       wantPlay = false;
+      kickDeadline = 0;
       return;
     }
     if (!s.canPlay && !(s.duration > 0)) {
       scheduleKick();
       return;
     }
-    // 第一次尝试常因引擎还没挂上媒体而失败：继续重试；只有被浏览器拦自动播放才放弃
+    // 第一次尝试常因引擎还没挂上媒体而失败：继续重试；只有被浏览器拦自动播放才放弃。
+    //
+    // 除了 promise 的回调，这里**无条件**再排一次重试：片源在 play() 还没 settle 时被重装过，
+    // 那个 promise 可能永远不 resolve 也不 reject（实测：自愈后 play() 的 promise 挂着不动，
+    // 于是既不重试也不报错，播放器就停在原地）。真正的「该播」判据在函数开头那行
+    // `!s.paused && s.currentTime > 0`，靠它结束循环。
     tryPlay(
       s,
       () => {
         wantPlay = false;
+        kickDeadline = 0;
       },
-      scheduleKick,
+      () => {},
       () => {
         wantPlay = false;
+        kickDeadline = 0;
       },
     );
+    scheduleKick();
   }
 
   // ---------- 氛围模式 ----------
@@ -1030,9 +1265,31 @@
         sawError = s.error;
         // 解码器/MediaSource 掉线先自愈（见 MAX_MEDIA_RECOVERIES），
         // 救不回来才把错误交给页面的浮层——别让人正看着就弹「播放失败」
-        if (mediaRecoveries < MAX_MEDIA_RECOVERIES && mediaEl !== null) {
+        // 自愈等待窗口里冒出来的错是上一次拆管线的余波，别当成新故障再救一遍
+        if (Date.now() < holdUntil) {
+          s.dismissError();
+        } else if (mediaRecoveries < MAX_MEDIA_RECOVERIES && mediaEl !== null) {
           mediaRecoveries += 1;
-          recoverPipeline(s.currentTime);
+          const at = s.currentTime > 1 ? s.currentTime : lastPlayHead;
+          // 第一次先试原地自愈：元素和进度都留着，进度条不会归 0（见 recoverInPlace）
+          if (mediaRecoveries === 1 && recoverInPlace()) {
+            pendingPlay = true;
+            wantPlay = true;
+            kickDeadline = 0;
+            recovering = true;
+            recoverResumeAt = at;
+            lastNudgeAt = 0;
+            beginBuffering();
+            // 原地自愈有时也会把元素时间清回 0（MediaSource 换了新的）：照样盯住原位，
+            // 顺便让 onTime 别把 0 报给页面（页面拿它当续播点）
+            if (at > 1) startSeekWatch(at);
+            kickPlay();
+            s.dismissError();
+            return;
+          }
+          // currentTime 已经归 0 就退回最后已知的播放位置：报错前元素把它抹掉时，
+          // 按 0 自愈等于「从头再放一遍」（用户看到的就是进度条归 0）
+          recoverPipeline(at);
           s.dismissError();
         } else {
           const detail = s.error.message.trim();
@@ -1062,7 +1319,10 @@
         endedSent = false;
       }
 
-      if (onTime && Math.abs(s.currentTime - lastReportedTime) >= 1) {
+      // 回位还没落定时别把「0 秒」报给页面：页面拿它当续播点（lastPos），
+      // 一报 0 就再也回不来——用户看到的「进度条归 0」有一半是这么来的
+      const offTarget = seekWatch !== null && s.currentTime < seekWatch.target - 1.5;
+      if (onTime && !offTarget && Math.abs(s.currentTime - lastReportedTime) >= 1) {
         lastReportedTime = s.currentTime;
         onTime(s.currentTime, s.paused);
       }
@@ -1073,7 +1333,11 @@
         else if (s.canPlay || s.duration > 0) kickPlay();
       }
 
-      if ((pendingSeek > 0 || pendingPlay) && (s.canPlay || s.duration > 0)) {
+      // 片源还没装上（自愈的等待窗口里）就先别消费续播点：那时的 canPlay/duration
+      // 还是上一条管线的，抢在这里 seek 一次就把「回到原位」的意图用掉了，
+      // 等新片源真装上时 pendingSeek 已经是 0——实测这就是「救回来却从头放」的那一步。
+      const applied = appliedSrc !== '' && Date.now() >= holdUntil;
+      if (applied && (pendingSeek > 0 || pendingPlay) && (s.canPlay || s.duration > 0)) {
         const at = pendingSeek;
         const resume = pendingPlay;
         pendingSeek = 0;
@@ -1116,6 +1380,8 @@
       window.removeEventListener('keydown', onKeydown);
       if (retryTimer !== undefined) clearTimeout(retryTimer);
       if (kickTimer !== undefined) clearTimeout(kickTimer);
+      stopSeekWatch();
+      stopStallWatch();
       if (barTimer !== undefined) clearTimeout(barTimer);
       bar?.destroy();
       bar = null;
@@ -1216,6 +1482,7 @@
         <video-skin
           bind:this={skinEl}
           class="block aspect-video w-full bg-black"
+          data-resuming={resuming ? 'true' : 'false'}
           style="--media-accent-color:#f5faff;--media-accent-text-color:#020408;--media-border-radius:0;--media-border-color:transparent;--media-font-family:var(--font-sans)"
         >
           {#if engine === 'hls'}
