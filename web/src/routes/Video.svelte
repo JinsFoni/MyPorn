@@ -352,6 +352,10 @@
   /**
    * 「返回」去哪儿：优先看点进来的那一页（卡片链接带的 `?back=`），
    * 没有就落回「关注」。只认站内绝对路径（以单个 / 开头），别的一律忽略，免得被带去外站。
+   *
+   * 两个返回锚点都带 `data-restore`：退回列表要接着原来那个滚动位置。
+   * 目标页是重建的（只拉了第一页），所以还原交给 lib/scrollRestore.ts 追着补，
+   * 光靠 router 一次 `scrollTo` 会被夹在当前底部——那就是「退出一播就回顶部」。
    */
   const backTo = $derived.by(() => {
     const raw = router.query.get('back') ?? '';
@@ -446,7 +450,7 @@
   <EmptyState title="打不开这个影片" hint={pageError} icon="error">
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => void loadVideo()}>重试</button>
-      <a data-link href={backTo} class="btn btn-ghost">{backLabel}</a>
+      <a data-link data-restore href={backTo} class="btn btn-ghost">{backLabel}</a>
     {/snippet}
   </EmptyState>
 {:else if loadingVideo && !video}
@@ -636,7 +640,7 @@
       <section class="mt-10">
         <div class="mb-3 flex items-center justify-between">
           <h3 class="text-title font-medium text-fg">相关影片</h3>
-          <a data-link href={backTo} class="btn btn-ghost h-8">{backLabel}</a>
+          <a data-link data-restore href={backTo} class="btn btn-ghost h-8">{backLabel}</a>
         </div>
         <div class="grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-3 xl:grid-cols-4">
           {#each video.related.slice(0, 8) as related (related.id)}

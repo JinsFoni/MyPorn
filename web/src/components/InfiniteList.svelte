@@ -85,6 +85,7 @@
     } finally {
       if (gen === generation) loading = false;
     }
+    fillViewport();
   }
 
   async function loadMore(): Promise<void> {
@@ -118,6 +119,7 @@
     } finally {
       if (gen === generation) loading = false;
     }
+    fillViewport();
   }
 
   /** 保留首页与尾部若干页，中间的页卸载 DOM（只留占位格子） */
@@ -167,6 +169,28 @@
         io.disconnect();
       },
     };
+  }
+
+  /**
+   * 每次拉完回头看一眼：哨兵还在「视口下方 800px」以内就接着拉。
+   *
+   * 为什么非补这一手：IntersectionObserver 只在相交状态**变化**时回调。
+   * 挂载那一下哨兵就在范围内，回调却正好落在首屏还在 loading 的时候被挡掉；
+   * 之后列表变高把哨兵顶出视野、再滚回底部才又相交——若这次回调又撞上 loading，
+   * 状态从此不再变化，列表就停在半路不再补页。
+   * 实测（2026-11-01，关注流 40 条/页、1440×900）：从 4900px 退回，只追到第一页
+   * 底部 3859px（scrollHeight 4760）就不动了；补上这一手之后一路追到 4900。
+   */
+  function fillViewport(): void {
+    // 等这一帧的 DOM 落地再量：量早了读到的是上一页的高度，会连着多拉一页
+    requestAnimationFrame(() => {
+      const el = sentinel;
+      const last = pages[pages.length - 1];
+      // 末页一条都没进来就别再追了：高度不会再变，接着拉只会空转
+      if (!el || !last || last.count === 0) return;
+      if (loading || done || errorMessage !== '') return;
+      if (el.getBoundingClientRect().top <= window.innerHeight + 800) void loadMore();
+    });
   }
 
   function retry(): void {

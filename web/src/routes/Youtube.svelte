@@ -280,7 +280,9 @@
   function openDetail(video: YtVideo): void {
     if (router.query.get('v') === video.videoId) return;
     // push 一条历史：后退＝关弹窗。频道 / 筛选参数一路带着（patchQuery 只改 v）。
-    patchQuery({ v: video.videoId }, { replace: false });
+    // keepScroll：弹窗是「同一页上的浮层」，地址栏只多了个 `?v=`。
+    // 不带这个参数时路由会把页面滚回顶部——开一次弹窗滚一次顶，关掉人就在顶部了。
+    patchQuery({ v: video.videoId }, { replace: false, keepScroll: true });
   }
 
   // URL 一变就同步弹窗：点卡片、浏览器后退、刷新、贴深链接走的是同一条路。
@@ -302,7 +304,7 @@
         video = await api.ytVideoLookup(videoId);
       } catch (err) {
         live.toast(messageFor(err), 'error');
-        patchQuery({ v: null });
+        patchQuery({ v: null }, { keepScroll: true });
         return;
       }
       // 等查询的这段时间用户可能已经退回去了，别再弹出来
@@ -469,7 +471,8 @@
   function closeDetail(): void {
     if (wantVideoId !== '') {
       // 关弹窗＝把 ?v= 去掉；用 replace，免得后退又把它弹回来。频道 / 筛选留在 URL 里。
-      patchQuery({ v: null });
+      // 同理不能滚：关掉之后要留在原来那个格子附近。
+      patchQuery({ v: null }, { keepScroll: true });
       return;
     }
     hideDetail();
