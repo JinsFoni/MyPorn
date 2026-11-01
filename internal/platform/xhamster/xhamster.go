@@ -301,6 +301,28 @@ func (a *Adapter) ResolvePlayback(ctx context.Context, videoID string) (*model.V
 	if err != nil {
 		return nil, nil, err
 	}
+	return a.playbackFrom(ctx, body, videoID)
+}
+
+// ResolvePlaybackPage 是 platform.PageResolver 的实现：拿「影片页地址」直接解析。
+//
+// 为什么需要这条：ID 统一成 URL 末尾那段（xhW3Ivw）之后，`/videos/xhW3Ivw`
+// 会被 301 跳到带 slug 的规范地址。实测这一跳：301 响应本身 0.94/1.06/1.27 秒，
+// 端到端解析 2.41s（带 slug）vs 2.59~2.77s（裸 ID）。而库里 `videos.url` 存的就是
+// 带 slug 的规范地址——照它去取，每播一次省一跳，上游也少一次请求（xHamster 会限流）。
+func (a *Adapter) ResolvePlaybackPage(ctx context.Context, pageURL string) (*model.Video, []model.Variant, error) {
+	if !strings.Contains(pageURL, "/videos/") && !strings.Contains(pageURL, "/shorts/") {
+		return nil, nil, fmt.Errorf("不是影片页地址: %s", pageURL)
+	}
+	body, err := a.getAbsolute(ctx, pageURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	return a.playbackFrom(ctx, body, videoIDFromURL(pageURL))
+}
+
+// playbackFrom 是两条解析入口共用的尾巴：页面字节 → 元数据 + 全部清晰度。
+func (a *Adapter) playbackFrom(ctx context.Context, body []byte, videoID string) (*model.Video, []model.Variant, error) {
 	iv, err := parseInitials(body)
 	if err != nil {
 		return nil, nil, err

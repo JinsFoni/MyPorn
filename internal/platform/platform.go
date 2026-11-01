@@ -62,6 +62,17 @@ type PlaybackResolver interface {
 	ResolvePlayback(ctx context.Context, videoID string) (*model.Video, []model.Variant, error)
 }
 
+// PageResolver 是可选接口：能直接按「影片页地址」解析播放地址，省掉一次 301。
+//
+// 为什么会有这个需求：xHamster 的影片 ID 是 URL 末尾那段（xhW3Ivw），
+// 而 `/videos/xhW3Ivw` 是 301 到带 slug 的规范地址；库里的 videos.url 存的就是规范地址。
+// 实测：301 响应本身 0.94/1.06/1.27 秒（冷连接），端到端解析 2.41s（带 slug）
+// vs 2.59~2.77s（裸 ID 多吃一跳）——每播一次都白花，上游还多收一次请求。
+// 没实现这个接口的平台照旧走 PlaybackResolver。
+type PageResolver interface {
+	ResolvePlaybackPage(ctx context.Context, pageURL string) (*model.Video, []model.Variant, error)
+}
+
 // AvatarProvider 是可选接口：站外的艺人头像来源。
 // Pornhub 的头像只存在于艺人页面的 DOM 里（改版就失效，抓不到只能显示占位图），
 // 而 beeg 有按名字查询的公开接口，能直接拿到站内自己用的那张头像。

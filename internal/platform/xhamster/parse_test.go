@@ -70,7 +70,9 @@ func TestVideoFromThumb(t *testing.T) {
 		Views:    1100000,
 	}
 	v := videoFromThumb(thumb, "https://xhamster.com")
-	if v.PlatformVideoID != "girlsway-roleplay-xhddtuU" {
+	// 只取 URL 末尾那段：同一部片子的「带 slug」和「裸 hash」两种地址要折成同一个 ID，
+	// 否则同一部片子会在库里存两条、关注页上出现两张一样的卡片（实测见过 586 行）。
+	if v.PlatformVideoID != "xhddtuU" {
 		t.Fatalf("影片 ID=%q", v.PlatformVideoID)
 	}
 	// 缩略图优先用 1280x720 那张（比列表用的 526x298 清楚）。
@@ -82,6 +84,35 @@ func TestVideoFromThumb(t *testing.T) {
 	}
 	if v.ViewCount == nil || *v.ViewCount != 1100000 {
 		t.Fatalf("播放量=%v", v.ViewCount)
+	}
+}
+
+// videoIDFromURL 只留 URL 末尾那一段。
+//
+// 这些形状都是从真实数据里抄的：库里 2026-10-31 那次同步插进来的 585 行裸 hash
+// 全是第一种（只有 hash）第二种（带 slug）的重复品，两边必须折成同一个 ID。
+func TestVideoIDFromURL(t *testing.T) {
+	cases := map[string]string{
+		// 两种写法 → 同一个 ID
+		"https://xhamster.com/videos/they-had-a-naughty-threesome-and-played-snowballs-with-a-condom-xhW3Ivw": "xhW3Ivw",
+		"https://xhamster.com/videos/xhW3Ivw": "xhW3Ivw",
+		// 老式数字 ID 也一样
+		"https://xhamster.com/videos/sarah-vandella-gets-banged-by-a-18yo-perv-during-her-massage-14840346": "14840346",
+		"https://xhamster.com/videos/14840346": "14840346",
+		// 相对的 pageURL、查询串、结尾斜杠
+		"/videos/girlsway-roleplay-xhddtuU":            "xhddtuU",
+		"https://xhamster.com/videos/xhddtuU?plan=foo": "xhddtuU",
+		"https://xhamster.com/videos/xhddtuU/":         "xhddtuU",
+		// 认不出的形状原样留着：别把「标题以年份结尾」当成 ID
+		"https://xhamster.com/videos/best-of-2021": "best-of-2021",
+		// 竖版短视频不是影片页：不走「取末尾那段」，免得和同名长片撞 ID（列表页目前也不收 shorts）
+		"https://xhamster.com/shorts/naughty-threesome-played-snowballs-condom-xh5DH60": "https://xhamster.com/shorts/naughty-threesome-played-snowballs-condom-xh5DH60",
+		"": "",
+	}
+	for raw, want := range cases {
+		if got := videoIDFromURL(raw); got != want {
+			t.Fatalf("%s\n  → %q，期望 %q", raw, got, want)
+		}
 	}
 }
 

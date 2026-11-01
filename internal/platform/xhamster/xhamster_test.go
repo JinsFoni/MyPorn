@@ -1,9 +1,15 @@
 package xhamster
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"golang.org/x/time/rate"
 
 	"github.com/JinsFoni/MyPorn/internal/model"
 )
@@ -130,5 +136,47 @@ func TestProgressiveVariantsForVR(t *testing.T) {
 	}
 	if !strings.HasSuffix(vs[1].URL, "/ws960p.h264.mp4") {
 		t.Fatalf("960p 地址不对: %s", vs[1].URL)
+	}
+}
+
+// 影片页解析走的是「库里那条规范地址」，不该再吃一次 301。
+//
+// 背景：ID 统一成 URL 末尾那段（xhW3Ivw）之后，`/videos/xhW3Ivw` 会被 301 到带 slug
+// 的规范地址。实测这一跳 0.2~1.3 秒，每播一次都白花，上游还多收一次请求。
+// 所以 ensureVariants 优先调 ResolvePlaybackPage(videos.url)。
+func TestResolvePlaybackPageSkipsRedirect(t *testing.T) {
+	var paths []string
+	const page = `<script>window.initials={"videoModel":{"title":"T","duration":10,"pageURL":"https://xhamster.com/videos/slug-xhW3Ivw"}};</script>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/videos/xhW3Ivw") {
+			http.Redirect(w, r, "/videos/slug-xhW3Ivw", http.StatusMovedPermanently)
+			return
+		}
+		fmt.Fprint(w, page)
+	}))
+	defer srv.Close()
+
+	a, err := New(srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 测试里不用守 500ms/次的礼貌间隔
+	a.lim = rate.NewLimiter(rate.Inf, 1)
+	ctx := context.Background()
+
+	// 1) 规范地址：一次请求，不跳转
+	//    （夹起的页面里没有 sources，取清晰度会报错——这里只看请求了哪些地址）
+	paths = nil
+	_, _, _ = a.ResolvePlaybackPage(ctx, srv.URL+"/videos/slug-xhW3Ivw")
+	if len(paths) != 1 || paths[0] != "/videos/slug-xhW3Ivw" {
+		t.Fatalf("按页面地址解析的请求序列 = %v，期望只有一次 /videos/slug-xhW3Ivw", paths)
+	}
+
+	// 2) 只有 ID 时才会撞上 301（这就是「按地址解析」要存在的原因）
+	paths = nil
+	_, _, _ = a.ResolvePlayback(ctx, "xhW3Ivw")
+	if len(paths) != 2 || paths[0] != "/videos/xhW3Ivw" || paths[1] != "/videos/slug-xhW3Ivw" {
+		t.Fatalf("按 ID 解析的请求序列 = %v，期望先 /videos/xhW3Ivw 再被 301 到 slug", paths)
 	}
 }

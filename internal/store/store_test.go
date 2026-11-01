@@ -589,3 +589,93 @@ func TestSetPerformerAvatarAndListMissing(t *testing.T) {
 		t.Fatalf("SetPerformerAvatar 是直接覆盖语义，这里应为空: %q", p.AvatarURL)
 	}
 }
+
+// 0011 迁移：xHamster 的「带 slug」和「裸 hash」两种地址必须折成同一行。
+//
+// 现场（2026-11-01）：库里 586 行是同一部片子的第二份记录——Hot Pearl 543 行、
+// mysaaat 42 行、2 对老式数字 ID。表现是关注页上同一部片子出现两张卡片。
+// 这条测试按当时的形状造数据，验证迁移把它们合并成一行、ID 改成规范形式，
+// 并且子表关联（艺人、清晰度缓存）跟着搬到保留行上。
+func TestMigration0011MergesDuplicateXhamsterVideos(t *testing.T) {
+	st := newTestStore(t)
+
+	// 带 slug 的那行先入库（真实数据里它带着艺人关联和清晰度缓存）
+	res, err := st.db.Exec(`INSERT INTO videos(platform, platform_video_id, title, url)
+		VALUES ('xhamster', 'they-had-a-naughty-threesome-and-played-snowballs-with-a-condom-xhW3Ivw', 'T', 'https://xhamster.com/videos/a-xhW3Ivw')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keepID, _ := res.LastInsertId()
+	// 裸 hash 的重复行
+	res, err = st.db.Exec(`INSERT INTO videos(platform, platform_video_id, title, url)
+		VALUES ('xhamster', 'xhW3Ivw', 'T', 'https://xhamster.com/videos/xhW3Ivw')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dupID, _ := res.LastInsertId()
+	// 老式数字 ID 的一对
+	if _, err := st.db.Exec(`INSERT INTO videos(platform, platform_video_id, title, url) VALUES
+		('xhamster', 'sarah-vandella-gets-banged-14840346', 'S', 'https://xhamster.com/videos/s-xh1'),
+		('xhamster', '14840346', 'S', 'https://xhamster.com/videos/14840346')`); err != nil {
+		t.Fatal(err)
+	}
+	// 子表：重复行上挂着艺人关联和一条清晰度缓存，迁移后要落到保留行
+	if _, err := st.db.Exec(`INSERT INTO performers(platform, performer_id, name, url) VALUES ('xhamster','hot-pearl','Hot Pearl','')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO video_performers(video_id, performer_id) VALUES (?, 1)`, dupID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO video_streams(video_id, height, url) VALUES (?, 2160, 'https://cdn/x.mp4')`, dupID); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := migrationsFS.ReadFile("migrations/0011_xhamster_video_id.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(string(body)); err != nil {
+		t.Fatalf("跑迁移: %v", err)
+	}
+
+	// 只剩两行（xh 一对 + 数字一对），ID 都是规范形式
+	rows, err := st.db.Query(`SELECT id, platform_video_id FROM videos WHERE platform='xhamster' ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	var firstID int64
+	for rows.Next() {
+		var id int64
+		var pid string
+		if err := rows.Scan(&id, &pid); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) == 0 {
+			firstID = id
+		}
+		got = append(got, pid)
+	}
+	want := []string{"xhW3Ivw", "14840346"}
+	if len(got) != len(want) {
+		t.Fatalf("剩 %d 行，期望 %d 行: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("第 %d 行 ID=%q，期望 %q（全量 %v）", i, got[i], want[i], got)
+		}
+	}
+	if firstID != keepID {
+		t.Fatalf("保留的应该是先入库那条（id=%d），实际 id=%d", keepID, firstID)
+	}
+
+	// 重复行上的艺人关联和清晰度缓存都搬过来了
+	var n int
+	if err := st.db.QueryRow(`SELECT count(*) FROM video_performers WHERE video_id=?`, keepID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("艺人关联没搬过来: n=%d err=%v", n, err)
+	}
+	if err := st.db.QueryRow(`SELECT count(*) FROM video_streams WHERE video_id=?`, keepID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("清晰度缓存没搬过来: n=%d err=%v", n, err)
+	}
+}

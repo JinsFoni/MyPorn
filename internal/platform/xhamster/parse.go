@@ -434,21 +434,69 @@ func videoFromThumb(t videoThumb, base string) *model.Video {
 	return v
 }
 
-// videoIDFromURL 从 /videos/<slug>-xhHASH 里取出「slug-xhHASH」这段当影片 ID。
-// 只留 hash（xhHASH）也能用：站点会 301 到带 slug 的规范地址，
-// 但自己存着整段更稳，省一次跳转。
+// videoIDFromURL 从影片页地址里取出**唯一的那个 ID**：URL 末尾那一段。
+//
+// 同一部片子 xHamster 会给两种地址，实测两种都真的出现过：
+//
+//	/videos/they-had-a-naughty-threesome-…-xhW3Ivw  → xhW3Ivw
+//	/videos/xhW3Ivw                                 → xhW3Ivw
+//	/videos/sarah-vandella-gets-banged-…-14840346   → 14840346（老式数字 ID）
+//
+// 早先直接拿「/videos/ 后面整段」当 ID，于是同一部片子进了库两条：
+// `…-xhW3Ivw` 一条、`xhW3Ivw` 一条，关注页上就是两张一模一样的卡片。
+// 实测 2026-10-31 那次同步给 Hot Pearl 插了 543 行、mysaaat 插了 42 行裸 hash 重复行，
+// 585 行里 584 行在库里已经有带 slug 的同款。取末尾那一段才和站内唯一标识对齐。
 func videoIDFromURL(pageURL string) string {
 	u := strings.TrimSpace(pageURL)
 	if u == "" {
 		return ""
 	}
-	if i := strings.Index(u, "/videos/"); i >= 0 {
-		u = u[i+len("/videos/"):]
+	i := strings.Index(u, "/videos/")
+	if i < 0 {
+		// 不是影片页（例如 /shorts/<slug>-xhXXXX）：照原样返回整段。
+		// 竖版短视频和同标题的长片不是同一部片子，绝不能折成同一个 ID。
+		if j := strings.IndexAny(u, "?#"); j >= 0 {
+			u = u[:j]
+		}
+		return strings.Trim(u, "/")
 	}
-	if i := strings.IndexAny(u, "?#"); i >= 0 {
-		u = u[:i]
+	seg := u[i+len("/videos/"):]
+	if j := strings.IndexAny(seg, "?#/"); j >= 0 {
+		seg = seg[:j]
 	}
-	return strings.Trim(u, "/")
+	seg = strings.Trim(seg, "/")
+	if k := strings.LastIndex(seg, "-"); k >= 0 {
+		if tail := seg[k+1:]; isVideoIDToken(tail) {
+			return tail
+		}
+	}
+	// 裸地址（本来就是 xhHASH / 数字 ID）或者认不出的形状：原样留着。
+	return seg
+}
+
+// isVideoIDToken 判断一段字符串是不是 xHamster 的影片标识本身。
+//
+//	现代：xh + 大小写字母数字混合（xhW3Ivw、xh5DH60）
+//	老式：纯数字且够长（14840346、6042558）——门槛取 6 位，
+//	      免得把 /videos/best-of-2021 这种「标题以年份结尾」的误当成 ID。
+func isVideoIDToken(s string) bool {
+	if len(s) < 3 {
+		return false
+	}
+	digits := 0
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		default:
+			return false
+		}
+	}
+	if strings.HasPrefix(s, "xh") {
+		return true
+	}
+	return digits == len(s) && len(s) >= 6
 }
 
 // videoFrom 把影片详情页的 window.initials 转成 model.Video。

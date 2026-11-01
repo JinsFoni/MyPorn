@@ -165,7 +165,13 @@ func (s *Server) ensureVariants(r *http.Request, v *model.Video, needBandwidth b
 	var meta *model.Video
 	var rerr error
 	if quick, ok := ad.(platform.PlaybackResolver); ok && !needBandwidth {
-		meta, fresh, rerr = quick.ResolvePlayback(r.Context(), v.PlatformVideoID)
+		// 有规范影片页地址就走 PageResolver：省掉「裸 ID → 301 → 规范地址」那一跳
+		// （xHamster 实测端到端 2.41s vs 2.59~2.77s），详见 platform.PageResolver。
+		if pr, ok := ad.(platform.PageResolver); ok && isPageURL(v.URL) {
+			meta, fresh, rerr = pr.ResolvePlaybackPage(r.Context(), v.URL)
+		} else {
+			meta, fresh, rerr = quick.ResolvePlayback(r.Context(), v.PlatformVideoID)
+		}
 	} else {
 		fresh, rerr = ad.ResolveStreams(r.Context(), v.PlatformVideoID)
 	}
@@ -199,6 +205,12 @@ func hasBandwidth(vs []model.Variant) bool {
 		}
 	}
 	return false
+}
+
+// isPageURL 判断库里存的影片地址能不能直接当「影片页」去取。
+// 只认 http(s)：空值、本地文件（file://）都退回按 ID 解析。
+func isPageURL(raw string) bool {
+	return strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "http://")
 }
 
 // handlePlayback 解析（并缓存 5 分钟）最高画质的播放地址列表。
