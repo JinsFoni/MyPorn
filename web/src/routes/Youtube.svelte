@@ -854,11 +854,12 @@
         {/if}
 
         <!-- 关闭键：跟播放器底部控制条（.video-controls）同一套——白色 10% 底 + 16px 背景模糊 +
-             99px 圆角 + 一圈 1px 暗环，只是比控制条里那几颗（36×36）矮一号：28×28、图标 14，不带文字。
+             99px 圆角 + 一圈 1px 暗环。形状跟着控制条那根药丸走：比高更宽（42×28，左右各 14 的内距把
+             14px 图标裹在中间），不是一颗圆点；高度比控制条里的按钮（36×36）矮一号，不带文字。
              位置在画面右上角；窄屏（< 32rem）要往下让一截，原因见下面 .yt-close 的注释。 -->
         <button
           type="button"
-          class="yt-close absolute right-3 top-3 z-30 grid h-7 w-7 place-items-center rounded-full text-fg"
+          class="yt-close absolute right-3 top-3 z-30 flex h-7 items-center justify-center rounded-full px-3.5 text-fg"
           onclick={closeDetail}
           aria-label="关闭"
         >
@@ -1036,7 +1037,8 @@
      border-radius 99px、backdrop-filter blur(16px) saturate(1.1)、外加 0 0 0 1px 的暗环，
      里面每个按钮 36×36、图标 16px。这里照抄，所以它站在画面上像控制条里多出来的一颗，
      而不是「贴了张黑胶布」——旧样式是 bg-ink/70 的深色圆点，黑画面里看不清边界。
-     尺寸比那几颗按钮矮一号（28×28、图标 14），不带文字。 */
+     尺寸比那几颗按钮矮一号（高 28、图标 14），但宽出两截内距（42×28）——圆角 99px 把两头收成半圆，
+     所以看着是控制条那根药丸的缩小版，而不是一颗圆点。 */
   .yt-close {
     background: oklch(1 0 0 / 0.1);
     -webkit-backdrop-filter: blur(16px) saturate(1.1);
@@ -1046,7 +1048,7 @@
       0 1px 3px 0 oklch(0 0 0 / 0.15),
       0 1px 2px -1px oklch(0 0 0 / 0.15);
     /* 常驻会跟画面抢注意力（底部控制条自己 2.5 s 就淡出），所以跟着 hover 走。
-       藏起来的时候连指针一起关掉：否则画面上有块看不见的 28px 会吃掉点击（点一下片子就没了），
+       藏起来的时候连指针一起关掉：否则画面上有块看不见的 42×28 会吃掉点击（点一下片子就没了），
        控制条隐藏时也是点不到的，行为对齐。 */
     opacity: 0;
     pointer-events: none;
