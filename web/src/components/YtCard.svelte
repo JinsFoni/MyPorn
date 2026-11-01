@@ -8,7 +8,7 @@
    */
   import CoverArt from './CoverArt.svelte';
   import { imageUrl } from '../lib/img';
-  import { formatCount, formatDuration, relativeTime } from '../lib/format';
+  import { formatCount, formatDate, formatDuration } from '../lib/format';
   import type { YtVideo } from '../lib/types';
 
   interface Props {
@@ -34,8 +34,16 @@
       .join(' · '),
   );
 
+  /**
+   * 卡片上的发布时间用绝对日期（2026-10-31），不用「1个月前」。
+   *
+   * 这面墙是拿来判断「这条我看过没有 / 是不是新的」的：相对时间在这种列表里全是
+   * 「1天前」「2天前」，两天内的条目彼此长得一模一样，扫一眼分不出先后；
+   * 而且它一天一变，卡片上的字会自己漂。绝对日期一眼可比、也不会变。
+   * 相对时间的说法还留在详情页（`formatDateTime（relativeTime）` 两个一起给）。
+   */
   function timeLabel(v: YtVideo): string {
-    return v.publishedAt ? relativeTime(v.publishedAt) : '时间未知';
+    return v.publishedAt ? formatDate(v.publishedAt) : '时间未知';
   }
 </script>
 
