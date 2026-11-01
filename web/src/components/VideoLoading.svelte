@@ -89,15 +89,30 @@
   let fillCanvas = $state<HTMLCanvasElement | null>(null);
   let artCanvas = $state<HTMLCanvasElement | null>(null);
 
-  // 每次换封面探一次（探法见 lib/coverCrop.ts）：探到窄条才合成，探不到就走原来的 <img>
+  /**
+   * 每次换底图判一次要不要「合成」：合成 = 底下那层糊成色块铺满、上面按原生比例摆中间。
+   *
+   * 两种情况要合成：
+   *   1. **竖画面本身**（比例 < 0.9）：铺满（cover）等于把人放大两三倍——16:9 的盒子里放 1080×2048，
+   *      按宽度铺满后高 2239px，只露出中间一条。缓冲时垫的那张帧同样是竖的，所以两种 `kind` 都要走这条路；
+   *   2. **烘了黑边的 16:9 画布**（YouTube 封面那种）：先探出真画面那一竖条（见 lib/coverCrop.ts），
+   *      裁掉两侧站方拉长的糊图再合成。
+   * 探不出来（16:9 原画、4:3、读不到像素）就退回原来那张 `<img>` 铺满。
+   */
   $effect(() => {
     const src = art;
     composed = null;
-    if (src === null || kind !== 'poster') return;
+    if (src === null) return;
     const img = new Image();
     img.decoding = 'async';
     img.onload = () => {
-      if (img.naturalWidth <= 1 || !isWideFrame(img)) return;
+      if (img.naturalWidth <= 1) return;
+      const ratio = img.naturalWidth / img.naturalHeight;
+      if (ratio < 0.9) {
+        composed = { img, sx: 0, sw: img.naturalWidth, sh: img.naturalHeight };
+        return;
+      }
+      if (!isWideFrame(img)) return;
       const crop = coverCropFor(src, img);
       if (!crop) return;
       const sx = Math.round(crop.x0 * img.naturalWidth);
@@ -141,12 +156,12 @@
 <div class="video-veil" role="status" aria-live="polite" data-kind={kind}>
   {#if art}
     {#if composed}
-      <!-- 封面态：底下那张把画面中心那一竖条铺满整块再糊成色块，上面那张按原生比例摆在中间。
-           这样两侧是「封面自己的颜色」，不是 YouTube 塞进来的那圈拉长的糊图。 -->
+      <!-- 竖画面 / 探到窄条：底下那张把画面中心那一竖条铺满整块再糊成色块，上面那张按原生比例摆在中间。
+           这样两侧是「这张图自己的颜色」，不是 YouTube 塞进来的那圈拉长的糊图，也不会把人放大两三倍。 -->
       <canvas class="video-veil-art video-veil-fill" bind:this={fillCanvas} aria-hidden="true"></canvas>
       <canvas class="video-veil-poster" bind:this={artCanvas} aria-hidden="true"></canvas>
     {:else}
-      <!-- 缓冲态的帧、或者探不出窄条的封面：一张图铺满（cover）就对了 -->
+      <!-- 横屏的帧、或者探不出窄条的封面：一张图铺满（cover）就对了 -->
       <img
         class="video-veil-art"
         src={art}
@@ -241,6 +256,17 @@
     filter: blur(80px) saturate(1.25) brightness(1.06);
   }
 
+  /* 缓冲态（拖进度条 / 网络卡住）垫的是刚才那一帧，横屏片子铺满就行；
+     竖屏片子（实测 1080×2048）铺满就是把人放大两三倍，所以照封面那套合成：
+     两侧糊成「这一帧自己的颜色」，中间那张按原生比例摆好，糊得比封面轻一点
+     （这是刚播过的真画面，糊成色块反而像换错了片子）。 */
+  .video-veil[data-kind='frame'] .video-veil-fill {
+    filter: blur(64px) saturate(1.2) brightness(0.96);
+  }
+  .video-veil[data-kind='frame'] .video-veil-poster {
+    filter: blur(3px) saturate(1.08) drop-shadow(0 0 24px rgb(2 4 8 / 0.55));
+  }
+
   /* 完整封面：按原生比例摆在中间，两侧露出底下那层虚化。
      `height: 100% + width: auto` 对 canvas 来说就是「按固有像素比例」，不会被拉变形。
      带一点投影，免得封面的白边跟虚化背景糊在一起、看不出边界在哪。 */
@@ -272,6 +298,13 @@
     }
     .video-veil[data-kind='poster'] .video-veil-fill {
       filter: blur(36px) saturate(1.25) brightness(1.06);
+    }
+
+    .video-veil[data-kind='frame'] .video-veil-fill {
+      filter: blur(30px) saturate(1.2) brightness(0.96);
+    }
+    .video-veil[data-kind='frame'] .video-veil-poster {
+      filter: blur(1.5px) saturate(1.08) drop-shadow(0 0 12px rgb(2 4 8 / 0.55));
     }
   }
 

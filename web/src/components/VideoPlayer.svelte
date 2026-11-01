@@ -470,16 +470,19 @@
    *
    * 本来想省事，用 `backdrop-filter` 让浏览器把下面那一帧糊掉——但视频是独立的合成层，
    * 能不能被 backdrop 采样到看浏览器/解码路径，实测同一串操作有时糊出上一帧、有时糊出黑的，
-   * 拖动进度条正好撞上「黑」，就成了用户看到的黑屏。所以这里每 250ms 把画面缩到 640×360
-   * 存一份，缓冲时拿它当底图：一定糊的是真画面，跟合成器怎么排布无关。
+   * 拖动进度条正好撞上「黑」，就成了用户看到的黑屏。所以这里每 250ms 把画面按原比例
+   * 缩到长边 640 存一份，缓冲时拿它当底图：一定糊的是真画面，跟合成器怎么排布无关。
    *
-   * 为什么是 640×360 而不是更小的 320×180：这张图要铺满一千多像素宽的播放器，320 宽等于放大 4 倍，
-   * 糊下去也还是一眼看出「这是张被拉大的图」。640 宽只放大 2 倍，糊归糊，不会显出放大感。
+   * 为什么长边是 640 而不是更小的 320：这张图要铺满一千多像素宽的播放器，320 宽等于放大 4 倍，
+   * 糊下去也还是一眼看出「这是张被拉大的图」。640 只放大 2 倍，糊归糊，不会显出放大感。
+   *
+   * **画布按画面自己的比例开，不能写死 16:9**：原来固定画进 640×360，竖屏片子（实测 1080×2048）
+   * 会被横向拉宽 2.4 倍——拖动进度条时垫在下面的那张底图就是一张被撑胖的画面，
+   * 两秒后才换上真画面，观感像「跳过去放错了片子」。这是 2026-11-01 用户报的「竖屏跳转画面有问题」。
    */
   let snapCanvas: HTMLCanvasElement | null = null;
   let snapAt = 0;
-  const SNAP_W = 640;
-  const SNAP_H = 360;
+  const SNAP_LONG = 640;
 
   function captureFrame(): void {
     const video = boundVideo;
@@ -487,13 +490,19 @@
     const now = performance.now();
     if (now - snapAt < 250) return;
     snapAt = now;
-    if (!snapCanvas) {
-      snapCanvas = document.createElement('canvas');
-      snapCanvas.width = SNAP_W;
-      snapCanvas.height = SNAP_H;
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    const scale = SNAP_LONG / Math.max(w, h);
+    const cw = Math.max(2, Math.round(w * scale));
+    const ch = Math.max(2, Math.round(h * scale));
+    if (!snapCanvas) snapCanvas = document.createElement('canvas');
+    // 换比例（4:3 的片子、或者同一实例换片）时重开画布，否则新画面会被挤进旧比例里
+    if (snapCanvas.width !== cw || snapCanvas.height !== ch) {
+      snapCanvas.width = cw;
+      snapCanvas.height = ch;
     }
     try {
-      snapCanvas.getContext('2d')?.drawImage(video, 0, 0, SNAP_W, SNAP_H);
+      snapCanvas.getContext('2d')?.drawImage(video, 0, 0, cw, ch);
     } catch {
       // 画不进去就维持上一张
     }
