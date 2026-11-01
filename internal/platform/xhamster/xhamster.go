@@ -19,8 +19,8 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 const defaultBase = "https://xhamster.com"

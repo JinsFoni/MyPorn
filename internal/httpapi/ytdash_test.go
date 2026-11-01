@@ -3,7 +3,7 @@ package httpapi
 import (
 	"testing"
 
-	"github.com/mario/myporn/internal/ytdash"
+	"github.com/JinsFoni/MyPorn/internal/ytdash"
 )
 
 // 4K 单文件 HLS 里最容易被写错的两个纯函数：Range 解析和「这个 Range 是哪一段」。

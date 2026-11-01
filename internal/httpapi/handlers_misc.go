@@ -11,10 +11,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mario/myporn/internal/library"
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/social/igram"
-	"github.com/mario/myporn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/library"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/social/igram"
+	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
 // socialSyncHours 把设置里的字符串夹到合理区间（1–48 小时）。

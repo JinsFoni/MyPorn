@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // 同一分辨率、不同编码（H.264 与 AV1 各一条）必须能同时存下来：

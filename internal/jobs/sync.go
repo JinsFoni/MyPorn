@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
-	"github.com/mario/myporn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
 type syncPayload struct {

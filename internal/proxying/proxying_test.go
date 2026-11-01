@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mario/myporn/internal/config"
-	"github.com/mario/myporn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/config"
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 // fakeSettings 模拟设置表；缺的键当空串，和 store.GetSetting 的行为一致。

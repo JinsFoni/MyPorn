@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/mario/myporn/internal/platform"
-	"github.com/mario/myporn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
 // warmCount 每次同步预热多少部最新影片：够覆盖「打开就点最新几部」的用法，

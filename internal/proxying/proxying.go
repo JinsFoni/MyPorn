@@ -13,7 +13,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/mario/myporn/internal/config"
+	"github.com/JinsFoni/MyPorn/internal/config"
 )
 
 // Settings 只需要读设置，不依赖整个 store（测试里给个 map 就行）。

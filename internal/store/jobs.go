@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 const jobCols = `id, type, status, priority, payload, progress, message, error, attempts, target_id,

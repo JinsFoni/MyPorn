@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/social"
 )
 
 // StreamInfo 是「在线播放」要的那点东西：一把 HLS master 清单的地址。

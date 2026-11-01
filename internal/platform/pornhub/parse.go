@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/mario/myporn/internal/hls"
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/hls"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 func isEOF(err error) bool {

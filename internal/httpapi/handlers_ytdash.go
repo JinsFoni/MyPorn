@@ -16,9 +16,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mario/myporn/internal/social"
-	"github.com/mario/myporn/internal/ytdash"
-	"github.com/mario/myporn/internal/ytstream"
+	"github.com/JinsFoni/MyPorn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/ytdash"
+	"github.com/JinsFoni/MyPorn/internal/ytstream"
 )
 
 // 4K 的「单文件 HLS」：把 YouTube 的 AV1 分片 mp4 当成一条 HLS 流放出去。

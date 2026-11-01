@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // UpsertVideo 幂等写入影片；inserted 为 true 表示是新片。

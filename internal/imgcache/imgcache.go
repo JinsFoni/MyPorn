@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mario/myporn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 // ErrBadURL 表示传进来的不是可代理的 http(s) 地址。

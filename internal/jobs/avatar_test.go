@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
-	"github.com/mario/myporn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
 // fakeAvatarSource 顶替真实的头像来源，记录被调用了几次。

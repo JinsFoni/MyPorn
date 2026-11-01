@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // playurl 是 /x/player/playurl 的返回。同一个接口按 fnval 给两种形态：

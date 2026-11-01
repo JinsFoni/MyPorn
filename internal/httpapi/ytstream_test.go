@@ -14,13 +14,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mario/myporn/internal/config"
-	"github.com/mario/myporn/internal/events"
-	"github.com/mario/myporn/internal/hls"
-	"github.com/mario/myporn/internal/imgcache"
-	"github.com/mario/myporn/internal/platform"
-	"github.com/mario/myporn/internal/store"
-	"github.com/mario/myporn/internal/ytstream"
+	"github.com/JinsFoni/MyPorn/internal/config"
+	"github.com/JinsFoni/MyPorn/internal/events"
+	"github.com/JinsFoni/MyPorn/internal/hls"
+	"github.com/JinsFoni/MyPorn/internal/imgcache"
+	"github.com/JinsFoni/MyPorn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/ytstream"
 )
 
 // YouTube「站内播放」这条线的测试：清单改写 → 会话地址 → 分片取回。

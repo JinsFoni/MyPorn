@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 var ErrNotFound = errors.New("not found")

@@ -15,10 +15,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mario/myporn/internal/hls"
-	"github.com/mario/myporn/internal/social"
-	"github.com/mario/myporn/internal/store"
-	"github.com/mario/myporn/internal/ytstream"
+	"github.com/JinsFoni/MyPorn/internal/hls"
+	"github.com/JinsFoni/MyPorn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/ytstream"
 )
 
 // YouTube 的「站内在线播放」：为什么不能只靠 iframe（M6 补的那一条）。

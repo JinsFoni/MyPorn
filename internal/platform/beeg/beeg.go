@@ -16,9 +16,9 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/mario/myporn/internal/hls"
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/hls"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 // beeg.com 前端是个纯 SPA，页面本身只有一段 <div id="app">；

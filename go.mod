@@ -1,4 +1,4 @@
-module github.com/mario/myporn
+module github.com/JinsFoni/MyPorn
 
 go 1.24.0
 

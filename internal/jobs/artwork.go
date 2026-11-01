@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mario/myporn/internal/library"
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/library"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 // 图片规格（FR-28）：poster 竖版 2:3，thumb/fanart 16:9。

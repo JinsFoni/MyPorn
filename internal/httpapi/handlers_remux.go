@@ -11,8 +11,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/muxcache"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/muxcache"
 )
 
 // handleVideoRemux 把「音画分轨」的那一档合流成一份 mp4 再下发。

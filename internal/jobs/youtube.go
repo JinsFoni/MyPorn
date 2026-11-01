@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mario/myporn/internal/library"
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/social"
-	"github.com/mario/myporn/internal/store"
-	"github.com/mario/myporn/internal/ytsub"
+	"github.com/JinsFoni/MyPorn/internal/library"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/ytsub"
 )
 
 // YouTube 订阅任务（M6），两条：

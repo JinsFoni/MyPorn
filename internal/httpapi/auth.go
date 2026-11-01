@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mario/myporn/internal/secret"
+	"github.com/JinsFoni/MyPorn/internal/secret"
 )
 
 const sessionCookie = "mp_session"

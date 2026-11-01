@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 func TestParsePerformerURL(t *testing.T) {

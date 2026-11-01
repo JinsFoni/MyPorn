@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
 // 封面预热与修复。

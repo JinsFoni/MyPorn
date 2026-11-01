@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mario/myporn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
 // 管理页（/manage）：统计 + 关注管理。整页只打一个请求——上面那排读数、下面的分项

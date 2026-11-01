@@ -17,17 +17,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/mario/myporn/internal/config"
-	"github.com/mario/myporn/internal/events"
-	"github.com/mario/myporn/internal/imgcache"
-	"github.com/mario/myporn/internal/jobs"
-	"github.com/mario/myporn/internal/muxcache"
-	"github.com/mario/myporn/internal/platform"
-	"github.com/mario/myporn/internal/proxying"
-	"github.com/mario/myporn/internal/secret"
-	"github.com/mario/myporn/internal/social"
-	"github.com/mario/myporn/internal/store"
-	"github.com/mario/myporn/internal/ytstream"
+	"github.com/JinsFoni/MyPorn/internal/config"
+	"github.com/JinsFoni/MyPorn/internal/events"
+	"github.com/JinsFoni/MyPorn/internal/imgcache"
+	"github.com/JinsFoni/MyPorn/internal/jobs"
+	"github.com/JinsFoni/MyPorn/internal/muxcache"
+	"github.com/JinsFoni/MyPorn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/proxying"
+	"github.com/JinsFoni/MyPorn/internal/secret"
+	"github.com/JinsFoni/MyPorn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/ytstream"
 )
 
 type Server struct {

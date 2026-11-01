@@ -8,8 +8,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 // ResolveProfile 按艺人名在 Pornhub 上找到同一个人，返回整份资料。

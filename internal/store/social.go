@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // 社交动态（M5）：博主账号、帖子、照片三层。

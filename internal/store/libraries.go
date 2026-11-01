@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 const libraryCols = `id, name, root_path, enabled, is_default, upload_policy, openlist_path, naming_template, created_at`

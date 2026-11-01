@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // ParseMasterPlaylist 解析 master playlist 的变体列表（相对 URI 会按 base 补全）。

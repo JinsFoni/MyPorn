@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mario/myporn/internal/config"
-	"github.com/mario/myporn/internal/events"
-	"github.com/mario/myporn/internal/imgcache"
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
-	"github.com/mario/myporn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/config"
+	"github.com/JinsFoni/MyPorn/internal/events"
+	"github.com/JinsFoni/MyPorn/internal/imgcache"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
 // listAdapter 只实现同步需要的分页接口，固定返回给定的影片列表。

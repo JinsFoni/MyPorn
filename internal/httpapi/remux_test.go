@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mario/myporn/internal/config"
-	"github.com/mario/myporn/internal/events"
-	"github.com/mario/myporn/internal/imgcache"
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/muxcache"
-	"github.com/mario/myporn/internal/platform"
-	"github.com/mario/myporn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/config"
+	"github.com/JinsFoni/MyPorn/internal/events"
+	"github.com/JinsFoni/MyPorn/internal/imgcache"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/muxcache"
+	"github.com/JinsFoni/MyPorn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
 // 4K 那一档的回归测试：合流要在后台跑，`?status=1` 立刻回进度，

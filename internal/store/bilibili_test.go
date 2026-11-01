@@ -3,7 +3,7 @@ package store
 import (
 	"testing"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // B 站独立页面的取数：UP 主列表要带本地收录数 / 未看数 / 已落盘数，

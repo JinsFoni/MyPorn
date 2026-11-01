@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mario/myporn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/social"
 )
 
 // writeSocialErr 是抓取失败唯一对外表达的地方：映射错了前端就只会看到「服务器错误」，

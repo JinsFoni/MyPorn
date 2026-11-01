@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/mario/myporn/internal/events"
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/events"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 // rateLimitedAdapter 前 failOn-1 页正常给片，到 failOn 页返回限流。

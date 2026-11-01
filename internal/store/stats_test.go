@@ -3,7 +3,7 @@ package store
 import (
 	"testing"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // 管理页的那份快照：分档边界、跨表计数、以及「没有落盘时不该凭空多出体积」。

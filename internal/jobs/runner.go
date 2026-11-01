@@ -14,16 +14,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mario/myporn/internal/config"
-	"github.com/mario/myporn/internal/events"
-	"github.com/mario/myporn/internal/imgcache"
-	"github.com/mario/myporn/internal/library"
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
-	"github.com/mario/myporn/internal/proxying"
-	"github.com/mario/myporn/internal/social"
-	"github.com/mario/myporn/internal/store"
-	"github.com/mario/myporn/internal/ytsub"
+	"github.com/JinsFoni/MyPorn/internal/config"
+	"github.com/JinsFoni/MyPorn/internal/events"
+	"github.com/JinsFoni/MyPorn/internal/imgcache"
+	"github.com/JinsFoni/MyPorn/internal/library"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/proxying"
+	"github.com/JinsFoni/MyPorn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/ytsub"
 )
 
 // proxyFor 返回某平台当前该用的代理（设置优先，其次环境变量）。

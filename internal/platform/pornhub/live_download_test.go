@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mario/myporn/internal/download"
-	"github.com/mario/myporn/internal/hls"
+	"github.com/JinsFoni/MyPorn/internal/download"
+	"github.com/JinsFoni/MyPorn/internal/hls"
 )
 
 // TestLiveHLSSegmentDownload 是可选的真实网络冒烟测试（LIVE=1 才跑）：

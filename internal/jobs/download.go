@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/download"
-	"github.com/mario/myporn/internal/library"
-	"github.com/mario/myporn/internal/model"
-	"github.com/mario/myporn/internal/platform"
-	"github.com/mario/myporn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/download"
+	"github.com/JinsFoni/MyPorn/internal/library"
+	"github.com/JinsFoni/MyPorn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
 // DownloadPayloadInfo 是投递下载任务时快照下来的参数（导出供 HTTP 层解析展示）。

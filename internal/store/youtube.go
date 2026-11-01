@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // YouTube 订阅（M6）：频道 + 视频两层。

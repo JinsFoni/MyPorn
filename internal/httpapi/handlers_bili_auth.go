@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/platform/bilibili"
+	"github.com/JinsFoni/MyPorn/internal/platform/bilibili"
 )
 
 // errNoAdapter 表示 B 站适配器这一轮还没装好（例如 base URL 写错）。

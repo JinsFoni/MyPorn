@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/mario/myporn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 // newTestAdapter 把一个假上游接上来：adapter 的 api 字段指到 httptest，

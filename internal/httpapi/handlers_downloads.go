@@ -8,9 +8,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mario/myporn/internal/jobs"
-	"github.com/mario/myporn/internal/library"
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/jobs"
+	"github.com/JinsFoni/MyPorn/internal/library"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // handleDownloadOptions 返回下载确认框需要的信息：可选库、空间、预估体积。

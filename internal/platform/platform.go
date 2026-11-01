@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // ErrNotFound 表示上游明确回了 404：页面不存在。

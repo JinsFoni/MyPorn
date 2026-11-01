@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/social"
 )
 
 // BaseURL 便于测试替换。

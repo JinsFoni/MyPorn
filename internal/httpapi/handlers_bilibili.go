@@ -20,7 +20,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mario/myporn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
 // platformBilibili 出现得很频繁，给它一个名字，免得字符串到处漏。

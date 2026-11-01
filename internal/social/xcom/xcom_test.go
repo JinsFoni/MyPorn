@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mario/myporn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/social"
 )
 
 // fixture 是真实响应裁出来的：保留 JSON 结构，只留两条帖子

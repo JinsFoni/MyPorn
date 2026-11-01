@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"github.com/mario/myporn/internal/secret"
+	"github.com/JinsFoni/MyPorn/internal/secret"
 )
 
 func newTestBox(t *testing.T) *secret.Box {

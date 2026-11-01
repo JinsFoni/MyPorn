@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mario/myporn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/social"
 )
 
 // profileFixture 照真实 web_profile_info 的结构裁出来：3 条帖子

@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mario/myporn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/social"
 )
 
 // YtDlp 是 yt-dlp 可执行文件的封装：列频道（深度回填）与下载视频。

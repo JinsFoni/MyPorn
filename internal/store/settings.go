@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/mario/myporn/internal/secret"
+	"github.com/JinsFoni/MyPorn/internal/secret"
 )
 
 // GetSetting 读取普通配置项，缺失返回空串。

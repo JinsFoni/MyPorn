@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/social"
 )
 
 const (

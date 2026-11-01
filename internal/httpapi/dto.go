@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/mario/myporn/internal/model"
+	"github.com/JinsFoni/MyPorn/internal/model"
 )
 
 // imgProxy 把远端图片地址改写为本地代理地址，规避 Referer/防盗链。

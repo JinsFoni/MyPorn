@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/muxcache"
+	"github.com/JinsFoni/MyPorn/internal/muxcache"
 )
 
 // Encoder 封装 ffmpeg / ffprobe 调用。只做 remux 与图片缩放，永不做转码。

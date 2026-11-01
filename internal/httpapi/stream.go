@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/hls"
-	"github.com/mario/myporn/internal/imgcache"
+	"github.com/JinsFoni/MyPorn/internal/hls"
+	"github.com/JinsFoni/MyPorn/internal/imgcache"
 )
 
 // mediaUserAgent 是抓流用的 UA（与平台适配器一致）。

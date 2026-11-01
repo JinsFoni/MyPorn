@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/mario/myporn/internal/hls"
+	"github.com/JinsFoni/MyPorn/internal/hls"
 )
 
 // ErrUnsupported 表示清单形态超出内置下载器能力（加密、BYTERANGE 等），

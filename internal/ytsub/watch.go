@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mario/myporn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/social"
 )
 
 // WatchMeta 从一个视频的观看页里抠出「发布时间 / 播放量 / 时长」。

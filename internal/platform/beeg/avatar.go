@@ -19,7 +19,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/mario/myporn/internal/platform"
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 const (

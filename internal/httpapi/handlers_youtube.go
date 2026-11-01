@@ -17,9 +17,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mario/myporn/internal/social"
-	"github.com/mario/myporn/internal/store"
-	"github.com/mario/myporn/internal/ytsub"
+	"github.com/JinsFoni/MyPorn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/ytsub"
 )
 
 // ---- DTO ----
