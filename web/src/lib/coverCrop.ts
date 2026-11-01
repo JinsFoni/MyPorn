@@ -21,6 +21,19 @@
  * 两版都要求落在 22%~36%（9:16 = 0.316）之外就判「不算窄条」——16:9 的原画封面（占满整幅）
  * 和 4:5 这类更宽的竖屏一律返回 null：宁可按老样子整张铺满，也不能把封面裁掉一块。
  * 实测 18 张封面：16 张探到窄条且落在 0.294~0.316，两张 16:9 原画（3840×2160、横屏）判为不裁。
+ *
+ * **光看「锐度在哪儿断」不够**（2026-11-01 用户报的「B 站的横版视频起播画面被裁切成竖图加虚化背景」）：
+ * 一张本来就很横的 16:9 封面，只要主体居中、两侧是虚焦/暗背景/纯色墙，锐度剖面长得跟烘出来的填充一模一样
+ * ——边上糊、中间尖，①②两条都会给一个 0.22~0.36 的窄条。全库 342 张 B 站封面（全是 16:9 原画，
+ * 任何非 null 都是误判）实测 **36 张被裁（10.5%）**，也就是说卡片墙和播放器里有一成横版封面被切成竖条。
+ * 所以候选边界还要过两道「这真是站方烘的填充吗」的验收：
+ *   - **接缝**：填充是贴在真画面旁边的，接缝那一列**整列都在跳**（灰度差 > 12 的行占 72%~100%，
+ *     两侧都比出来的最小值 0.31~1.00）；自然画面即便有暗背景，边界也只有一部分行在跳
+ *     （同一批 36 张误判：0~0.24，中位 0.07）。取「左右两条缝里窄的那条 ≥ 0.3」。
+ *   - **压暗**：站方把填充乘过一档暗，实测填充/中间 = 0.24~0.33；自然照片两侧很少有这种整片压暗
+ *     （36 张误判里只有 1 张到 0.26，其余 0.52~2.14）。取 ≤ 0.45。
+ * 加完这两道：36 张误判 **0 张被裁**；YouTube 那 10 张里留 9 张（丢掉的那张 `XFJ8fCUOYRI`
+ * 放大看是张正常的 16:9 照片，本来就该丢——它的接缝 0.21/0.37、填充亮度比 1.28 都不像烘的）。
  */
 
 export interface CoverCrop {
@@ -35,6 +48,12 @@ export interface CoverCrop {
 let probeCanvas: HTMLCanvasElement | null = null;
 /** 已经探过的封面（键是图片地址）：同一张封面在墙、频道页、搜索结果里反复出现 */
 const cache = new Map<string, CoverCrop | null>();
+/** 接缝上一列里算「跳了一下」的灰度差（烘的填充是硬切，实测两侧相邻行差 20~80） */
+const SEAM_STEP = 12;
+/** 接缝那一列至少要有这么多行在跳，才算「整列硬切」（烘的填充 0.31~1.00；36 张自然画面误判 0~0.24） */
+const SEAM_ROWS = 0.3;
+/** 填充区压暗后的亮度上限（相对中间那条）：实测站方烘的填充是 0.24~0.33 */
+const FILL_DARK = 0.45;
 
 /** 没缓存就探一次；探过（哪怕是「探不出」）就不再重算 */
 export function coverCropFor(src: string, img: HTMLImageElement): CoverCrop | null {
@@ -93,10 +112,49 @@ export function findCoverCrop(img: HTMLImageElement): CoverCrop | null {
   }
 
   const mid = AW / 2;
+
+  /**
+   * 接缝列里「整列都在跳」的行占多少。烘出来的填充是**贴着**真画面贴上去的，接缝两侧是硬切，
+   * 于是那一列从上到下都在跳；自然画面里的边界（人的轮廓、墙角的明暗）只在一部分行上跳。
+   * 在候选列 ±4 内取最好的那一列：边界定得偏一两像素也不至于判错。
+   */
+  const seamRows = (edge: number): number => {
+    let best = 0;
+    for (let x = Math.max(1, edge - 4); x <= Math.min(AW - 1, edge + 4); x += 1) {
+      let hit = 0;
+      for (let y = 0; y < AH; y += 1) {
+        if (Math.abs(gray[y * AW + x] - gray[y * AW + x - 1]) > SEAM_STEP) hit += 1;
+      }
+      const rows = hit / AH;
+      if (rows > best) best = rows;
+    }
+    return best;
+  };
+
+  /** 一块矩形区域的平均灰度（只在有候选时才调，一次约 1ms） */
+  const regionGray = (xa: number, xb: number): number => {
+    let sum = 0;
+    for (let y = 0; y < AH; y += 1) {
+      for (let x = xa; x < xb; x += 1) sum += gray[y * AW + x];
+    }
+    return xb > xa ? sum / ((xb - xa) * AH) : 0;
+  };
+
+  /**
+   * 候选窄条的两道验收（理由和实测数字见文件头）。都过不了就不裁——宁可按整张铺满。
+   */
   const fromHalf = (half: number): CoverCrop | null => {
     const share = (half * 2) / AW;
     if (share < 0.22 || share > 0.36) return null;
-    return { share, x0: (mid - half) / AW, x1: (mid + half) / AW };
+    const x0 = Math.round(mid - half);
+    const x1 = Math.round(mid + half);
+    if (seamRows(x0) < SEAM_ROWS || seamRows(x1) < SEAM_ROWS) return null;
+    const inside = regionGray(x0, x1);
+    const outerWidth = AW - (x1 - x0);
+    if (outerWidth <= 0) return null;
+    const outside = (regionGray(0, x0) * x0 + regionGray(x1, AW) * (AW - x1)) / outerWidth;
+    if (outside > inside * FILL_DARK) return null;
+    return { share, x0: x0 / AW, x1: x1 / AW };
   };
 
   // ① 从中心往外找最外侧的强极大值
