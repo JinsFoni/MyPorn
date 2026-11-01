@@ -50,6 +50,9 @@ jobs:
             type=semver,pattern={{version}},value=${{ env.VERSION }}
             type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
             type=semver,pattern={{major}},value=${{ env.VERSION }}
+            # semver 那几条把 v 去掉了（v0.1.0 → 0.1.0），可 release 页上写的是 v0.1.0，
+            # 用户照抄 docker pull ...:v0.1.0 会 manifest unknown（v0.1.0 那次发布实测过），所以原样再打一条
+            type=raw,value=${{ env.VERSION }}
             type=sha,prefix=sha-,format=short
           labels: |
             org.opencontainers.image.title=MyPorn
