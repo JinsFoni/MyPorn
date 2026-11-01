@@ -854,21 +854,17 @@
         {/if}
 
         <!-- 关闭键：跟播放器底部控制条（.video-controls）同一套——白色 10% 底 + 16px 背景模糊 +
-             99px 药丸 + 一圈 1px 暗环，尺寸也对齐它里面的按钮（36 高、图标 16）。
-             放**左上角**而不是右上角：窄屏（< 32rem）皮肤会把投屏/画中画/全屏收进画面右上角那颗浮动药丸，
-             390×844 实测那三颗就在 x=254 / 291 / 328，画面右边 374——右上角是它的地盘，
-             关在这个位置会和全屏键叠在一起（旧样式就在这里，18px 压着全屏键）。
-             左上角实测是空的（media-title 是 display:none），而且全屏播放器把「退出」放左上也是通行做法。 -->
+             99px 圆角 + 一圈 1px 暗环，只是比控制条里那几颗（36×36）矮一号：28×28、图标 14，不带文字。
+             位置在画面右上角；窄屏（< 32rem）要往下让一截，原因见下面 .yt-close 的注释。 -->
         <button
           type="button"
-          class="yt-close absolute left-3 top-3 z-30 flex h-9 items-center justify-center gap-1.5 rounded-full px-2.5 text-meta text-fg"
+          class="yt-close absolute right-3 top-3 z-30 grid h-7 w-7 place-items-center rounded-full text-fg"
           onclick={closeDetail}
           aria-label="关闭"
         >
-          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2">
+          <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.2">
             <path d="m6 6 12 12M18 6 6 18" stroke-linecap="round" />
           </svg>
-          <span class="hidden sm:inline">关闭</span>
         </button>
       </div>
 
@@ -1040,7 +1036,7 @@
      border-radius 99px、backdrop-filter blur(16px) saturate(1.1)、外加 0 0 0 1px 的暗环，
      里面每个按钮 36×36、图标 16px。这里照抄，所以它站在画面上像控制条里多出来的一颗，
      而不是「贴了张黑胶布」——旧样式是 bg-ink/70 的深色圆点，黑画面里看不清边界。
-     手机（<640）只留图标，正好 36×36，就是那颗按钮本身；再宽才把「关闭」两个字放出来。 */
+     尺寸比那几颗按钮矮一号（28×28、图标 14），不带文字。 */
   .yt-close {
     background: oklch(1 0 0 / 0.1);
     -webkit-backdrop-filter: blur(16px) saturate(1.1);
@@ -1050,7 +1046,7 @@
       0 1px 3px 0 oklch(0 0 0 / 0.15),
       0 1px 2px -1px oklch(0 0 0 / 0.15);
     /* 常驻会跟画面抢注意力（底部控制条自己 2.5 s 就淡出），所以跟着 hover 走。
-       藏起来的时候连指针一起关掉：否则画面上有块看不见的 36px 会吃掉点击（点一下片子就没了），
+       藏起来的时候连指针一起关掉：否则画面上有块看不见的 28px 会吃掉点击（点一下片子就没了），
        控制条隐藏时也是点不到的，行为对齐。 */
     opacity: 0;
     pointer-events: none;
@@ -1067,6 +1063,16 @@
 
   .yt-close:hover {
     background: oklch(1 0 0 / 0.2);
+  }
+
+  /* 窄屏往右下让一截：皮肤在 < 32rem 时会把投屏/画中画/全屏收进画面右上角那颗浮动药丸，
+     390×844 实测它占画面 y=8~48（那三颗按钮 x=254 / 291 / 328，画面右边 374），
+     正好压在右上角。关闭键挪到 top:3.5rem(56px) 就落在它下面，两者不叠；
+     桌面端那组按钮仍在底部控制条里，右上角是空的，所以只在窄屏加这一条。 */
+  @media (max-width: 32rem) {
+    .yt-close {
+      top: 3.5rem;
+    }
   }
 
   /* 触屏没有 hover：滑进画面也触发不了，一直显示，否则手机上关不掉（点背景也能关，但不能指望） */
