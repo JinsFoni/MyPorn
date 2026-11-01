@@ -575,7 +575,56 @@
 
     <div class="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_17rem]">
       <div class="min-w-0">
-        <h2 class="text-display font-normal leading-snug tracking-[-0.01em] text-fg lg:text-hero">{video.title}</h2>
+        <!-- 下载 / 在平台打开跟着标题走（和 YouTube 弹窗那排同一套 `icon-act`）。
+             原来是侧栏两颗整宽按钮 + 窄屏标题下再来一颗「下载到本地库」：同一个动作在
+             两个位置各写一遍，窄屏那颗还把标题和标签之间撑出一行。现在收成标题行右端两颗。 -->
+        <div class="flex items-start gap-3">
+          <h2 class="min-w-0 flex-1 text-display font-normal leading-snug tracking-[-0.01em] text-fg lg:text-hero">
+            {video.title}
+          </h2>
+
+          <!-- 这一行的高度钉成标题首行的行高（20×1.375 / lg 28×1.375），36px 的按钮从上下各溢出几像素，
+               圆心正好压在首行中线上；不钉的话 items-start 会把 36px 的方框顶对齐到行框上，看着偏低。 -->
+          <div class="flex h-[calc(var(--text-display)*1.375)] shrink-0 items-center gap-1 lg:h-[calc(var(--text-hero)*1.375)]">
+            <button
+              type="button"
+              class="icon-act"
+              data-emphasis="primary"
+              title={video.hasLocalFile ? '再下载一份' : '下载到本地库'}
+              aria-label={video.hasLocalFile ? '再下载一份' : '下载到本地库'}
+              onclick={() => (downloadOpen = true)}
+              disabled={playback === null && loadingPlayback}
+            >
+              <svg
+                viewBox="0 0 24 24"
+                class="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              >
+                <path d="M12 4v10" />
+                <path d="m8 10.5 4 4 4-4" />
+                <path d="M4.5 18.5h15" />
+              </svg>
+            </button>
+
+            <a
+              href={video.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              class="icon-act"
+              title={`在 ${platformLabel(video.platform)} 打开`}
+              aria-label={`在 ${platformLabel(video.platform)} 打开原始页面`}
+            >
+              <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <path d="M18 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4.5" />
+                <path d="M15 3.5h5.5V9" />
+                <path d="M20.2 3.8 11 13" />
+              </svg>
+            </a>
+          </div>
+        </div>
 
         <p class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-ui text-muted">
           {#each video.performers as person, index (person.name + String(index))}
@@ -597,15 +646,6 @@
           <span class="text-dim" aria-hidden="true">·</span>
           <span class="text-meta text-dim">{relativeTime(video.publishedAt)}</span>
         </p>
-
-        <button
-          type="button"
-          class="btn btn-primary mt-3 h-9 lg:hidden"
-          onclick={() => (downloadOpen = true)}
-          disabled={playback === null && loadingPlayback}
-        >
-          {video.hasLocalFile ? '再下载一份' : '下载到本地库'}
-        </button>
 
         {#if video.tags.length > 0}
           <ul class="mt-3 flex flex-wrap items-center gap-1.5" aria-label="标签">
@@ -642,32 +682,10 @@
           {/each}
         </dl>
 
-        <button
-          type="button"
-          class="btn btn-primary mt-4 w-full"
-          onclick={() => (downloadOpen = true)}
-          disabled={playback === null && loadingPlayback}
-        >
-          <svg viewBox="0 0 20 20" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
-            <path d="M10 3.5v8" />
-            <path d="m6.75 8.5 3.25 3.25L13.25 8.5" />
-            <path d="M4 15.5h12" />
-          </svg>
-          {video.hasLocalFile ? '再下载一份' : '下载到本地库'}
-        </button>
+        <!-- 下载 / 在平台打开已经挪到标题行右端（见上），这里只留一句状态说明 -->
         {#if video.hasLocalFile}
-          <p class="mt-1.5 text-meta text-sage">已在本地 {video.localLibraryIds.length} 个库中</p>
+          <p class="mt-2 text-meta text-sage">已在本地 {video.localLibraryIds.length} 个库中</p>
         {/if}
-
-        <a
-          href={video.url}
-          target="_blank"
-          rel="noreferrer noopener"
-          class="btn mt-2 w-full"
-          aria-label="在平台打开原始页面"
-        >
-          在 {platformLabel(video.platform)} 打开
-        </a>
 
         <p class="mt-4 text-meta leading-relaxed text-dim">
           播放器快捷键：空格/K 播放暂停 · ← → 快退快进 5 秒 · ↑ ↓ 音量（10%） · M 静音 · F 全屏；画面单击暂停，双击左右两侧快退快进、双击中间全屏。

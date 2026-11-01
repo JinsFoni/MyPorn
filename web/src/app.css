@@ -297,6 +297,45 @@
   }
 }
 
+/* 标题行右上角那串图标键（YouTube 弹窗、影片详情页共用同一套）：36×36 圆点，图标 20px。
+   图标/按钮取 0.55 的比例——再大（22/40 起）这几笔曲线的细节开始糊，再小就回到点不准的手感。
+   和压在画面上的关闭键不是一套：那是浮在视频上、要半透明才不挡画面；
+   这几颗在正文里，默认不铺底，hover / 键盘聚焦才浮一层 panel（冷白 5%）。
+   `data-emphasis="primary"` 提亮到 fg：写操作（下载）用它，只读的（复制链接 / 外链）保持 muted。 */
+@utility icon-act {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border-radius: 9999px;
+  color: var(--color-muted);
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+  &:hover:not(:disabled),
+  &:focus-visible {
+    background-color: var(--color-panel);
+    color: var(--color-fg);
+  }
+  &[data-emphasis='primary'] {
+    color: var(--color-fg);
+  }
+  /* 已收藏：星星填实并提亮，和列表卡片右上角那颗保持同一个信号 */
+  &[data-saved] {
+    color: var(--color-hi);
+  }
+  /* hover 那条（0,3,0）比 [data-saved]（0,2,0）高一级，不补这条的话鼠标一停到星星上
+     它会从白掉回 fg，看着像「取消收藏已经生效了」 */
+  &[data-saved]:hover:not(:disabled),
+  &[data-saved]:focus-visible {
+    color: var(--color-hi);
+  }
+  &:disabled {
+    opacity: 0.45;
+    pointer-events: none;
+  }
+}
+
 @utility field {
   width: 100%;
   min-height: 2.5rem;

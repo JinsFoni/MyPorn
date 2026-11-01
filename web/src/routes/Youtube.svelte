@@ -927,7 +927,7 @@
         <div class="flex h-[1.375rem] shrink-0 items-center gap-1">
           <button
             type="button"
-            class="yt-act"
+            class="icon-act"
             data-emphasis="primary"
             title={downloading.has(v.id) ? '正在排队下载' : v.downloaded ? '已在本地库，再下一次' : '下载到本地库'}
             aria-label={downloading.has(v.id) ? '正在排队下载' : '下载到本地库'}
@@ -957,7 +957,7 @@
 
           <button
             type="button"
-            class="yt-act"
+            class="icon-act"
             data-saved={v.saved ? '' : undefined}
             title={v.saved ? '取消收藏' : '收藏'}
             aria-label={v.saved ? '取消收藏' : '收藏'}
@@ -977,7 +977,7 @@
 
           <button
             type="button"
-            class="yt-act"
+            class="icon-act"
             title="复制播放链接"
             aria-label="复制播放链接"
             onclick={() => void copyLink()}
@@ -992,7 +992,7 @@
             href={v.url}
             target="_blank"
             rel="noreferrer"
-            class="yt-act"
+            class="icon-act"
             title="在 YouTube 打开"
             aria-label="在 YouTube 打开"
           >
@@ -1135,49 +1135,7 @@
     }
   }
 
-  /* 标题行右上角那四颗图标键：36×36 圆点，图标 20px（原来是 32/16，用户说偏小）。
-     图标/按钮取 0.55 的比例——再大（22/40 起）曲线细节开始糊，再小就回到「点不到」的手感。
-     和画面上的关闭键不是一套——那是压在视频上、要半透明才不挡画面；
-     这几颗在弹窗正文里，默认不铺底，hover / 键盘聚焦才浮一层 panel（冷白 5%）。
-     下载那颗用 data-emphasis="primary" 提亮到 fg：它是这四个里唯一的「写」操作。 */
-  .yt-act {
-    display: grid;
-    width: 2.25rem;
-    height: 2.25rem;
-    place-items: center;
-    border-radius: 9999px;
-    color: var(--color-muted);
-    transition:
-      background-color 140ms ease,
-      color 140ms ease;
-  }
-
-  .yt-act:hover:not(:disabled),
-  .yt-act:focus-visible {
-    background-color: var(--color-panel);
-    color: var(--color-fg);
-  }
-
-  .yt-act[data-emphasis='primary'] {
-    color: var(--color-fg);
-  }
-
-  /* 已收藏：星星填实并提亮，和列表卡片右上角那颗保持同一个信号 */
-  .yt-act[data-saved] {
-    color: var(--color-hi);
-  }
-
-  /* hover 那条（0,3,0）比 [data-saved]（0,2,0）高一级，不补这条的话鼠标一停到星星上
-     它会从白掉回 fg，看着像「取消收藏已经生效了」 */
-  .yt-act[data-saved]:hover:not(:disabled),
-  .yt-act[data-saved]:focus-visible {
-    color: var(--color-hi);
-  }
-
-  .yt-act:disabled {
-    opacity: 0.45;
-    pointer-events: none;
-  }
+  /* 标题行右上角那四颗图标键的样式在 app.css 的 `icon-act`（影片详情页共用同一套）。 */
 
   /* 关闭键跟播放器底部控制条是同一套视觉：量出来那根药丸是 background oklch(1 0 0 / .1)、
      border-radius 99px、backdrop-filter blur(16px) saturate(1.1)、外加 0 0 0 1px 的暗环，
