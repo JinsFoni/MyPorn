@@ -74,6 +74,16 @@ const (
 	// googlevideo 的限流不是 403，而是**接了连接不发数据**；客户端没有超时的话，
 	// 这一段就永远等下去（实测 60 秒 0 字节）。所以每块都必须带超时，超时就重试。
 	ytDashAttemptTimeout = 25 * time.Second
+	// ytDashFirstBlock 是**流式**取数时第一块的字节数（见 ytStairSpans）。
+	//
+	// 服务端是「第 N 块到齐才写第 N 块」，所以第一块多大 = 播放器等多久才见到第一个字节。
+	// 2026-11-01 实测（5A3yPgCSVrg，4K60 AV1 itag 401，一段 16 925 922 B / 5.038 s，当天出境链路 ~2 MB/s）：
+	// 3 等分时首块 5.64 MB，第一个字节要 2.8~4.3 秒才发出去，正好越过播放器看门狗的 3 秒阈值，
+	// 于是它每 4 秒 `startLoad()` 一次、把在飞的分片掐掉；掐断时服务端连一个字节都还没发，
+	// 于是永远重来 —— 实测同一个 v.mp4?i=0 被取消 9 次、每次正好 4.0 秒、0 字节，首帧 34.8/38.5/41.7 秒。
+	// 首块压到 1 MiB 后，第一个字节 ≈ 上游 TTFB（实测 1.1~2.5 s）+ 0.5 s。
+	// 代价：尾块从 5.64 MB 长到 7.95 MB（整段取完晚约 1 秒），换「先出画面」值。
+	ytDashFirstBlock = 1 << 20
 	// ytDashSessionTTL 是会话的兜底寿命（真寿命令看上游签名）。
 	ytDashSessionTTL = 6 * time.Hour
 	// ytDashMaxSessions 是同时在册的会话上限（地铁里刷列表会点开一堆 4K）。
@@ -432,6 +442,28 @@ func ytBlockSpans(start, end int64, count int) [][2]int64 {
 	return spans
 }
 
+// ytStairSpans 把 [start, end] 切成「先小后大」的楼梯块，专门给**流式**取数用（streamYtRange）。
+//
+// 为什么不均分：流式取数是「第 N 块到齐才写第 N 块」，第一块的大小直接等于播放器等多久
+// 才见到第一个字节。2026-11-01 实测（5A3yPgCSVrg，一段 16 925 922 B / 5.038 s，出境链路 ~2 MB/s）：
+// 3 等分 ⇒ 首块 5.64 MB ⇒ 首字节 2.8~4.3 秒才出去，正好卡在播放器「3 秒算卡住、每 4 秒推一把」
+// 的阈值上，于是它每 4 秒 `startLoad()` 一次、把这条分片掐掉重来 —— 首帧 34.8/38.5/41.7 秒，
+// 甚至 45 秒都起不来（详见 web/src/components/VideoPlayer.svelte 的 fragInFlight）。
+//
+// 首块取 first 字节、其余按 workers-1 均分：首块 1 MiB ⇒ 首字节 ≈ TTFB（1.1~2.5 s）+ 0.5 s，
+// 而尾块从 5.64 MB 变 7.95 MB，整段取完只晚约 1 秒（三条连接是并发的，尾块本来就最慢）。
+// 段比 2*first 还小时直接均分：那种段本来就快，别为了几毫秒多开一次请求
+// （实测每次新请求都要重新起步，1 MB×10 次只有 0.18 MB/s，见 ytDashWorkers）。
+func ytStairSpans(start, end int64, workers int, first int64) [][2]int64 {
+	n := end - start + 1
+	if workers < 2 || first <= 0 || n <= first*2 {
+		return ytBlockSpans(start, end, workers)
+	}
+	spans := make([][2]int64, 0, workers)
+	spans = append(spans, [2]int64{start, start + first - 1})
+	return append(spans, ytBlockSpans(start+first, end, workers-1)...)
+}
+
 // streamYtRange 把 [start, end] 这段字节按块并发取、**按顺序边到边发**。
 //
 // 两个要点：
@@ -441,6 +473,7 @@ func ytBlockSpans(start, end int64, count int) [][2]int64 {
 //   - 边到边发：过去是「全部拼完再一次性写回」，起播要等整段下完（8.8 MB / 2 MB/s = 4.4 秒）。
 //     现在第 0 块一到就往下写，播放器几百毫秒就能开始喂 MSE。
 //
+// 块不是均分的：首块压到 ytDashFirstBlock，先把第一个字节尽快送出去（见 ytStairSpans）。
 // 代价是响应头（含 Content-Length）必须先发：某一块彻底失败时客户端只会看到一个短了的响应，
 // hls.js 会整段重来——比「什么都不发」好，因为重来一次通常就过了。
 // 返回拼好的整段字节（取满才返回），供调用方塞进预取缓存——同一份字节只从上游拿一次。
@@ -449,8 +482,8 @@ func (s *Server) streamYtRange(ctx context.Context, w http.ResponseWriter, clien
 	if n <= 0 {
 		return nil
 	}
-	// 按块均分：一段 11 MB 分 3 块就是每块 3.7 MB（见 ytDashWorkers 的量测表）
-	spans := ytBlockSpans(start, end, ytDashWorkers)
+	// 楼梯块：首块 1 MiB 先出去，剩下两路均分（见 ytStairSpans 的量测）
+	spans := ytStairSpans(start, end, ytDashWorkers, ytDashFirstBlock)
 	results := make([]chan block, len(spans))
 	for i := range results {
 		results[i] = make(chan block, 1)

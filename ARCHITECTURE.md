@@ -370,10 +370,19 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
   - **看门狗只看元素，不看 `engine.currentLevel`**：hls.js 自动选档时 `currentLevel` **一直是 -1**
     （实测一边正常推进 7.2→11.2 s、`readyState=4`，一边 `currentLevel=-1` 不变），拿它当「没在拉流」会每 4 秒
     把健康的管线掐一次——第一版看门狗就是这么帮倒忙的。现在判据是元素：`(!paused || wantPlay) && readyState < 2`
-    或「有数据但 6 秒没推进」，连中 3 拍（1 秒一拍）且距上次推它 ≥4 秒才 `engine.startLoad(at)` + `kickPlay()`。
+    或「有数据但 6 秒没推进」，连中 3 拍（1 秒一拍）且距上次推它 ≥10 秒才 `engine.startLoad(at)` + `kickPlay()`。
     **`video.seeking` 不能当「正常」放过去**：拖到没缓冲的地方卡住时 `seeking` 会一直是 true（实测 `t=200`、
     `readyState=1`、16 秒不动，看门狗一声不响）；去掉这条豁免后同样的卡死 5 秒被推起来（200.0 → 200.4，`readyState` 回 4，
     之后一路 201→208）。
+  - **有分片在飞就绝不推它**（2026-11-01 修）：`startLoad()` 会**掐掉在飞的分片请求**，而一条 4K 分片在慢链路上
+    要 4~10 秒才到手，这期间 `readyState` 一直是 1——看门狗把它当「卡住」，每 4 秒掐一次、掐断时服务端连第一个字节
+    都还没发出去，于是无限重来。实测（`5A3yPgCSVrg`，一段 16 925 922 B / 5.038 s）：同一个 `v.mp4?i=0` 被取消 9~10 次、
+    每次正好 4.0 秒、`encodedBodySize` 全 0，首帧 34.8 / 38.5 / 41.7 秒，还有一次 45 秒仍 `readyState=0`。
+    现在用 hls.js 事件（`hlsFragLoading` / `hlsFragLoadProgress` / `hlsFragLoaded`，失败走 `hlsError` 的 `fragLoad*`）
+    喂一个「在飞计数 + 最近动静时刻」：仍在飞且最近 30 秒内有动静就跳过一次 nudge（两个上限都看，防计数漏减把 nudge 永久挡住）。
+    服务端同步改了块切法（见 `ytStairSpans`：首块 1 MiB，其余均分），首字节从「等 5.64 MB」变成「等 1 MiB」。
+    改完实测：首帧 34.8/38.5/41.7 s → **9.7 s**（解析已缓存）/ 13.4 s（冷解析 8.8 s），nudge 次数 9~10 → **2**，
+    拖到 120 s 从 7.3~11.4 s → **5.0 s**。
 - **全屏不许跟着屏宽继续放大控制条**（2026-11-01 用户报的「全屏模式下的底部菜单栏有点太高了」）：皮肤在
   `skin.css` 里写了 `@media (width>=1280px) .media-skin:fullscreen{--media-scale:1.25}`，1536px 给 1.5、
   1920px 给 1.75，整套控件（按钮、图标、进度条槽、圆角）都按这个 `--media-scale` 走。实测进全屏：

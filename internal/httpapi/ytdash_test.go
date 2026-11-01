@@ -134,3 +134,49 @@ func TestYtBlockSpans(t *testing.T) {
 		t.Fatalf("2 字节切成 %d 块，应当只切 2 块", len(got))
 	}
 }
+
+// 楼梯块决定「第一个字节多久出去」，切错了要么首字节还是慢、要么漏字节。
+func TestYtStairSpans(t *testing.T) {
+	const seg = 16925922 // 5A3yPgCSVrg 的 itag 401 一段（实测）
+	const first = 1 << 20
+	spans := ytStairSpans(1165, 1165+seg-1, 3, first)
+	if len(spans) != 3 {
+		t.Fatalf("切成 %d 块，想要 3 块", len(spans))
+	}
+	// 首块必须**恰好**是 1 MiB：它是「首字节延迟」的唯一来源，不能悄悄变回均分
+	if got := spans[0][1] - spans[0][0] + 1; got != first {
+		t.Fatalf("首块 %d 字节，想要 %d", got, first)
+	}
+	if spans[0][0] != 1165 || spans[2][1] != 1165+seg-1 {
+		t.Fatalf("首尾没对齐: %v", spans)
+	}
+	var sum int64
+	for i, sp := range spans {
+		if sp[0] > sp[1] {
+			t.Fatalf("第 %d 块是空区间: %v", i, sp)
+		}
+		if i > 0 && sp[0] != spans[i-1][1]+1 {
+			t.Fatalf("第 %d 块和上一块断开了: %v", i, spans)
+		}
+		sum += sp[1] - sp[0] + 1
+	}
+	if sum != seg {
+		t.Fatalf("总字节数 %d，想要 %d", sum, seg)
+	}
+	// 尾巴两块要足够大：均分后每块应 ≈ (seg-first)/2，别把并发浪费在一堆碎块上
+	if got := spans[1][1] - spans[1][0] + 1; got < first {
+		t.Fatalf("第二块只有 %d 字节，太小了", got)
+	}
+	// 短段（音轨 161 KB）不楼梯：本来就快，多开一次请求要重新起步
+	audio := ytStairSpans(983, 983+161611-1, 3, first)
+	if len(audio) != 3 || audio[0][1]-audio[0][0]+1 == first {
+		t.Fatalf("短段不该楼梯: %v", audio)
+	}
+	var asum int64
+	for _, sp := range audio {
+		asum += sp[1] - sp[0] + 1
+	}
+	if asum != 161611 {
+		t.Fatalf("短段总字节数 %d，想要 161611", asum)
+	}
+}

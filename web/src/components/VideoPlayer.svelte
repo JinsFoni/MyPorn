@@ -39,7 +39,17 @@
     startLoad?: (at: number) => void;
     /** hls.js 自带的原地自愈：换一个 MediaSource 再挂回同一个元素，`currentTime` 不丢 */
     recoverMediaError?: () => void;
+    /**
+     * hls.js 的事件口。只用来看「有没有分片正在下载」（见 fragInFlight 的注释）：
+     * 片段开始走 `hlsFragLoading`、每收到一批字节走 `hlsFragLoadProgress`、到手走 `hlsFragLoaded`，
+     * 失败/超时/被掐没有专属事件，走通用的 `hlsError`（`data.details` 是 `fragLoadError` 之类）。
+     */
+    on?: (event: string, listener: HlsListener) => void;
+    off?: (event: string, listener: HlsListener) => void;
   }
+
+  /** hls.js 事件回调：错误事件的载荷里带 `details`，其余事件的载荷这里用不到 */
+  type HlsListener = (event: string, data?: { details?: string }) => void;
 
   interface EngineSourceHost extends HTMLElement {
     /** 适配器上的 hls.js 实例（实测：`document.querySelector('hlsjs-video').engine` 拿得到） */
@@ -245,6 +255,24 @@
   let stallTimer: number | undefined;
   let stallTicks = 0;
   let lastNudgeAt = 0;
+  /**
+   * 引擎手上有没有分片正在下载（hls.js 事件喂出来的，见 trackFragments）。
+   *
+   * 2026-11-01 实测（`5A3yPgCSVrg`，4K60 AV1，一段 16.9 MB / 5.038 s，当天出境链路 2 MB/s）：
+   * 一条分片要 4~10 秒才到手，这期间 `readyState` 一直是 1，看门狗把它当成「卡住」，
+   * 每 4 秒调一次 `startLoad()`——而 `startLoad()` 会**把在飞的这条分片请求掐掉**。
+   * 服务端那时连第一个字节都还没发出去（首块要攒够才写），于是永远重来：
+   * 实测同一个 `v.mp4?i=0` 被取消 9 次、每次正好 4.0 秒、`encodedBodySize` 全是 0，
+   * 首帧 34.8 / 38.5 / 41.7 秒，还有一次 45 秒仍 `readyState = 0`。
+   * 只有预取碰巧把整段攒进内存、某次请求 17 毫秒返回全量时才起播。
+   */
+  let fragInFlight = 0;
+  /** 这一批在飞片段最早开始的时刻（诊断用，不参与判据） */
+  let fragSince = 0;
+  /** 分片最近一次「有动静」的时刻：开始、收到一批字节、到手、报错都算 */
+  let fragActivityAt = 0;
+  let fragEngine: HlsEngineLike | null = null;
+  let fragListeners: Array<[string, HlsListener]> = [];
   /**
    * 上一次「确实在播」时的位置。
    *
@@ -906,6 +934,7 @@
       stallTicks = 0;
       return;
     }
+    trackFragments(eng);
     // 用户自己按了暂停就别替他加载。
     // 注意这里**不能**因为 `video.seeking` 就跳过：拖到没缓冲的地方卡住时，`seeking` 会一直是 true，
     // 拿它当「正常」正好把最该救的那种卡死放过去了（实测：t=200、readyState=1、16 秒不动）。
@@ -921,14 +950,36 @@
       stallTicks = 0;
       return;
     }
+    // 引擎手上还有分片在下载：这不是「死了」，是「正在下一条大分片」（判据见 fragInFlight 的注释）。
+    // 这段时间**绝不能** nudge —— `startLoad()` 会把这条请求掐掉，重新排队再等一遍，永远起不来。
+    // 两个兜底上限：最近一次动静在 30 秒内、且这条在飞的分片开始也不到 30 秒
+    // （后者防「计数漏减」把 nudge 永久挡住——那会变成另一种再也救不回来）。
+    const now = Date.now();
+    const fragAlive = fragInFlight > 0 && now - fragActivityAt < FRAG_STUCK_MS && now - fragSince < FRAG_STUCK_MS;
+    if (fragAlive) {
+      stallTicks = 0;
+      return;
+    }
     stallTicks += 1;
-    if (stallTicks < 3 || Date.now() - lastNudgeAt < 4000) return;
+    if (stallTicks < 3 || now - lastNudgeAt < STALL_NUDGE_MS) return;
     stallTicks = 0;
-    lastNudgeAt = Date.now();
+    lastNudgeAt = now;
     const at = video.currentTime > 1 ? video.currentTime : lastPlayHead;
     eng.startLoad?.(at > 1 ? at : -1);
     if (wantPlay) kickPlay();
   }
+
+  /**
+   * 两次 nudge 的最小间隔。
+   *
+   * 原来是 4 秒。对「引擎根本没在拉流」那种卡死（见 stallTick 的注释）4 秒够用，
+   * 但对「在拉一条 16.9 MB 的 4K 分片」就是灾难：4 秒还没到手，nudge 一来请求就被取消，
+   * 实测同一个分片被取消 9 次、首帧 35~45 秒。现在有 fragInFlight 挡着，正常下载不会被掐，
+   * 这个间隔只剩「真空转时多久重试一次」的意思，拉长到 10 秒少抖几下。
+   */
+  const STALL_NUDGE_MS = 10_000;
+  /** 在飞的分片有多久没动静就算真死了（这样才允许 nudge 掐掉它重来） */
+  const FRAG_STUCK_MS = 30_000;
 
   function startStallWatch(): void {
     if (stallTimer !== undefined) return;
@@ -941,6 +992,57 @@
       stallTimer = undefined;
     }
     stallTicks = 0;
+    detachFragments();
+  }
+
+  /**
+   * 跟住「引擎手上有没有分片在下载」。从 `stallTick` 里按引擎实例挂一次，换引擎就重挂。
+   *
+   * 事件名来自 hls.js 自己的常量（`hlsFragLoading` 等，实测 hls.js 1.6.19 的 dist 里就是这些字符串）；
+   * 失败/超时/被掐没有独立事件，只有通用 `hlsError`，`data.details` 以 `fragLoad` 开头。
+   * 计数只用来判「有没有在飞」，宁可少数一次也不能多数一次（多数一次就会把 nudge 挡在门外），
+   * 所以减到 0 就停住，不清负数。
+   */
+  function trackFragments(eng: HlsEngineLike | null): void {
+    if (!eng || eng === fragEngine) return;
+    detachFragments();
+    if (typeof eng.on !== 'function') return;
+    fragEngine = eng;
+    const bump = (): void => {
+      fragActivityAt = Date.now();
+    };
+    const start = (): void => {
+      if (fragInFlight === 0) fragSince = Date.now();
+      fragInFlight += 1;
+      bump();
+    };
+    const done = (): void => {
+      fragInFlight = Math.max(0, fragInFlight - 1);
+      bump();
+    };
+    const onError: HlsListener = (_event, data) => {
+      if (typeof data?.details === 'string' && data.details.startsWith('fragLoad')) done();
+    };
+    fragListeners = [
+      ['hlsFragLoading', start],
+      ['hlsFragLoadProgress', bump],
+      ['hlsFragLoaded', done],
+      ['hlsFragLoadEmergencyAborted', done],
+      ['hlsError', onError],
+    ];
+    for (const [event, listener] of fragListeners) eng.on?.(event, listener);
+  }
+
+  function detachFragments(): void {
+    const eng = fragEngine;
+    const listeners = fragListeners;
+    fragEngine = null;
+    fragListeners = [];
+    fragInFlight = 0;
+    fragSince = 0;
+    fragActivityAt = 0;
+    if (!eng) return;
+    for (const [event, listener] of listeners) eng.off?.(event, listener);
   }
 
   /** 媒体元素一出现就挂上（HLS 的内层 <video> 要等 shadow root 有；attach 会反复进来，总会挂上） */
