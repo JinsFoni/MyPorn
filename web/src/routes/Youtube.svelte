@@ -772,97 +772,105 @@
       aria-modal="true"
       aria-label={v.title}
     >
-      <!-- 关闭键浮在画面右上角，而不是自己占一行：占一行的话画面顶边到弹窗边缘是
-           16(内边距)+28(那一行)+12(mt-3)=56px，左右只有 16px，实测就是 56 vs 16，
-           看着像上边距翻了三倍。现在画面顶边 = 左右 = 16px。 -->
-      <button
-        type="button"
-        class="absolute right-4 top-4 z-40 rounded-full bg-ink/70 p-1.5 text-fg/90 backdrop-blur-sm transition-colors hover:bg-ink hover:text-fg"
-        onclick={closeDetail}
-        aria-label="关闭"
-      >
-        <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="m6 6 12 12M18 6 6 18" stroke-linecap="round" />
-        </svg>
-      </button>
-
-      <!-- 播放器：默认走服务端出的 HLS（画质到 4K、无广告、隐私模式下也能看）。
-           内嵌 iframe 只在解析失败时当兜底，隐私模式下连这个兜底也不给。 -->
-      {#if useEmbed}
-        <iframe
-          class="aspect-video w-full rounded-xl bg-ink"
-          src={v.embedUrl}
-          title={v.title}
-          allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-          allowfullscreen
-        ></iframe>
-      {:else if stream && playbackSrc}
-        <!-- 换档要重建播放器：2160p 和别的档是两个不同的清单地址，不能指望 hls.js 原地换
-             （进度靠 onTime/startAt 接回来） -->
-        {#key `${String(streamAttempt)}-${playbackEngine}`}
-          <div class="overflow-hidden rounded-xl bg-black">
-            <VideoPlayer
-              src={playbackSrc}
-              type={playbackType}
-              engine={playbackEngine}
-              startAt={lastPos}
-              onTime={(t) => (lastPos = t)}
-              poster={v.posterUrl || v.thumbUrl}
-              posterFallback={v.thumbUrl}
-              title={v.title}
-              videoKey={v.id}
-              qualities={qualityOptions}
-              selectedQuality={selectedQualityId}
-              onSelectQuality={applyQuality}
-              onFailed={onStreamFailed}
-            >
-              {#snippet overlay()}
-                {#if playError}
-                  <div
-                    class="pointer-events-auto absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center"
-                  >
-                    <p class="max-w-md text-ui text-fg/90">{playError}</p>
-                    <div class="flex flex-wrap items-center justify-center gap-2">
-                      <button type="button" class="btn" onclick={retryStream}>重试</button>
-                      {#if !privacy.on}
-                        <button type="button" class="btn btn-primary" onclick={switchToEmbed}>
-                          改用 YouTube 播放器
-                        </button>
-                      {/if}
+      <!-- 画面（解析中 / 失败那张兜底也算）和右上角的关闭键在同一个 hover 容器里：
+           关闭键平时不显示，鼠标进到画面里才淡出来，跟底部控制条同一个节奏。 -->
+      <div class="yt-media relative">
+        <!-- 播放器：默认走服务端出的 HLS（画质到 4K、无广告、隐私模式下也能看）。
+             内嵌 iframe 只在解析失败时当兜底，隐私模式下连这个兜底也不给。 -->
+        {#if useEmbed}
+          <iframe
+            class="aspect-video w-full rounded-xl bg-ink"
+            src={v.embedUrl}
+            title={v.title}
+            allow="accelerometer; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+            allowfullscreen
+          ></iframe>
+        {:else if stream && playbackSrc}
+          <!-- 换档要重建播放器：2160p 和别的档是两个不同的清单地址，不能指望 hls.js 原地换
+               （进度靠 onTime/startAt 接回来） -->
+          {#key `${String(streamAttempt)}-${playbackEngine}`}
+            <div class="overflow-hidden rounded-xl bg-black">
+              <VideoPlayer
+                src={playbackSrc}
+                type={playbackType}
+                engine={playbackEngine}
+                startAt={lastPos}
+                onTime={(t) => (lastPos = t)}
+                poster={v.posterUrl || v.thumbUrl}
+                posterFallback={v.thumbUrl}
+                title={v.title}
+                videoKey={v.id}
+                qualities={qualityOptions}
+                selectedQuality={selectedQualityId}
+                onSelectQuality={applyQuality}
+                onFailed={onStreamFailed}
+              >
+                {#snippet overlay()}
+                  {#if playError}
+                    <div
+                      class="pointer-events-auto absolute inset-0 flex flex-col items-center justify-center gap-3 bg-ink/85 px-6 text-center"
+                    >
+                      <p class="max-w-md text-ui text-fg/90">{playError}</p>
+                      <div class="flex flex-wrap items-center justify-center gap-2">
+                        <button type="button" class="btn" onclick={retryStream}>重试</button>
+                        {#if !privacy.on}
+                          <button type="button" class="btn btn-primary" onclick={switchToEmbed}>
+                            改用 YouTube 播放器
+                          </button>
+                        {/if}
+                      </div>
                     </div>
-                  </div>
-                {/if}
-              {/snippet}
-            </VideoPlayer>
-          </div>
-        {/key}
-      {:else}
-        <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-black">
-          {#if streamLoading}
-            <VideoLoading
-              poster={v.posterUrl || v.thumbUrl}
-              posterFallback={v.thumbUrl}
-              kind="poster"
-              label="正在解析最高画质"
-            />
-          {/if}
-          {#if streamError}
-            <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
-              <p class="max-w-md text-ui text-fg/90">{streamError}</p>
-              <div class="flex flex-wrap items-center justify-center gap-2">
-                <button type="button" class="btn" onclick={() => void loadStream(v)}>重新解析</button>
-                {#if !privacy.on}
-                  <button type="button" class="btn btn-primary" onclick={switchToEmbed}>改用 YouTube 播放器</button>
-                {/if}
+                  {/if}
+                {/snippet}
+              </VideoPlayer>
+            </div>
+          {/key}
+        {:else}
+          <div class="relative aspect-video w-full overflow-hidden rounded-xl bg-black">
+            {#if streamLoading}
+              <VideoLoading
+                poster={v.posterUrl || v.thumbUrl}
+                posterFallback={v.thumbUrl}
+                kind="poster"
+                label="正在解析最高画质"
+              />
+            {/if}
+            {#if streamError}
+              <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+                <p class="max-w-md text-ui text-fg/90">{streamError}</p>
+                <div class="flex flex-wrap items-center justify-center gap-2">
+                  <button type="button" class="btn" onclick={() => void loadStream(v)}>重新解析</button>
+                  {#if !privacy.on}
+                    <button type="button" class="btn btn-primary" onclick={switchToEmbed}>改用 YouTube 播放器</button>
+                  {/if}
+                </div>
               </div>
-            </div>
-          {:else if !streamLoading}
-            <div class="absolute inset-0 grid place-items-center px-6 text-center">
-              <p class="text-meta text-muted">没有可播的地址。</p>
-            </div>
-          {/if}
-        </div>
-      {/if}
+            {:else if !streamLoading}
+              <div class="absolute inset-0 grid place-items-center px-6 text-center">
+                <p class="text-meta text-muted">没有可播的地址。</p>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- 关闭键：跟播放器底部控制条（.video-controls）同一套——白色 10% 底 + 16px 背景模糊 +
+             99px 药丸 + 一圈 1px 暗环，尺寸也对齐它里面的按钮（36 高、图标 16）。
+             放**左上角**而不是右上角：窄屏（< 32rem）皮肤会把投屏/画中画/全屏收进画面右上角那颗浮动药丸，
+             390×844 实测那三颗就在 x=254 / 291 / 328，画面右边 374——右上角是它的地盘，
+             关在这个位置会和全屏键叠在一起（旧样式就在这里，18px 压着全屏键）。
+             左上角实测是空的（media-title 是 display:none），而且全屏播放器把「退出」放左上也是通行做法。 -->
+        <button
+          type="button"
+          class="yt-close absolute left-3 top-3 z-30 flex h-9 items-center justify-center gap-1.5 rounded-full px-2.5 text-meta text-fg"
+          onclick={closeDetail}
+          aria-label="关闭"
+        >
+          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="m6 6 12 12M18 6 6 18" stroke-linecap="round" />
+          </svg>
+          <span class="hidden sm:inline">关闭</span>
+        </button>
+      </div>
 
       <!-- 标题在播放器之后：弹窗一眼先看到画面，标题紧挨着频道/播放量这一行 -->
       <h2 class="mt-3 text-title font-medium leading-snug text-fg">{v.title}</h2>
@@ -1025,6 +1033,47 @@
   @media (min-width: 64rem) {
     .yt-sheet {
       max-width: min(92vw, 84rem, calc((92dvh - 7.5rem) * 16 / 9 + 2rem));
+    }
+  }
+
+  /* 关闭键跟播放器底部控制条是同一套视觉：量出来那根药丸是 background oklch(1 0 0 / .1)、
+     border-radius 99px、backdrop-filter blur(16px) saturate(1.1)、外加 0 0 0 1px 的暗环，
+     里面每个按钮 36×36、图标 16px。这里照抄，所以它站在画面上像控制条里多出来的一颗，
+     而不是「贴了张黑胶布」——旧样式是 bg-ink/70 的深色圆点，黑画面里看不清边界。
+     手机（<640）只留图标，正好 36×36，就是那颗按钮本身；再宽才把「关闭」两个字放出来。 */
+  .yt-close {
+    background: oklch(1 0 0 / 0.1);
+    -webkit-backdrop-filter: blur(16px) saturate(1.1);
+    backdrop-filter: blur(16px) saturate(1.1);
+    box-shadow:
+      0 0 0 1px oklch(0 0 0 / 0.1),
+      0 1px 3px 0 oklch(0 0 0 / 0.15),
+      0 1px 2px -1px oklch(0 0 0 / 0.15);
+    /* 常驻会跟画面抢注意力（底部控制条自己 2.5 s 就淡出），所以跟着 hover 走。
+       藏起来的时候连指针一起关掉：否则画面上有块看不见的 36px 会吃掉点击（点一下片子就没了），
+       控制条隐藏时也是点不到的，行为对齐。 */
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 160ms ease,
+      background-color 120ms ease;
+  }
+
+  .yt-media:hover .yt-close,
+  .yt-close:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .yt-close:hover {
+    background: oklch(1 0 0 / 0.2);
+  }
+
+  /* 触屏没有 hover：滑进画面也触发不了，一直显示，否则手机上关不掉（点背景也能关，但不能指望） */
+  @media (hover: none) {
+    .yt-close {
+      opacity: 1;
+      pointer-events: auto;
     }
   }
 </style>
