@@ -914,3 +914,37 @@ hls.js 自带 `recoverMediaError()`（`detachMedia` → `attachMedia` → `start
 （这次测出的第一版看门狗「没生效」就是旧 chunk 干的：dist 里是 `VideoPlayer-BF1lATrS.js`，页面跑的是 `BJgWMylf`）；
 `playwright-cli` 的 `run-code` 在**上一个客户端进程卡死**时会一起卡住（`eval` 还能用、`run-code` 永远不返回），
 先 `ps aux | grep "playwright-cli -s"` 清掉再跑。
+
+### 14.15 弹窗右上角的关闭键不跟控制条一起收（2026-11-01 修）
+
+用户报：「鼠标悬停在播放器上时，过了一会，鼠标和菜单栏都自动隐藏了，但是右上角的关闭按钮没有自动隐藏」。
+
+原因是这一颗键压根不知道控制条什么时候藏。它按 `.yt-media:hover` 显隐——而 hover 只看指针在不在画面里，
+指针停着不动照样是 hover；控制条那边是**皮肤自己的空闲计时**（实测播放中静止约 6 秒开始淡出，1 秒内
+`opacity` 到 0）。两套判据，自然对不上。实测同一时刻：`video-controls-content[data-visible]` 已经是 `false`、
+`opacity: 0`，`.yt-close` 还是 `opacity: 1`。
+
+皮肤其实已经在 shadow root 里记着这件事：`.media-container` 上的 `data-controls-visible`（它自己拿这个属性
+隐藏光标：`@media (pointer:fine){.video-skin:not([data-controls-visible]){cursor:none}}`）。问题只是光 DOM 读不到
+shadow 里的属性。所以 `VideoPlayer.svelte` 加了 `watchControls()`：一个只 filter 这一个属性的 `MutationObserver`，
+把可见态**反射**到宿主元素上（`video-skin[data-controls-visible]`），页面这边一条 CSS 就能跟它同步。
+
+两个容易踩的点：
+
+- **那条选择器必须写 `:global(.yt-media:has(video-skin[data-controls-visible])) .yt-close`**。`video-skin` 是在
+  `VideoPlayer` 组件里的，`Youtube.svelte` 的模板里看不见它，svelte 会把这条当成「没用到的选择器」**直接从产物里删掉**——
+  构建后 `web/dist/assets/style-*.css` 里那条确实消失了（`grep yt-media` 只剩 `:not(:has(video-skin)):hover` 那条）。
+  这不是警告级别的问题，是功能静默失效。
+- **没有播放器时不能跟着控制条走**：解析中、解析失败、兜底 iframe 这三种状态都没有 `video-skin`，控制条不存在，
+  关闭键必须退回 hover（`.yt-media:not(:has(video-skin)):hover .yt-close`），否则那几秒里弹窗关不掉
+  （点背景也能关，但不能指望用户知道）。
+
+实测（1440×900，`x87vdLgzq0I`，播放中，指针停在画面正中不动）：
+
+| 时刻 | `video-skin[data-controls-visible]` | 控制条 `data-visible` | 关闭键 `opacity` |
+|---|---|---|---|
+| +1 s | 有 | true | 1 |
+| +6 s | 无 | false | 0.02 → 0 |
+| 鼠标再动一下 | 有 | true | 1 |
+
+暂停态单独量过：暂停 8 秒后 `data-visible=true`、关闭键 `opacity=1`（皮肤暂停时不收控制条），此时点关闭键弹窗正常关闭。

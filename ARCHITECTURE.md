@@ -357,6 +357,22 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
     **`video.seeking` 不能当「正常」放过去**：拖到没缓冲的地方卡住时 `seeking` 会一直是 true（实测 `t=200`、
     `readyState=1`、16 秒不动，看门狗一声不响）；去掉这条豁免后同样的卡死 5 秒被推起来（200.0 → 200.4，`readyState` 回 4，
     之后一路 201→208）。
+- **全屏不许跟着屏宽继续放大控制条**（2026-11-01 用户报的「全屏模式下的底部菜单栏有点太高了」）：皮肤在
+  `skin.css` 里写了 `@media (width>=1280px) .media-skin:fullscreen{--media-scale:1.25}`，1536px 给 1.5、
+  1920px 给 1.75，整套控件（按钮、图标、进度条槽、圆角）都按这个 `--media-scale` 走。实测进全屏：
+  1440×900 控制条 44→55px、按钮 36→45；1920×1080 与 2560×1440 都是 44→77px、按钮 36→63、槽 32→56——
+  77px 的药丸压在画面下沿，比画面本身还抢眼。全屏不是电视遥控器场景，所以封顶 `1.1`：同一条
+  `style[data-myporn-skin]` 里写 `.media-skin:fullscreen{--media-scale:1.1}`，实测三种屏宽都落到
+  48px / 按钮 40 / 槽 35。**不用 `!important`**：皮肤那几条在 `@layer base` 里，未分层的样式一律压过分层的。
+- **控制条显隐要能从光 DOM 读到**：皮肤把「控制条这会儿显示着没有」写成 shadow root 里 `.media-container` 上的
+  `data-controls-visible`（它自己拿这个属性隐藏光标）。外面的页面读不到 shadow 里的属性，于是 YouTube 弹窗右上角
+  那颗关闭键只能按 `.yt-media:hover` 显隐——鼠标停在画面上不动、控制条几秒后自己收了，关闭键还亮着（用户报的）。
+  现在 `watchControls()` 用 `MutationObserver`（只 filter 这一个属性）把可见态**反射到宿主**：
+  `video-skin[data-controls-visible]`，页面写 `:global(.yt-media:has(video-skin[data-controls-visible])) .yt-close`
+  就跟控制条同进同出；暂停时皮肤不藏控制条，关闭键也就一直在（实测暂停 8 秒仍是 `ccVisible=true`、
+  `closeOpacity=1`）。**那条选择器必须包在 `:global()` 里**：`video-skin` 在 `VideoPlayer` 里，页面组件的模板里
+  看不见它，svelte 会当成「没用到的选择器」直接删掉（实测构建产物里那条确实消失了）。没有播放器时
+  （解析中 / 失败 / 兜底 iframe）退回 `.yt-media:not(:has(video-skin)):hover`。
 - **进度条的「已缓冲」段必须自己调色**：默认皮肤把轨槽 `.media-slider-track:before` 和已缓冲
   `.media-slider-buffer:before` 画成**同一个** `color-mix(in oklab, currentcolor 20%, transparent)`，
   两层又完全重合、圆角和高度都一样——「已缓冲」跟空槽同色，等于不存在（用户报的「当前播放位置后面基本没有

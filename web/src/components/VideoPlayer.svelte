@@ -262,6 +262,10 @@
   let bar: PlayerBar | null = null;
   let barTries = 0;
   let barTimer: number | undefined;
+  /** 盯着皮肤内部「控制条这会儿显示着没有」的观察器，见 watchControls() */
+  let controlsObserver: MutationObserver | undefined;
+  let controlsTimer: number | undefined;
+  let controlsTries = 0;
 
   function store(): Store | undefined {
     return (playerEl as unknown as { store?: Store } | null)?.store;
@@ -601,6 +605,13 @@
     const style = document.createElement('style');
     style.dataset.mypornSkin = '';
     style.textContent = [
+      // 全屏时皮肤按屏宽把 `--media-scale` 顶到 1.25 / 1.5 / 1.75（skin.css 里那组
+      // `@media (width>=1280px) .media-skin:fullscreen`），整套控件跟着放大。实测进全屏：
+      // 1440×900 控制条 44→55px、按钮 36→45；1920×1080 与 2560×1440 都是 44→77px、
+      // 按钮 36→63、进度条槽 32→56。77px 的药丸压在画面下沿，比画面本身还抢眼。
+      // 全屏不是电视遥控器场景，不需要按屏宽继续长大，封顶 1.1：控制条 44→48px、按钮 40、槽 35。
+      // 这条不写 `!important` 也能赢：皮肤那几条在 `@layer base` 里，未分层的样式一律压过分层的。
+      '.media-skin:fullscreen{--media-scale:1.1}',
       '.media-buffering-indicator{display:none !important}',
       '.media-slider-buffer:before{background-color:color-mix(in oklab,currentcolor 62%,transparent) !important}',
       // 恢复进度的那一两秒里元素的 currentTime 是 0：控制条这时候显示出来就是「进度条归 0」，
@@ -608,6 +619,44 @@
       ":host([data-resuming='true']) media-controls-content{visibility:hidden !important}",
     ].join('\n');
     root.append(style);
+  }
+
+  /**
+   * 把皮肤内部「控制条现在显示着没有」反射到宿主元素上：`video-skin[data-controls-visible]`。
+   *
+   * 皮肤把可见态写成 shadow root 里 `.media-container` 上的 `data-controls-visible`（它自己拿这个属性
+   * 隐藏光标：`@media (pointer:fine){.video-skin:not([data-controls-visible]){cursor:none}}`）。
+   * 光 DOM 里读不到 shadow 里的属性，于是**页面在外面没有任何办法知道控制条已经藏了**——
+   * YouTube 弹窗右上角那颗关闭键就只能按 hover 显隐：鼠标停在画面上不动，控制条 4 s 后自己收起来了，
+   * 关闭键还亮在那儿（2026-11-01 用户报的）。属性搬一份到宿主上，页面用
+   * `.yt-media:has(video-skin[data-controls-visible])` 就能跟控制条同进同出。
+   *
+   * 观察器只盯着那一个属性（`attributeFilter`）：皮肤的 `data-controls-visible` 每次显隐都会重写，
+   * 静止时不触发，成本可忽略。shadow root 有时比 onMount 晚一步，所以照 mountBar 的办法按 50ms 重试。
+   */
+  function watchControls(): void {
+    const host = skinEl;
+    const container = host?.shadowRoot?.querySelector('.media-container');
+    if (!host || !(container instanceof HTMLElement)) {
+      if (controlsTries < 40) {
+        controlsTries += 1;
+        if (controlsTimer === undefined) {
+          controlsTimer = window.setTimeout(() => {
+            controlsTimer = undefined;
+            watchControls();
+          }, 50);
+        }
+      }
+      return;
+    }
+    controlsTries = 0;
+    const sync = (): void => {
+      host.toggleAttribute('data-controls-visible', container.hasAttribute('data-controls-visible'));
+    };
+    sync();
+    controlsObserver?.disconnect();
+    controlsObserver = new MutationObserver(sync);
+    controlsObserver.observe(container, { attributes: true, attributeFilter: ['data-controls-visible'] });
   }
 
   // ---------- 加载态：糊封面 + 加载环 ----------
@@ -1375,11 +1424,15 @@
     });
     window.addEventListener('keydown', onKeydown);
     mountBar();
+    watchControls();
     return () => {
       unsubscribe();
       window.removeEventListener('keydown', onKeydown);
       if (retryTimer !== undefined) clearTimeout(retryTimer);
       if (kickTimer !== undefined) clearTimeout(kickTimer);
+      if (controlsTimer !== undefined) clearTimeout(controlsTimer);
+      controlsObserver?.disconnect();
+      controlsObserver = undefined;
       stopSeekWatch();
       stopStallWatch();
       if (barTimer !== undefined) clearTimeout(barTimer);

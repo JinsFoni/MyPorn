@@ -783,8 +783,9 @@
       aria-modal="true"
       aria-label={v.title}
     >
-      <!-- 画面（解析中 / 失败那张兜底也算）和右上角的关闭键在同一个 hover 容器里：
-           关闭键平时不显示，鼠标进到画面里才淡出来，跟底部控制条同一个节奏。 -->
+      <!-- 画面（解析中 / 失败那张兜底也算）和右上角的关闭键在同一个容器里：
+           关闭键平时不显示，跟着播放器底部控制条一起进出（有播放器时看 video-skin 上的
+           data-controls-visible，没有播放器时才按 hover）。 -->
       <div class="yt-media relative">
         <!-- 播放器：默认走服务端出的 HLS（画质到 4K、无广告、隐私模式下也能看）。
              内嵌 iframe 只在解析失败时当兜底，隐私模式下连这个兜底也不给。 -->
@@ -1063,7 +1064,7 @@
       0 0 0 1px oklch(0 0 0 / 0.1),
       0 1px 3px 0 oklch(0 0 0 / 0.15),
       0 1px 2px -1px oklch(0 0 0 / 0.15);
-    /* 常驻会跟画面抢注意力（底部控制条自己 2.5 s 就淡出），所以跟着 hover 走。
+    /* 常驻会跟画面抢注意力（底部控制条自己几秒就淡出），所以跟着控制条走。
        藏起来的时候连指针一起关掉：否则画面上有块看不见的 42×28 会吃掉点击（点一下片子就没了），
        控制条隐藏时也是点不到的，行为对齐。 */
     opacity: 0;
@@ -1073,8 +1074,19 @@
       background-color 120ms ease;
   }
 
-  .yt-media:hover .yt-close,
+  /* 没有播放器时（解析中 / 解析失败 / 兜底 iframe 都没有 video-skin）没有控制条可言，退回 hover。 */
+  .yt-media:not(:has(video-skin)):hover .yt-close,
   .yt-close:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* 有播放器时：显隐跟着播放器控制条走——皮肤把「控制条这会儿显示着没有」反射到
+     `video-skin[data-controls-visible]`（见 VideoPlayer.svelte 的 watchControls）。原来只按
+     `.yt-media:hover`，鼠标停在画面上不动、控制条几秒后自己收起来了，这颗键还亮着（2026-11-01 用户报的）。
+     外层必须写成 `:global()`：`video-skin` 在 VideoPlayer 里，这个组件的模板里看不见它，
+     svelte 会把整条选择器当成「没用到」直接从产物里删掉（实测构建后 `.yt-media:has(...)` 那条确实消失了）。 */
+  :global(.yt-media:has(video-skin[data-controls-visible])) .yt-close {
     opacity: 1;
     pointer-events: auto;
   }
