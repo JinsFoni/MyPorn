@@ -126,7 +126,7 @@
 | 长列表 | IntersectionObserver 分页 + keyset 游标；先用「页淘汰」（离屏页卸载 DOM），万条库足够；真卡再上虚拟滚动 |
 | 播放器 | **Video.js 10**：`<video-player>`+`<video-skin>` 自定义元素（皮肤自带进度条/音量/倍速/画中画/全屏/快捷键/手势），皮肤只用 `--media-*` 变量调成站点的单色冷调；**清晰度菜单**与**氛围模式**两个按钮挂进皮肤底部控制条（详见 §7.4.2），氛围光靠画布取帧 → 放大模糊，音量与氛围开关都记在 `localStorage`；mp4 用原生 `<video>`，HLS 用 `<hlsjs-video>` 且 `await import()` 按需加载；**编码偏好见 §7.4.1** |
 | 图片 | `loading=lazy` + 宽高占位防跳动；缩略图走 `/api/img?u=`（后端代理 + 磁盘缓存，绕开 Referer/403；抓取/缓存/缩图全在 `internal/imgcache`，HTTP 处理函数只解析参数、发字节）；**媒体图（封面 / 头像 / 缩略图）一律经 `lib/img.ts` 的 `imageUrl()` 出地址**——那是唯一入口，隐私模式要在那里把参数从 `w=`（显示宽）换成 `s=`（小糊图边长），漏了它就等于在隐私模式里露原图；图标与平台 logo 不走它，保持清晰。媒体图仍标 `data-media`，但只是标记（便于审计哪些 `<img>` 是封面/头像），不再承担样式 |
-| 封面预热 / 修复 | pornhub 的封面走 `pix-*.phncdn.com/…/rs:fit:320:180`，**地址带签名、一天就过期**（过期后 472；去掉签名参数是 470，换图床是 401——实测只有带新鲜签名才给图）。列表页懒加载，隔两天再点开某部片时地址早就死了，封面就永久空白。所以封面必须**趁地址还新鲜时抓进本地缓存**，之后不再依赖签名：① 同步时新片一入库就预热（`warmCovers`，一轮最多 40 张，后台跑）；② 启动后和每轮同步收尾各扫一遍「封面没进缓存」的影片补齐（`RepairCovers`，一轮最多 60 张、扫 400 条，同一时刻只跑一轮）；③ 补的时候先把**带签名（`hdnea=` / `validto=` / `//pix-`）的排最前**——这类「错过就没了」，缓存丢了就只能趁详情页还能给出新链接时救回来：抓不到就用 `GetVideo` 重解析详情页，地址变了就写回 `videos.thumb_url` 再抓一次（地址没变则不重试，免得每轮都打上游）。实测：清空 imgcache 冷启动，85 秒补回 60 张，其中 24 条过期签名封面全部换成新签名并落盘 | `internal/jobs/covers.go`、`internal/imgcache/imgcache.go`、`internal/store/videos.go` |
+| 封面预热 / 修复 | pornhub 的封面走 `pix-*.phncdn.com/…/rs:fit:320:180`，**地址带签名、一天就过期**（过期后 472；去掉签名参数是 470，换图床是 401——实测只有带新鲜签名才给图）。列表页懒加载，隔两天再点开某部片时地址早就死了，封面就永久空白。所以封面必须**趁地址还新鲜时抓进本地缓存**，之后不再依赖签名：① 同步时新片一入库就预热（`warmCovers`，一轮最多 40 张，后台跑）；② 启动后和每轮同步收尾各扫一遍「封面没进缓存」的影片补齐（`RepairCovers`，一轮最多 60 张、扫 400 条，同一时刻只跑一轮）；③ 补的时候先把**带签名（`hdnea=` / `validto=` / `//pix-`）的排最前**——这类「错过就没了」，缓存丢了就只能趁详情页还能给出新链接时救回来：抓不到就用 `GetVideo` 重解析详情页，地址变了就写回 `videos.thumb_url` 再抓一次（地址没变则不重试，免得每轮都打上游）。实测：清空 imgcache 冷启动，85 秒补回 60 张，其中 24 条过期签名封面全部换成新签名并落盘。④ **还要认「模糊占位图」**：xHamster 偶尔把 LQIP 塞进 `imageURL`（`…/b(2),s(w:16,h:9),webp/…`，原图只有 796 字节），16 像素宽的糊图铺到 266×150 的卡片上就是一整张糊封面——2026-10-31 那轮抓取有 676 条这么进库（Hot Pearl 641 + mysaaat 35），用户看到的是「隐私模式没开，封面却糊了」。`platform.PlaceholderThumb()` 按 URL 里 `s(w:X,h:Y)` 的宽度判断（正常档 526/1280/竖屏 350/405，占位图 16，取 200 作界），解析时跳过占位图（`platform.BestThumb`），修复扫描时把占位图**排在带签名的前面**且无视「已缓存」（糊图恰好抓得到，缓存里就是一张糊的），一律去详情页换真地址 | `internal/jobs/covers.go`、`internal/imgcache/imgcache.go`、`internal/store/videos.go` |
 | 主题 | Tailwind 原子类，**暗色为默认**，移动端优先布局（视觉基线见 §7.6） |
 | PWA | `vite-plugin-pwa`，`registerType: 'prompt'`，precache 仅 app shell（html/js/css/icon），**不缓存视频与 API 响应** |
 
@@ -476,6 +476,10 @@ X 的账号名猜不出来的（艺名拼起来超过 15 字符、账号名里�
 - **两套清单都要**：站点把 AV1 与 H.264 分成两个 master（`_TPL_.av1.mp4.m3u8` / `_TPL_.h264.mp4.m3u8`），
   两条都解析、合并后交给 `model.SortVariantsDesc`；清单里的 `CODECS` 缺失时用来源 codec 补上。
   拿不到清单时退到 `downloadDropdownComponent.sources.mp4`（144p–720p 直链）。
+- **`downloadDropdownComponent.sources` 有两种形状**：多数页面是 `{"mp4":{…}}`，有些页面是**数组**
+  （2026-11 实测 video 1147 / 1192）。照结构体写就会 `json: cannot unmarshal array into …`，而这**不是少一个字段**——
+  整页 `window.initials` 都解不出来，封面/标签/时长全丢，那种影片点开就是解析失败（修封面时也换不到地址）。
+  所以这个字段收 `json.RawMessage`，用的时候 `mp4Sources()` 两种形状分别解，认不出就当没有（直链只是兜底）。
 - **影片列表一律带 `/newest`**：`/pornstars/<slug>` 默认是评分序（`sort:"rated"`），第 1 页最上面
   是几年前的老片，最新的几部甚至不在我们用的那个分区里（`newestVideoSectionComponent` 只有 4 条）。
   而增量同步是「遇到已入库影片即停」——排序不对就等于老片一挡，**新片永远发现不了**。

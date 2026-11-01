@@ -258,10 +258,50 @@ type sourceEntry struct {
 	Label    string `json:"label"`
 }
 
+// downloadComponent 是播放页「下载」下拉框的数据，只用来兜底拿明文 MP4 直链。
+//
+// sources 的形状会变脸：多数页面是 `{"mp4": {"720p": "…"}}`，但有些页面给的是**数组**
+// （2026-11 实测 video 1147 / 1192 就是这样），写成具体结构体的话 json.Unmarshal 直接报
+// `cannot unmarshal array into Go struct field …`，**整页解析全挂**——连封面、标签、时长
+// 一起拿不到，那种影片点开就是解析失败。所以这里原样收下，用的时候按两种形状分别解。
 type downloadComponent struct {
-	Sources struct {
+	Sources json.RawMessage `json:"sources"`
+}
+
+// mp4Sources 取 sources 里的 mp4 档位表（"720p" → 直链）。
+// 认不出的形状就当没有：下载直链只是兜底，缺了不影响播放与元数据。
+func (dc *downloadComponent) mp4Sources() map[string]string {
+	if dc == nil || len(dc.Sources) == 0 {
+		return nil
+	}
+	var obj struct {
 		MP4 map[string]string `json:"mp4"`
-	} `json:"sources"`
+	}
+	if err := json.Unmarshal(dc.Sources, &obj); err == nil && len(obj.MP4) > 0 {
+		return obj.MP4
+	}
+	// 数组形状：[{"mp4": {…}, …}, …]——把每项里的 mp4 合并起来
+	var arr []map[string]json.RawMessage
+	if err := json.Unmarshal(dc.Sources, &arr); err == nil {
+		out := map[string]string{}
+		for _, item := range arr {
+			raw, ok := item["mp4"]
+			if !ok {
+				continue
+			}
+			var m map[string]string
+			if json.Unmarshal(raw, &m) != nil {
+				continue
+			}
+			for k, v := range m {
+				out[k] = v
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
 }
 
 // initialsJSON 从页面里抠出 window.initials 的 JSON 文本。
@@ -374,7 +414,7 @@ func videoFromThumb(t videoThumb, base string) *model.Video {
 		PlatformVideoID: videoIDFromURL(t.PageURL),
 		Title:           strings.TrimSpace(t.Title),
 		URL:             t.PageURL,
-		ThumbURL:        firstNonEmpty(t.ImageURL, t.ThumbURL),
+		ThumbURL:        platform.BestThumb(t.ImageURL, t.ThumbURL),
 		DurationSec:     t.Duration,
 	}
 	if v.PlatformVideoID == "" && t.ID != 0 {
@@ -421,7 +461,7 @@ func videoFrom(v *initials, id, base string) *model.Video {
 		PlatformVideoID: id,
 		Title:           strings.TrimSpace(vm.Title),
 		URL:             firstNonEmpty(vm.PageURL, base+"/videos/"+id),
-		ThumbURL:        vm.ThumbURL,
+		ThumbURL:        platform.BestThumb(vm.ThumbURL),
 		PreviewURL:      firstNonEmpty(vm.TrailerURL, vm.PreviewURL),
 		DurationSec:     vm.Duration,
 		Description:     strings.TrimSpace(firstNonEmpty(vm.Description, entityDescription(v))),

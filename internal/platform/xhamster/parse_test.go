@@ -245,3 +245,26 @@ func TestParseNewestSortedListing(t *testing.T) {
 		t.Fatal("第一条没能转成影片")
 	}
 }
+
+// sources 会以数组形状出现（2026-11 实测），写成结构体会让整页解析失败：
+// 封面、标签、时长全拿不到。这里钉住两种形状都能解。
+func TestDownloadSourcesShapes(t *testing.T) {
+	obj := &downloadComponent{Sources: []byte(`{"mp4":{"720p":"https://a/720.mp4","480p":"https://a/480.mp4"}}`)}
+	got := obj.mp4Sources()
+	if len(got) != 2 || got["720p"] != "https://a/720.mp4" {
+		t.Fatalf("对象形状解错了：%#v", got)
+	}
+
+	arr := &downloadComponent{Sources: []byte(`[{"mp4":{"360p":"https://a/360.mp4"}},{"mp4":{"240p":"https://a/240.mp4"}}]`)}
+	got = arr.mp4Sources()
+	if len(got) != 2 || got["360p"] != "https://a/360.mp4" || got["240p"] != "https://a/240.mp4" {
+		t.Fatalf("数组形状解错了：%#v", got)
+	}
+
+	if got := (&downloadComponent{}).mp4Sources(); got != nil {
+		t.Fatalf("空 sources 应为 nil：%#v", got)
+	}
+	if got := (&downloadComponent{Sources: []byte(`"nonsense"`)}).mp4Sources(); got != nil {
+		t.Fatalf("认不出的形状应为 nil：%#v", got)
+	}
+}

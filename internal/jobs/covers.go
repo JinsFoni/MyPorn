@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/JinsFoni/MyPorn/internal/platform"
 	"github.com/JinsFoni/MyPorn/internal/store"
 )
 
@@ -104,11 +105,14 @@ func (r *Runner) RepairCovers(ctx context.Context) int {
 				goto done
 			}
 			scanned++
-			if r.img.Cached(row.Platform, row.ThumbURL) {
+			// 占位糊图（站点偶尔把 16 像素宽的 LQIP 塞进封面字段）不能算「已缓存就好」：
+			// 它又小又糊，只是恰好抓得到，所以一律当坏的，去详情页换一张真封面。
+			lqip := platform.PlaceholderThumb(row.ThumbURL)
+			if !lqip && r.img.Cached(row.Platform, row.ThumbURL) {
 				continue
 			}
 			attempted++
-			if r.img.Warm(ctx, row.Platform, row.ThumbURL) {
+			if !lqip && r.img.Warm(ctx, row.Platform, row.ThumbURL) {
 				fixed++
 				continue
 			}
@@ -125,7 +129,8 @@ done:
 	return fixed
 }
 
-// scanCoverRows 按 id 倒序扫一批影片，分成「带签名的」和「其他的」两桶。
+// scanCoverRows 按 id 倒序扫一批影片，分成「占位糊图」「带签名的」「其他的」三档
+// （前两档都进 urgent：糊图在卡片上是一片马赛克，带签名的错过就永久没了，都比常规图急）。
 func (r *Runner) scanCoverRows() (urgent, normal []store.VideoThumb, err error) {
 	var before int64
 	for len(urgent)+len(normal) < coverRepairScan {
@@ -138,9 +143,13 @@ func (r *Runner) scanCoverRows() (urgent, normal []store.VideoThumb, err error) 
 		}
 		for _, row := range rows {
 			before = row.ID
-			if signedThumb(row.ThumbURL) {
+			switch {
+			case platform.PlaceholderThumb(row.ThumbURL):
+				// 糊图优先修：卡片上它就是一片马赛克，比「没图」更难看
+				urgent = append([]store.VideoThumb{row}, urgent...)
+			case signedThumb(row.ThumbURL):
 				urgent = append(urgent, row)
-			} else {
+			default:
 				normal = append(normal, row)
 			}
 		}

@@ -360,11 +360,11 @@ func (a *Adapter) variantsFrom(ctx context.Context, iv *initials) ([]model.Varia
 
 // plainMP4Variants 是明文的单档直链（144p/240p/480p/720p），只作兜底。
 func plainMP4Variants(iv *initials) []model.Variant {
-	if iv == nil || iv.DownloadComponent == nil {
+	if iv == nil {
 		return nil
 	}
 	var out []model.Variant
-	for quality, raw := range iv.DownloadComponent.Sources.MP4 {
+	for quality, raw := range iv.DownloadComponent.mp4Sources() {
 		h := heightOf(quality)
 		if h <= 0 || raw == "" {
 			continue
