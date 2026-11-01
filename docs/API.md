@@ -31,8 +31,10 @@
  { "key":"beeg", "name":"beeg", "enabled":true,
    "baseUrl":"https://beeg.com", "hasProxy":false, "hasCookie":false, "status":"ok" }]
 ```
-`status`: `ok | no_proxy | error`（前端仅做提示，不阻塞）。
+`status`: `ok | no_proxy | error`（只是数据，前端不阻塞）。
 `no_proxy` 只对「直连一般不通」的平台报（目前仅 `pornhub`）；xHamster / beeg 实测可直连，没配代理也是 `ok`。
+发现页**不再**把 `no_proxy` 渲染成提示：它只是按「国内直连一般不通」的推断，实测没配平台代理也照样搜得到
+（出口可能在系统代理/路由器上，应用无从判断），只有 `error` 才提示。
 
 **平台 key**：`pornhub` / `xhamster` / `beeg`。`platform` 字段在艺人、影片、订阅、搜索接口里都取这三个值之一。
 

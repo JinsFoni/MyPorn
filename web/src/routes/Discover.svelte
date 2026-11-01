@@ -142,17 +142,14 @@
     })();
   });
 
-  // 只提示当前选中平台的状态：别的平台出问题不该在这里吓人。
+  // 只提示当前选中平台的**真实失败**（status='error'），别的平台出问题不在这里吓人。
+  // 之前这里还会为 status='no_proxy' 挂一条「没有配置代理，抓取可能失败」——那是按「国内直连一般不通」
+  // 猜的，不是观测到的结果：本机 proxy_pornhub / global_proxy 都是空的，可
+  // /api/search/performers?platform=pornhub&q=lena 照样返回艺人列表（出口在系统层或路由器上走代理，
+  // 应用看不见），挂在那儿只是误导。能不能抓，等真出错再说。
   $effect(() => {
     const hit = platforms.find((p) => p.key === platform);
-    if (!hit) {
-      platformHint = '';
-      return;
-    }
-    const name = platformLabel(hit.key);
-    if (hit.status === 'no_proxy') platformHint = `${name} 没有配置代理，抓取可能失败。`;
-    else if (hit.status === 'error') platformHint = `${name} 最近抓取出错，订阅可能失败。`;
-    else platformHint = '';
+    platformHint = hit?.status === 'error' ? `${platformLabel(hit.key)} 最近抓取出错，订阅可能失败。` : '';
   });
 </script>
 
