@@ -1,0 +1,52 @@
+# docker compose 部署。
+#
+#   cp .env.example .env          # 填 APP_ENCRYPTION_KEY（openssl rand -base64 32）
+#   mkdir -p data media           # bind mount 的宿主目录要先归到 uid 1000
+#   sudo chown -R 1000:1000 data media
+#   docker compose up -d
+#
+# 镜像默认取 ghcr.io/jinsfoni/myporn:latest；想就地构建把 image 那行换成
+#   docker compose up -d --build
+#
+# 数据只在 ./data（数据库 + 图片缓存），片子只在 ./media，两个目录都直接可读写、可备份，
+# 容器整个删掉重建不影响任何东西。
+
+name: myporn
+
+services:
+  myporn:
+    image: ghcr.io/jinsfoni/myporn:latest
+    build:
+      context: .
+      args:
+        VERSION: ${MYPORN_VERSION:-dev}
+    container_name: myporn
+    restart: unless-stopped
+    ports:
+      # 左边是宿主机端口，反代指到它
+      - "${MYPORN_PORT:-8080}:8080"
+    env_file:
+      # .env 不存在也能 up（环境变量也可以全写在这下面），compose v2.24+ 支持 required
+      - path: .env
+        required: false
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:-changeme}
+      # 密钥决定库里 Cookie/Token 能否解开：丢了它们就全变成「未配置」，必须一起备份
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?请先在 .env 里填 APP_ENCRYPTION_KEY（openssl rand -base64 32）}
+      DATA_DIR: /data
+      DATABASE_PATH: /data/myporn.db
+      LIBRARY_ROOT: /media
+      # 时区只影响日志时间戳；调度按小时走，不依赖它
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./data:/data
+      - ./media:/media
+    # 镜像自带 HEALTHCHECK（wget /healthz），这里只是把起服务的宽限拉长一点：
+    # 冷启动要跑迁移 + 首次同步调度，30 s 内不一定应答
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    stop_grace_period: 20s

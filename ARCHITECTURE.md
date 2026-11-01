@@ -689,3 +689,52 @@ bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源�
 - 详情页的「返回」也认来源：卡片链接带 `?back=<编码后的整条路径+查询>`，
   `/video/:id` 据此渲染「返回 B 站 / 返回艺人 / 返回关注」，比写死的「返回关注」靠谱；
   「相关影片」的卡片不带这个参数（否则会链回自己），跨站请求也只认站内绝对路径。
+
+## 14. 部署与发布：一个镜像 + GitHub Actions
+
+### 14.1 为什么镜像里要装三样外部程序
+
+单二进制之外，运行期确实还依赖三个可执行文件，缺一样就有功能残废：
+
+| 程序 | 用在哪 | 缺了会怎样 |
+| --- | --- | --- |
+| `ffmpeg` / `ffprobe` | DASH 分轨合流（B 站、YouTube）、分片下载后封装 mp4、AVIF 封面兜底解码 | 4K 只能看不能存，B 站干脆播不了 |
+| `yt-dlp` | YouTube 解析与下载 | YouTube 整块不可用 |
+| `deno` | yt-dlp 解 YouTube 的 n 挑战（实测这一步 0.52 s） | 拿不到高码率 https 档，只剩 HLS 低档 |
+
+`yt-dlp` 走 pip 装**最新版**而不是发行版仓库：站点一变就得跟着升，发行版的包往往落后几周。
+代价是「镜像必须定期重建」——这是有意的，`/api/yt/health` 里那个 `stale` 标记就是提醒这件事的。
+
+### 14.2 三层构建
+
+1. `node:24-alpine` 跑 `pnpm build`（pnpm 固定 11.27.1，跟 `web/pnpm-lock.yaml` 的 lockfileVersion 9.0 对齐）；
+2. `golang:1.24-alpine` 把上一步的 `dist` 塞进 `internal/webui/dist` 再编——`CGO_ENABLED=0`，
+   因为 SQLite 用的是 `modernc.org/sqlite`（纯 Go），所以 amd64/arm64 同一份 Dockerfile 交叉编译即可；
+3. `alpine:3.22` 只留二进制 + 上面那三样，最终 **308 MB**（arm64 本机实测）。
+   完全重建（`--no-cache`）约 **24 s**：Vite 构建 16.8 s、Go 编译 6.8 s、运行层 apk + pip 10.1 s 并行算下来。
+   镜像里实际装到的是 ffmpeg 6.1.2 / yt-dlp 2026.10.26 / deno 2.3.1 / Python 3.12.16。
+
+容器以 uid/gid 1000 运行，`/data`（SQLite + 图片缓存）与 `/media`（本地库）是仅有的两个卷；
+`-root /data` 让 `.env.local` 与工作目录都落在数据卷里，容器删了重建不丢状态。
+`HEALTHCHECK` 走 busybox 的 `wget /healthz`，不额外装 curl。
+
+### 14.3 版本号从链接期进来
+
+`main.buildVersion` 是个空的包级变量，Dockerfile 用 `-X main.buildVersion=$VERSION` 注入 release tag，
+启动后覆盖 `config.Version`，于是 `/healthz` 直接答得出「这个容器是哪次发布」——
+排查「拉到的镜像到底是不是新的」时不用去比对 image digest。
+
+### 14.4 两个 workflow
+
+- `ci.yml`：push/PR 三个并行 job——`go vet` + `go test ./...`、`pnpm check`（svelte-check）+ `pnpm build`、
+  一次 `push: false` 的镜像构建（只为验证 Dockerfile 没烂）。真实网络冒烟测试不进来：
+  那些测试要 `LIVE=1` 且出口得能到站点，CI 的出口在哪不受控。
+- `release.yml`：只由「发布 release」触发（不跟 tag push 走，否则一次发布跑两遍），
+  构 `linux/amd64,linux/arm64` 推 GHCR，tag 用 semver 展开（`1.2.3` / `1.2` / `1` / `latest`）外加 `sha-xxxxxxx`。
+  arm64 走 QEMU，所以开了 `type=gha` 缓存。GHCR 只收小写仓库名，镜像名在 workflow 里用 `${GITHUB_REPOSITORY,,}` 算出来。
+
+### 14.5 国内构建的换源口
+
+`Dockerfile` 留了 `GOPROXY` / `APK_MIRROR` / `PIP_INDEX` 三个 build-arg（不填就是官方源）。
+实测依据：在同一个 Docker VM 里 `proxy.golang.org` 连续 3 次全部 `unexpected EOF`，
+`goproxy.cn` 3/3 正常；`dl-cdn.alpinelinux.org` 间歇 IO ERROR，`mirrors.aliyun.com` 3/3 正常。

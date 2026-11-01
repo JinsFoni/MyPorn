@@ -1,0 +1,33 @@
+# 构建上下文只留源码。前后端各自的依赖与产物都在镜像里重新生成一遍，
+# 免得把本机 node_modules（几十万个文件）和旧 dist 拖进 builder。
+
+# 依赖与构建产物
+**/node_modules
+web/dist
+internal/webui/dist
+bin
+.gocache
+.pnpm-store
+
+# 运行期数据与密钥（绝不能进镜像层）
+data
+media
+.tmp
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local
+.env.*.local
+
+# 工具缓存与日志
+.playwright
+.playwright-cli
+*.log
+
+# 系统杂物
+.DS_Store
+.git
+.github
+.idea
+.vscode

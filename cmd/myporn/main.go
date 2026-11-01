@@ -67,6 +67,11 @@ func reportKeyState(st *store.Store, box *secret.Box, logger *slog.Logger) {
 	}
 }
 
+// buildVersion 由链接期注入（Dockerfile / release workflow 传 -X main.buildVersion=v1.2.3）；
+// 本机 go build 不带它，就沿用 config 里的默认版本。留着是为了让 /healthz 直接说出
+// 「这个容器是哪个 release」，排查「镜像到底更新没更新」时不用去比对 image digest。
+var buildVersion = ""
+
 func main() {
 	var (
 		root       = flag.String("root", ".", "项目根目录（读取 .env.local 与相对路径）")
@@ -103,6 +108,9 @@ func main() {
 	}
 	if *addr != "" {
 		cfg.Port = *addr
+	}
+	if buildVersion != "" {
+		cfg.Version = buildVersion
 	}
 
 	box, err := secret.New(cfg.SecretKey)

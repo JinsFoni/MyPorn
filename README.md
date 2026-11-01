@@ -154,6 +154,29 @@ make build                      # 构建前端 + 后端
 make dev-web                    # 前端 :5173，/api 已代理到 8080
 ```
 
+## Docker 部署
+
+发布版镜像在 `ghcr.io/jinsfoni/myporn`，每次发 release 自动构建 `linux/amd64` + `linux/arm64` 两份。
+
+```bash
+cp .env.example .env                             # 填 APP_ENCRYPTION_KEY（openssl rand -base64 32）
+mkdir -p data media && sudo chown -R 1000:1000 data media
+docker compose up -d                             # http://localhost:8080
+```
+
+- 两个目录就是全部状态：`./data`（SQLite + 图片缓存）、`./media`（本地库），删容器重建不丢东西。
+  容器内以 uid/gid **1000** 运行，所以宿主目录得先 chown 过去，否则建不了库、写不进片子。
+- 镜像里自带 `ffmpeg` / `yt-dlp` / `deno`：合流与封装要 ffmpeg，YouTube 解析要 yt-dlp
+  （装的是 pip 上的最新版，站点一变就重建镜像），yt-dlp 解 YouTube 的 n 挑战要 deno 这个 JS 运行时。
+- `GET /healthz` 里的 `version` 就是构建时注入的 release tag，核对「镜像到底更新没更新」看它即可。
+- 自己构建：`docker compose up -d --build`。国内网络可以换源（实测这个 VM 里
+  `proxy.golang.org` 每次 `unexpected EOF`、`goproxy.cn` 正常，故留了三个口）：
+  `docker build --build-arg GOPROXY=https://goproxy.cn,direct --build-arg APK_MIRROR=https://mirrors.aliyun.com/alpine --build-arg PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple .`
+- 不想用容器：`make build && ./bin/myporn -root .`（同上文快速开始）。
+
+CI 在 `.github/workflows/`：push/PR 跑 `go vet` + `go test` + `svelte-check` + 一次不推送的镜像构建；
+发布 release 时构建多架构镜像并推到 GHCR（`:1.2.3` / `:1.2` / `:1` / `:latest` / `:sha-xxxxxxx`）。
+
 ## 目录
 
 ```
