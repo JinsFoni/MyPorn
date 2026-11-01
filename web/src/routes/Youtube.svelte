@@ -914,8 +914,93 @@
         {/if}
       </div>
 
-      <!-- 标题在播放器之后：弹窗一眼先看到画面，标题紧挨着频道/播放量这一行 -->
-      <h2 class="mt-3 text-title font-medium leading-snug text-fg">{v.title}</h2>
+      <!-- 标题在播放器之后：弹窗一眼先看到画面，标题紧挨着频道/播放量这一行。
+           原来的「下载 / 收藏 / 复制链接 / 在 YouTube 打开」是标题下面一排带字的药丸，
+           四条文字在描述之前又占一行、跟正文连成一片；收成四颗图标跟在标题右侧，
+           原文字挪进 title，鼠标停上去仍读得到。 -->
+      <div class="mt-3 flex items-start gap-3">
+        <h2 class="min-w-0 flex-1 text-title font-medium leading-snug text-fg">{v.title}</h2>
+
+        <div class="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            class="yt-act"
+            data-emphasis="primary"
+            title={downloading.has(v.id) ? '正在排队下载' : v.downloaded ? '已在本地库，再下一次' : '下载到本地库'}
+            aria-label={downloading.has(v.id) ? '正在排队下载' : '下载到本地库'}
+            onclick={() => void download(v)}
+            disabled={downloading.has(v.id)}
+          >
+            {#if downloading.has(v.id)}
+              <svg viewBox="0 0 24 24" class="h-4 w-4 animate-spin" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="8" stroke-opacity="0.25" />
+                <path d="M20 12a8 8 0 0 0-8-8" />
+              </svg>
+            {:else}
+              <svg
+                viewBox="0 0 24 24"
+                class="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              >
+                <path d="M12 4v10" />
+                <path d="m8 10.5 4 4 4-4" />
+                <path d="M4.5 18.5h15" />
+              </svg>
+            {/if}
+          </button>
+
+          <button
+            type="button"
+            class="yt-act"
+            data-saved={v.saved ? '' : undefined}
+            title={v.saved ? '取消收藏' : '收藏'}
+            aria-label={v.saved ? '取消收藏' : '收藏'}
+            onclick={() => void toggleSave(v)}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              class="h-4 w-4"
+              fill={v.saved ? 'currentColor' : 'none'}
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linejoin="round"
+            >
+              <path d="m12 3.6 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.5 9.8l5.9-.9z" />
+            </svg>
+          </button>
+
+          <button
+            type="button"
+            class="yt-act"
+            title="复制播放链接"
+            aria-label="复制播放链接"
+            onclick={() => void copyLink()}
+          >
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <path d="M10.2 13.4a4.5 4.5 0 0 0 6.7.4l1.9-1.9a4.5 4.5 0 0 0-6.4-6.4l-1.1 1.1" />
+              <path d="M13.8 10.6a4.5 4.5 0 0 0-6.7-.4l-1.9 1.9a4.5 4.5 0 0 0 6.4 6.4l1.1-1.1" />
+            </svg>
+          </button>
+
+          <a
+            href={v.url}
+            target="_blank"
+            rel="noreferrer"
+            class="yt-act"
+            title="在 YouTube 打开"
+            aria-label="在 YouTube 打开"
+          >
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <path d="M18 13.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4.5" />
+              <path d="M15 3.5h5.5V9" />
+              <path d="M20.2 3.8 11 13" />
+            </svg>
+          </a>
+        </div>
+      </div>
 
       <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-dim">
         {#if v.channel.avatarUrl}
@@ -945,39 +1030,6 @@
       {#if v.description}
         <p class="mt-3 whitespace-pre-line text-ui leading-relaxed text-muted line-clamp-[10]">{v.description}</p>
       {/if}
-
-      <div class="mt-4 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90 disabled:opacity-60"
-          onclick={() => void download(v)}
-          disabled={downloading.has(v.id)}
-        >
-          {downloading.has(v.id) ? '已排队' : v.downloaded ? '再下一次' : '下载到本地库'}
-        </button>
-        <button
-          type="button"
-          class="rounded-full bg-raise px-3.5 py-1.5 text-meta text-fg transition-colors hover:bg-panel"
-          onclick={() => void toggleSave(v)}
-        >
-          {v.saved ? '取消收藏' : '收藏'}
-        </button>
-        <button
-          type="button"
-          class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
-          onclick={() => void copyLink()}
-        >
-          复制链接
-        </button>
-        <a
-          href={v.url}
-          target="_blank"
-          rel="noreferrer"
-          class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
-        >
-          在 YouTube 打开
-        </a>
-      </div>
     </div>
   </div>
 {/if}
@@ -1076,6 +1128,49 @@
     .yt-sheet {
       max-width: min(92vw, 84rem, calc((92dvh - 7.5rem) * 16 / 9 + 2rem));
     }
+  }
+
+  /* 标题行右上角那四颗图标键：32×32 圆点，图标 16px。
+     和画面上的关闭键不是一套——那是压在视频上、要半透明才不挡画面；
+     这几颗在弹窗正文里，默认不铺底，hover / 键盘聚焦才浮一层 panel（冷白 5%）。
+     下载那颗用 data-emphasis="primary" 提亮到 fg：它是这四个里唯一的「写」操作。 */
+  .yt-act {
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    border-radius: 9999px;
+    color: var(--color-muted);
+    transition:
+      background-color 140ms ease,
+      color 140ms ease;
+  }
+
+  .yt-act:hover:not(:disabled),
+  .yt-act:focus-visible {
+    background-color: var(--color-panel);
+    color: var(--color-fg);
+  }
+
+  .yt-act[data-emphasis='primary'] {
+    color: var(--color-fg);
+  }
+
+  /* 已收藏：星星填实并提亮，和列表卡片右上角那颗保持同一个信号 */
+  .yt-act[data-saved] {
+    color: var(--color-hi);
+  }
+
+  /* hover 那条（0,3,0）比 [data-saved]（0,2,0）高一级，不补这条的话鼠标一停到星星上
+     它会从白掉回 fg，看着像「取消收藏已经生效了」 */
+  .yt-act[data-saved]:hover:not(:disabled),
+  .yt-act[data-saved]:focus-visible {
+    color: var(--color-hi);
+  }
+
+  .yt-act:disabled {
+    opacity: 0.45;
+    pointer-events: none;
   }
 
   /* 关闭键跟播放器底部控制条是同一套视觉：量出来那根药丸是 background oklch(1 0 0 / .1)、
