@@ -58,6 +58,14 @@ PORT=18081 YTDLP_PATH=/tmp/ytvenv/bin/yt-dlp nohup ./bin/myporn >> .tmp/run/run.
   要能只读 commit 就判断这次改动为什么是这么改的。别写「优化了体验」这种。
 - 代码注释同样写实测事实，不写空话。
 
+## 推送与 CI
+
+- **改完先本地提交，不要顺手 push。** 推不推、什么时候推由人决定（2026-11-01 的明确要求）。
+  要推的时候再 `git push`，别在同一个「改代码」的动作里捎带。
+- **远端 CI 只在发版时跑**：`release.yml` 用 `workflow_call` 复用 `ci.yml`（go vet/test、svelte-check、vite build），
+  过了才构建镜像推 GHCR。push / PR 都不触发，所以别把「等 CI 绿」当日常环节——
+  日常守门是本地 `make build` + `go test ./...` + `pnpm --dir web check`。
+
 ## 画质
 
 默认取最高画质（2160p 优先），**永不静默降级**。降级必须让用户看见并可选。

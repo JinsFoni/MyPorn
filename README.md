@@ -174,8 +174,9 @@ docker compose up -d                             # http://localhost:8080
   `docker build --build-arg GOPROXY=https://goproxy.cn,direct --build-arg APK_MIRROR=https://mirrors.aliyun.com/alpine --build-arg PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple .`
 - 不想用容器：`make build && ./bin/myporn -root .`（同上文快速开始）。
 
-CI 在 `.github/workflows/`：push/PR 跑 `go vet` + `go test` + `svelte-check` + 一次不推送的镜像构建；
-发布 release 时构建多架构镜像并推到 GHCR（`:1.2.3` / `:1.2` / `:1` / `:latest` / `:sha-xxxxxxx`）。
+CI **只在发版时跑**（`.github/workflows/`）：发布 release 会先过 `go vet` + `go test` + `svelte-check` + 前端构建，
+全绿才构建多架构镜像推到 GHCR（`:1.2.3` / `:1.2` / `:1` / `:latest` / `:sha-xxxxxxx`）。
+push / PR 不触发，日常守门靠本地 `make build` + `go test`/`pnpm --dir web check`。
 
 ## 目录
 

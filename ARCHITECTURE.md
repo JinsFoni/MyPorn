@@ -726,11 +726,13 @@ bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源�
 
 ### 14.4 两个 workflow
 
-- `ci.yml`：push/PR 三个并行 job——`go vet` + `go test ./...`、`pnpm check`（svelte-check）+ `pnpm build`、
-  一次 `push: false` 的镜像构建（只为验证 Dockerfile 没烂）。真实网络冒烟测试不进来：
-  那些测试要 `LIVE=1` 且出口得能到站点，CI 的出口在哪不受控。
-- `release.yml`：只由「发布 release」触发（不跟 tag push 走，否则一次发布跑两遍），
-  构 `linux/amd64,linux/arm64` 推 GHCR，tag 用 semver 展开（`1.2.3` / `1.2` / `1` / `latest`）外加 `sha-xxxxxxx`。
+- `ci.yml`：**只作为「发版前检查」存在**——`on: workflow_call` + 手动 dispatch，两个并行 job：
+  `go vet` + `go test ./...`、`pnpm check`（svelte-check）+ `pnpm build`。push / PR 不触发：
+  日常改动先在本地提交、攒到发版，不必为每次 push 烧一遍 runner；代价是「CI 绿不绿」到发版那一刻才见分晓，
+  平时守门靠本地 `make build` + `go test`。真实网络冒烟测试也不进来：那些测试要 `LIVE=1` 且出口得能到站点。
+- `release.yml`：只由「发布 release」触发（不跟 tag push 走，否则一次发布跑两遍）。
+  第一个 job 是 `uses: ./.github/workflows/ci.yml`——检查没过就不出镜像；第二个 job 才构
+  `linux/amd64,linux/arm64` 推 GHCR，tag 用 semver 展开（`1.2.3` / `1.2` / `1` / `latest`）外加原样 tag 与 `sha-xxxxxxx`。
   arm64 走 QEMU，所以开了 `type=gha` 缓存。GHCR 只收小写仓库名，镜像名在 workflow 里用 `${GITHUB_REPOSITORY,,}` 算出来。
 
 实测（第一次真发版，2026-11-01 的 v0.1.0）：

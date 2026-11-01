@@ -1,10 +1,11 @@
 name: Release
 
-# 发布 release 时自动构建多架构镜像并推到 GHCR：
+# 发布 release 时先跑检查、再构建多架构镜像并推到 GHCR（这是本仓库唯一的 CI 入口）：
 #   ghcr.io/jinsfoni/myporn:1.2.3 / :1.2 / :1 / :latest / :sha-xxxxxxx
 #
 # 只由「在 GitHub 上发布 release」触发，不跟 tag push 走——两者都开会一次发布跑两遍。
 # 想重跑某次发布的镜像：Actions 里手动 dispatch，填同一个 tag。
+# 检查（go vet/test、svelte-check、vite build）由 ci.yml 以 workflow_call 复用，红了就不出镜像。
 on:
   release:
     types: [published]
@@ -19,8 +20,13 @@ permissions:
   packages: write
 
 jobs:
+  checks:
+    name: 发版前检查
+    uses: ./.github/workflows/ci.yml
+
   image:
     name: 构建并推送 amd64 + arm64
+    needs: [checks]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
