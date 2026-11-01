@@ -95,6 +95,15 @@
   --text-display--line-height: 1.625rem;
   --text-hero: 1.75rem; /* 28px */
   --text-hero--line-height: 2.125rem;
+  /* 影片播放页（B 站 / 关注流点进来都走这一页）的标题：比 display / hero 各小一成
+     （20→18、28→25）——B 站标题动辄 50 字，28px 排下来压掉半个屏幕。
+     走令牌而不是就地写 px：标题行右端那串图标键的高度算的是「首行行高」
+     （h-[var(--text-film-title--line-height)]，见 routes/Video.svelte），
+     字号/行高一旦只剩一份来源，圆心压首行中线这件事就不会悄悄错位。 */
+  --text-film-title: 1.125rem; /* 18px */
+  --text-film-title--line-height: 1.5rem;
+  --text-film-title-lg: 1.5625rem; /* 25px */
+  --text-film-title-lg--line-height: 2.125rem;
 
   --radius-xl: 0.75rem;
 }

@@ -389,24 +389,17 @@
     img.src = url;
   });
   /**
-   * 「返回」去哪儿：优先看点进来的那一页（卡片链接带的 `?back=`），
-   * 没有就落回「关注」。只认站内绝对路径（以单个 / 开头），别的一律忽略，免得被带去外站。
+   * `?back=`：点进来的是哪一页（卡片链接自带）。只认站内绝对路径（以单个 / 开头），
+   * 别的一律忽略，免得被带去外站。
    *
-   * 两个返回锚点都带 `data-restore`：退回列表要接着原来那个滚动位置。
-   * 目标页是重建的（只拉了第一页），所以还原交给 lib/scrollRestore.ts 追着补，
-   * 光靠 router 一次 `scrollTo` 会被夹在当前底部——那就是「退出一播就回顶部」。
+   * 页面上**不再画「返回 XX」按钮**（原来标题下方和「相关影片」标题右边各一颗）：
+   * 侧边栏/顶栏本来就在，播放页上再放一颗「返回关注」「返回 B 站」是把导航写了两遍，
+   * 还占掉「相关影片」那一行的右端。`backTo` 现在只剩一个用途——决定上一个/下一个切哪份列表
+   * （见下面 neighborScope），所以别把这个 $derived 一起删了。
    */
   const backTo = $derived.by(() => {
     const raw = router.query.get('back') ?? '';
     return raw.startsWith('/') && !raw.startsWith('//') ? raw : '/';
-  });
-  const backLabel = $derived.by(() => {
-    if (backTo.startsWith('/bilibili')) return '返回 B 站';
-    if (backTo.startsWith('/youtube')) return '返回 YouTube';
-    if (backTo.startsWith('/performer')) return '返回艺人';
-    if (backTo.startsWith('/downloads')) return '返回下载';
-    if (backTo === '/') return '返回关注';
-    return '返回上一页';
   });
 
   /**
@@ -458,8 +451,8 @@
   });
 
   /**
-   * 切到邻居。`?back=` 原样带着走——连切几部之后点「返回」，还是要回到当初那一页，
-   * 而不是回到上一部影片的详情页。
+   * 切到邻居。`?back=` 原样带着走——「上一个 / 下一个」按哪份列表算就是看它，
+   * 连切几部之后仍要留在同一份列表里（B 站墙点进来的第二部，不能突然按关注流算）。
    */
   function goToNeighbor(target: Video | null): void {
     if (!target) return;
@@ -489,7 +482,6 @@
   <EmptyState title="打不开这个影片" hint={pageError} icon="error">
     {#snippet actions()}
       <button type="button" class="btn" onclick={() => void loadVideo()}>重试</button>
-      <a data-link data-restore href={backTo} class="btn btn-ghost">{backLabel}</a>
     {/snippet}
   </EmptyState>
 {:else if loadingVideo && !video}
@@ -549,7 +541,6 @@
                     <button type="button" class="btn btn-primary" onclick={switchToProxy}>用代理播放</button>
                   {/if}
                 </div>
-                <p class="text-meta text-dim">空格 暂停 · ← → 快退快进 5 秒 · ↑ ↓ 音量 · F 全屏 · M 静音</p>
               </div>
             {/if}
           {/snippet}
@@ -573,19 +564,23 @@
       </div>
     {/if}
 
-    <div class="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_17rem]">
+    <!-- 右侧信息列 17rem → 14rem：全站最短的几条「标签 — 值」，17rem 让每行的标签和值之间空出
+         一百多像素，看着像两列互不相干的东西；收窄之后标签贴着值、标题栏也多出 48px。
+         `lg:mt-0`：首行资料的上沿要和标题首行（也就是那两颗图标键）同一条线，原来 `mt-4` + `lg:pt-1`
+         把它整体压低了 20px，标题和资料表之间凭空错开半行（窄屏是单列，那一行间距要留着）。 -->
+    <div class="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_14rem]">
       <div class="min-w-0">
         <!-- 下载 / 在平台打开跟着标题走（和 YouTube 弹窗那排同一套 `icon-act`）。
              原来是侧栏两颗整宽按钮 + 窄屏标题下再来一颗「下载到本地库」：同一个动作在
              两个位置各写一遍，窄屏那颗还把标题和标签之间撑出一行。现在收成标题行右端两颗。 -->
         <div class="flex items-start gap-3">
-          <h2 class="min-w-0 flex-1 text-display font-normal leading-snug tracking-[-0.01em] text-fg lg:text-hero">
+          <h2 class="min-w-0 flex-1 text-film-title font-normal tracking-[-0.01em] text-fg lg:text-film-title-lg">
             {video.title}
           </h2>
 
-          <!-- 这一行的高度钉成标题首行的行高（20×1.375 / lg 28×1.375），36px 的按钮从上下各溢出几像素，
+          <!-- 这一行的高度钉成标题首行的行高（18×1.333 / 25×1.36），36px 的按钮从上下各溢出几像素，
                圆心正好压在首行中线上；不钉的话 items-start 会把 36px 的方框顶对齐到行框上，看着偏低。 -->
-          <div class="flex h-[calc(var(--text-display)*1.375)] shrink-0 items-center gap-1 lg:h-[calc(var(--text-hero)*1.375)]">
+          <div class="flex h-[var(--text-film-title--line-height)] shrink-0 items-center gap-1 lg:h-[var(--text-film-title-lg--line-height)]">
             <button
               type="button"
               class="icon-act"
@@ -672,8 +667,8 @@
         {/if}
       </div>
 
-      <aside class="lg:pt-1">
-        <dl class="mt-4 divide-y divide-line">
+      <aside>
+        <dl class="mt-4 divide-y divide-line lg:mt-0">
           {#each specs as spec (spec.label)}
             <div class="flex items-baseline justify-between gap-3 py-2">
               <dt class="text-meta text-dim">{spec.label}</dt>
@@ -686,19 +681,12 @@
         {#if video.hasLocalFile}
           <p class="mt-2 text-meta text-sage">已在本地 {video.localLibraryIds.length} 个库中</p>
         {/if}
-
-        <p class="mt-4 text-meta leading-relaxed text-dim">
-          播放器快捷键：空格/K 播放暂停 · ← → 快退快进 5 秒 · ↑ ↓ 音量（10%） · M 静音 · F 全屏；画面单击暂停，双击左右两侧快退快进、双击中间全屏。
-        </p>
       </aside>
     </div>
 
     {#if video.related.length > 0}
       <section class="mt-10">
-        <div class="mb-3 flex items-center justify-between">
-          <h3 class="text-title font-medium text-fg">相关影片</h3>
-          <a data-link data-restore href={backTo} class="btn btn-ghost h-8">{backLabel}</a>
-        </div>
+        <h3 class="mb-3 text-title font-medium text-fg">相关影片</h3>
         <div class="grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-3 xl:grid-cols-4">
           {#each video.related.slice(0, 8) as related (related.id)}
             <VideoCard video={related} />
