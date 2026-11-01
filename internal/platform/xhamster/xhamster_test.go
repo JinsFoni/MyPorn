@@ -1,6 +1,12 @@
 package xhamster
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/JinsFoni/MyPorn/internal/model"
+)
 
 // 下面三条密文是 2026-10 从一个真实影片页的 window.initials 里抄出来的，
 // 明文用站点自己的 xplayer.js 验过。算法要是哪天换了，这里会先红。
@@ -81,5 +87,48 @@ func TestSlugOf(t *testing.T) {
 		if got := slugOf(raw); got != want {
 			t.Fatalf("slugOf(%q)=%q，期望 %q", raw, got, want)
 		}
+	}
+}
+
+// VR 影片的 sources 里没有 quality=auto（只有 960p/1440p/1920p 三条投影档，带 framePack=LR），
+// 也没有 sources.hls，downloadDropdownComponent 是空数组——只认 auto 的话一条清晰度都拿不到，
+// 报出去的还是「播放地址解密失败」。这里钉住兜底路径：逐档解密、档位名当高度、主机照 hostMap 换。
+// 下面两段密文与 hostMap 都取自 2026-11-01 抓的 /videos/after-party-xhOLi2A 真页面。
+func TestProgressiveVariantsForVR(t *testing.T) {
+	const page = `{
+	  "hostMap": {"standard.h264.1920p.prime": "video8", "standard.h264.1440p.prime": "video8", "standard.h264.960p.prime": "video8"},
+	  "xplayerSettings": {
+	    "sources": {
+	      "standard": {
+	        "h264": [
+	          {"url": "06c23b9d13424f034d74f86228c37c67d3619aaaf51c870baf75ff89abde7832df1a01bf3e1a932653e23a3b755b235663a2fc5273c54b57428fb4031d26f6f73e0c513c3e31043ed7625ead47bb9194c7aaaa433f5835008992179fe93280534765ed8720182986d3094aac21b0d6d6453a6e324f0691232231e8c37021be35f3b9f83ce3898e5a4f47e1", "quality": "1920p", "label": "1920p", "framePack": "LR", "angle": "180"},
+	          {"url": "036c32ed09b38cd338d5f41bedd3cda6b2c78f9e0421bd94feb4189543e7b378838ceda1a5db7c4f0a9c677cff473ba737422ffb19321ea4ecb4f7aa5506e49520feca14a006a8e4e84cadd74e3930ec2e5feed57e1b275af077ec29881edaff202ba8b09f41ec5b1594a1b1f6069fa23994d623a9ec72df47d682c0faccec9c3ac5348879421dc8edc9", "quality": "960p", "label": "960p", "framePack": "LR", "angle": "180"}
+	        ]
+	      }
+	    }
+	  }
+	}`
+	var iv initials
+	if err := json.Unmarshal([]byte(page), &iv); err != nil {
+		t.Fatal(err)
+	}
+	if got := masterURLs(&iv); len(got) != 0 {
+		t.Fatalf("这类页面本来就没有 quality=auto，masterURLs 应为空，得到 %v", got)
+	}
+	a := &Adapter{}
+	vs := a.progressiveVariants(&iv)
+	if len(vs) != 2 {
+		t.Fatalf("应解出 2 档，得到 %d 档：%+v", len(vs), vs)
+	}
+	model.SortVariantsDesc(vs)
+	if vs[0].Height != 1920 || vs[1].Height != 960 {
+		t.Fatalf("档位高度不对：%d / %d", vs[0].Height, vs[1].Height)
+	}
+	want := "https://video8.xhcdn.com/key=f6KTXg4vbLXhXd7tIh2ZPw,end=1793520000,limit=3/data=45.66.216.47-dvp/speed=0/029/353/596/ws1920p.h264.mp4"
+	if vs[0].URL != want {
+		t.Fatalf("1920p 解出来的地址不对\n得到: %s\n期望: %s", vs[0].URL, want)
+	}
+	if !strings.HasSuffix(vs[1].URL, "/ws960p.h264.mp4") {
+		t.Fatalf("960p 地址不对: %s", vs[1].URL)
 	}
 }

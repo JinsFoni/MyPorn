@@ -471,10 +471,22 @@ X 的账号名猜不出来的（艺名拼起来超过 15 字符、账号名里�
 - **播放地址是密文**：`xplayerSettings.sources.standard.<codec>[quality=auto].url` 给的是十六进制串，
   前 5 字节是「PRNG 算法号（1 字节）+ 种子（4 字节小端）」，其后每字节与密钥流 XOR。
   7 种 PRNG（LCG/移位类/乘法异或）各一份实现，解出来是一段 master 清单模板地址。
+- **空页面当可重试**：正常页面 370–400 KB。并发抓取时偶尔只回几十字节或 0 字节（curl 报
+  `HTTP/2 framing layer` 错误），Go 这边看到的是「成功但没内容」，于是报「页面里没有 window.initials，
+  可能被风控拦截或站点改版」，用户看到「平台解析失败」——其实重试就好。`get()` 里把 < 2048 字节的响应
+  包成 `platform.ErrRateLimited`，前端显示「平台限流，稍后再试」，同步任务也按限流处理（不标红、下一轮续）。
 - **主机要换**：模板里的 host 是占位，按 `hostMap["standard.<codec>.auto.prime"]` 换成本次可用的
   CDN 节点（`video7.xhcdn.com` 之类），只换第一段主机名、端口保留。
 - **两套清单都要**：站点把 AV1 与 H.264 分成两个 master（`_TPL_.av1.mp4.m3u8` / `_TPL_.h264.mp4.m3u8`），
   两条都解析、合并后交给 `model.SortVariantsDesc`；清单里的 `CODECS` 缺失时用来源 codec 补上。
+- **VR 影片没有 `quality=auto`**：`sources.standard` 下只有 h264 一个编码，列的是 960p / 1440p / 1920p
+  三条**投影档**（每条带 `framePack=LR`、`angle=180`），没有 `sources.hls`，`downloadDropdownComponent.sources`
+  还是空数组。只认 `quality=auto` 的话一条清晰度都拿不到，报出去却是「解密失败」——2026-11-01 实测库里
+  有 10 部这样的 VR 片（BaDoinkVR / 18VR / VIP4K），点开就是「平台解析失败」。而这几条密文**是能解开的**：
+  解出来是 `…/ws1920p.h264.mp4` 直链（302 到 `ip*.ahcdn.com`，206 `video/mp4`，3840×1920 左右并排）。
+  所以 `progressiveVariants()` 兜底：没有 `quality=auto` 时逐档解密、档位名直接当高度、主机照
+  `hostMap["standard.h264.<quality>.prime"]` 换（这批的映射是 `video8`）。整片 479 MB，CDN 会把长连接中途掐断
+  （直连实测 11 MB 就断），浏览器按 Range 续传，播放本身不受影响。
   拿不到清单时退到 `downloadDropdownComponent.sources.mp4`（144p–720p 直链）。
 - **`downloadDropdownComponent.sources` 有两种形状**：多数页面是 `{"mp4":{…}}`，有些页面是**数组**
   （2026-11 实测 video 1147 / 1192）。照结构体写就会 `json: cannot unmarshal array into …`，而这**不是少一个字段**——

@@ -106,7 +106,19 @@ func (a *Adapter) get(ctx context.Context, path string, q url.Values) ([]byte, e
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("上游返回 %d (%s)", resp.StatusCode, u)
 	}
-	return readLimited(resp.Body, 8<<20)
+	body, err := readLimited(resp.Body, 8<<20)
+	if err != nil {
+		return nil, err
+	}
+	// 一整个页面 370–400 KB，回「几十字节」或干脆 0 字节不是页面，是链路被掐：
+	// 实测并发抓取时 curl 报 `HTTP/2 framing layer` 错误、连接拿到空 body，
+	// 而 Go 这边读到的是「成功但没内容」，于是 parseInitials 报「页面里没有 window.initials，
+	// 可能被风控拦截或站点改版」—— 用户看到「平台解析失败」，其实重试一下就好。
+	// 这类错误该按「可重试」上报（限流同款处理：不标红、下一轮接着来）。
+	if len(body) < 2048 {
+		return nil, fmt.Errorf("%w: 上游只回了 %d 字节的页面", platform.ErrRateLimited, len(body))
+	}
+	return body, nil
 }
 
 // getAbsolute 取绝对地址（清单在 CDN 上）。
@@ -344,6 +356,10 @@ func (a *Adapter) variantsFrom(ctx context.Context, iv *initials) ([]model.Varia
 	}
 
 	if len(out) == 0 {
+		// 没有 quality=auto：VR 影片就是这样（见 progressiveVariants）
+		out = append(out, a.progressiveVariants(iv)...)
+	}
+	if len(out) == 0 {
 		if plain := plainMP4Variants(iv); len(plain) > 0 {
 			out = append(out, plain...)
 		}
@@ -356,6 +372,59 @@ func (a *Adapter) variantsFrom(ctx context.Context, iv *initials) ([]model.Varia
 	}
 	model.SortVariantsDesc(out)
 	return out, nil
+}
+
+// progressiveVariants 是「没有 quality=auto」时的取法：把 sources.standard 里**逐档明文 MP4**
+// 直接当清晰度用。
+//
+// 为什么需要它：VR 影片的 sources 结构和普通片完全不同——standard 下只有 h264 一个编码、
+// 列出的是 960p / 1440p / 1920p 三条**投影档**（每条还带 framePack=LR、angle=180），
+// 没有 quality=auto，也没有 sources.hls；downloadDropdownComponent 又是空数组。
+// 我们只认 quality=auto，于是整部片「一条清晰度都取不到」，报出去的却是「播放地址解密失败」——
+// 而 2026-11 实测这几条密文**是能解开的**，解出来就是
+// `https://video-h.xhcdn.com/key=…/029/353/596/ws1920p.h264.mp4` 这样的直链
+// （302 到 ip*.ahcdn.com，206 video/mp4，能直接播）。
+// 所以这里逐条解密，档位名直接当高度用（`1920p` → 1920），主机照 hostMap 换。
+func (a *Adapter) progressiveVariants(iv *initials) []model.Variant {
+	if iv == nil {
+		return nil
+	}
+	ps := iv.PlayerSettings
+	if ps == nil {
+		ps = iv.PlayerSettings2
+	}
+	if ps == nil {
+		return nil
+	}
+	var out []model.Variant
+	seen := map[string]bool{}
+	for codec, entries := range ps.standardSources() {
+		for _, e := range entries {
+			quality := strings.TrimSpace(e.Quality)
+			if quality == "" || strings.EqualFold(quality, "auto") {
+				continue
+			}
+			h := heightOf(quality)
+			if h <= 0 {
+				continue
+			}
+			plain, err := decryptSource(e.URL)
+			if err != nil || plain == "" {
+				continue
+			}
+			key := fmt.Sprintf("%d|%s", h, codec)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, model.Variant{
+				Height: h,
+				Codec:  strings.ToLower(codec),
+				URL:    applyHostOverride(plain, iv.HostMap, "standard."+codec+"."+quality+".prime"),
+			})
+		}
+	}
+	return out
 }
 
 // plainMP4Variants 是明文的单档直链（144p/240p/480p/720p），只作兜底。
