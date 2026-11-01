@@ -699,8 +699,8 @@
   // ---------- 氛围模式 ----------
 
   /**
-   * 氛围光有**两层**，同一份 32×18 采样：
-   *   1. `.ambient-glow`：黑盒外面那层，往播放器四周溢出（原来的效果）；
+   * 氛围光有**两层**，同一份 16×9 的「颜色场」（每帧按时间常数揉进新画面，见 startAmbient）：
+   *   1. `.ambient-glow`：黑盒外面那层，往播放器四周溢出；
    *   2. `.ambient-bars`：盒子里**压在画面上面**、只漏在黑边里的那层，给竖屏/宽银幕片子用。
    *
    * 为什么第 2 层只能压在画面上、不能垫在画面下面：`<video>` 是 `object-fit: contain`
@@ -722,9 +722,21 @@
   }
 
   let stopAmbient: (() => void) | null = null;
-  /** 采样分辨率：越小越省，反正最后要放大再模糊 */
-  const AMBIENT_W = 32;
-  const AMBIENT_H = 18;
+  /**
+   * 颜色场分辨率：16×9。原来 32×18 加上 44px 模糊，放大到 1259×708 之后每一格约 39px，
+   * 还留着能认出来的光斑和条纹（截图里那几条竖直亮带就是），看着「乱」。
+   * 16×9 一格约 79px，再叠上 90px 的模糊，画面里就只剩色块，跟 Infuse 那种环境光一个观感。
+   */
+  const AMBIENT_W = 16;
+  const AMBIENT_H = 9;
+  /**
+   * 颜色跟着画面走的快慢（秒）。每帧用 `α = 1 - e^(-dt/τ)` 把新画面揉进颜色场：
+   * τ 越小越跟手但会闪（切镜头时整块光跳一下），越大越黏、越像慢慢流动的颜色。
+   * 实测（同一段 4 秒画面、每 120ms 采一次平均亮度、看相邻两次的差）：不揉是 7.7 / 最大 25.4，
+   * τ=0.45 压到 3.2 / 8.6 还看得出在跳，τ=0.8 是 2.1 / 5.2，τ=1.2 是 1.5 / 3.6。
+   * 取 0.8：跳变看不太出来，镜头切过去也还在 1 秒内跟上。
+   */
+  const AMBIENT_TAU = 0.8;
 
   function stopAmbientLoop(): void {
     stopAmbient?.();
@@ -776,8 +788,15 @@
     canvas.width = AMBIENT_W;
     canvas.height = AMBIENT_H;
 
-    // 盒内那层自己再采一次（cover 取景，见下面 draw）：多一次 4K→32×18 的 GPU 缩采样，
-    // 实测开着它播 8 秒 483 帧掉 0 帧，不值当为这点开销去凑合外面那张压扁的采样。
+    // 两层共用的「颜色场」：离屏 16×9，每帧把新画面按时间常数揉进去，
+    // 再原样抄给外面那层和盒内那层。抄的是 16×9 → 16×9，几乎不花钱。
+    const field = document.createElement('canvas');
+    field.width = AMBIENT_W;
+    field.height = AMBIENT_H;
+    const fieldCtx = field.getContext('2d');
+    if (!fieldCtx) return;
+    let fieldAt = 0;
+
     const inner = innerCanvasEl;
     if (inner) {
       inner.width = AMBIENT_W;
@@ -803,33 +822,29 @@
 
     const draw = (): void => {
       if (stopped || video.readyState < 2 || video.ended || nearEnd()) return;
+      const now = performance.now();
+      const dt = fieldAt > 0 ? Math.min(0.25, (now - fieldAt) / 1000) : 0;
+      fieldAt = now;
       try {
-        // 盒外那层：整帧压到 32×18，取的是「整部片子现在大概什么颜色」
-        ctx.drawImage(video, 0, 0, AMBIENT_W, AMBIENT_H);
+        // 按 cover 取景，不整帧压扁：黑边里接的是画面**这一条边**的延续，
+        // 压扁会把画面中间的人也拖进两侧。
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        if (vw <= 0 || vh <= 0) return;
+        const aspect = AMBIENT_W / AMBIENT_H;
+        let sw = vw;
+        let sh = vh;
+        if (vw / vh > aspect) sw = vh * aspect;
+        else sh = vw / aspect;
+        // 第一帧直接铺满，之后按时间常数叠上去：切镜头时颜色半秒内流过去，逐帧噪声被抹平
+        fieldCtx.globalAlpha = dt === 0 ? 1 : 1 - Math.exp(-dt / AMBIENT_TAU);
+        fieldCtx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, AMBIENT_W, AMBIENT_H);
+        fieldCtx.globalAlpha = 1;
+
+        ctx.drawImage(field, 0, 0);
         if (innerCtx) {
-          // 盒内那层按 cover 取景：黑边里接的是画面**这一条边**的延续。
-          // 用整帧压扁的话左右两侧会把画面中间的人也拖进黑边，看着像糊了两团黑影。
-          const vw = video.videoWidth;
-          const vh = video.videoHeight;
-          if (vw > 0 && vh > 0) {
-            const aspect = AMBIENT_W / AMBIENT_H;
-            let sw = vw;
-            let sh = vh;
-            if (vw / vh > aspect) sw = vh * aspect;
-            else sh = vw / aspect;
-            innerCtx.drawImage(
-              video,
-              (vw - sw) / 2,
-              (vh - sh) / 2,
-              sw,
-              sh,
-              0,
-              0,
-              AMBIENT_W,
-              AMBIENT_H,
-            );
-            if (!barsPainted) barsPainted = true;
-          }
+          innerCtx.drawImage(field, 0, 0);
+          if (!barsPainted) barsPainted = true;
         }
       } catch {
         // 跨源污染 / 尺寸未就绪：跳过这一帧
@@ -1160,22 +1175,39 @@
     pointer-events: none;
     opacity: 0;
     transition: opacity 0.5s ease;
-    filter: blur(28px) saturate(1.35);
+    filter: blur(40px) saturate(1.3);
+    animation: ambient-drift 46s ease-in-out infinite;
   }
   @media (min-width: 640px) {
     .ambient-glow {
       inset: -2rem;
       width: calc(100% + 4rem);
       height: calc(100% + 4rem);
-      filter: blur(48px) saturate(1.35);
+      filter: blur(88px) saturate(1.6) brightness(1.05);
     }
   }
   .ambient-glow[data-on='true'] {
     opacity: 0.5;
   }
+
+  /* 慢慢漂：颜色场本身已经很糊了，再让它极慢地缩放平移，就看不出「一帧一帧」，
+     像一块一直在流动的光（Infuse 那种环境光感）。40 多秒一个来回，正常看片几乎察觉不到边界。 */
+  @keyframes ambient-drift {
+    0% {
+      transform: scale(1.18) translate3d(-1.2%, 1%, 0);
+    }
+    50% {
+      transform: scale(1.26) translate3d(1.2%, -1.4%, 0);
+    }
+    100% {
+      transform: scale(1.18) translate3d(-1.2%, 1%, 0);
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
-    .ambient-glow {
+    .ambient-glow,
+    .ambient-bars-canvas {
       transition: none;
+      animation: none;
     }
   }
 
@@ -1195,11 +1227,11 @@
     display: block;
     width: 100%;
     height: 100%;
-    transform: scale(1.2);
-    filter: blur(44px) saturate(1.3);
+    filter: blur(72px) saturate(1.75) brightness(1.05);
+    animation: ambient-drift 46s ease-in-out infinite;
   }
   .ambient-bars[data-on='true'][data-bars='x'] {
-    opacity: 0.5;
+    opacity: 0.62;
     -webkit-mask-image: linear-gradient(
       to right,
       #000 0 var(--ambient-bar, 0px),
@@ -1214,7 +1246,7 @@
     );
   }
   .ambient-bars[data-on='true'][data-bars='y'] {
-    opacity: 0.5;
+    opacity: 0.62;
     -webkit-mask-image: linear-gradient(
       to bottom,
       #000 0 var(--ambient-bar, 0px),
