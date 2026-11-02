@@ -82,8 +82,11 @@
     {/if}
 
     {#if video.durationSec > 0}
+      <!-- 时长不带黑色药丸底（按用户要求去掉），只给一层文字阴影保证亮封面上也读得清——
+           和 B 站墙 `VideoCard` 同一套 `text-shadow`，只是留在右下角（YouTube 自己的位置）。
+           右上角是下载按钮、左上角是未看小圆点，两个角都占了。 -->
       <span
-        class="absolute bottom-2 right-2 rounded bg-ink/75 px-1.5 py-0.5 text-[0.6875rem] font-medium tabular-nums text-fg"
+        class="pointer-events-none absolute bottom-2 right-2 text-meta font-medium tabular-nums text-fg [text-shadow:0_1px_5px_rgba(0,0,0,1),0_0_12px_rgba(0,0,0,0.95),0_0_3px_rgba(0,0,0,1)]"
       >
         {formatDuration(video.durationSec)}
       </span>
