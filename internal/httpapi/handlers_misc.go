@@ -201,6 +201,96 @@ func normalizeBiliCookie(raw string) (string, error) {
 	return strings.Join(parts, "; "), nil
 }
 
+// ytCookieTTL 是把「整段 Cookie 头」转成 cookies.txt 时给的有效期。
+//
+// 本来想写 0（Netscape 的会话 cookie），但 yt-dlp 把它当成「会话内有效」，配合
+// 我们每次调用都新写一个临时文件没问题——可一旦哪天有人手动拿去跑就会困惑。
+// 直接给两年，真正的过期时间由 YouTube 自己通过 Set-Cookie 决定，我们写的只是个上限。
+const ytCookieTTL = 2 * 365 * 24 * time.Hour
+
+// ytAuthCookies 是「这份 cookie 到底有没有登录态」的判据。
+//
+// 2026-11-03 实测：YouTube 的登录态由 LOGIN_INFO 加一组 SID 家族共同表示，
+// yt-dlp 自己判断「还登着吗」用的也是 `LOGIN_INFO 且 (_SAPISID 或 _1PSAPISID 或 _3PSAPISID)`。
+// 少了它们，设置里看着「已配置」，实际每次解析都被当成游客——就是 §14.18 那种
+// 「配了 cookie 还是被要求人机验证」。所以这里提前拦住，别让它静默存进去。
+var ytAuthCookies = [][]string{
+	{"login_info", "sid"}, {"login_info", "sapisid"}, {"login_info", "__secure-1psid"}, {"login_info", "__secure-3psid"},
+}
+
+// normalizeYtCookie 把用户粘进来的东西整理成 yt-dlp 认的 Netscape cookies.txt。
+//
+// 认两种形状（设置面板里就是这么写的，两边必须一致）：
+//
+//  1. **整份 cookies.txt**（浏览器扩展 / yt-dlp 导出的）：照收，顺手去重、补齐文件头；
+//  2. **请求头里那整段 Cookie**（`SID=…; HSID=…`，可能还带着 `cookie: ` 前缀）：
+//     转成 Netscape 行。这条是必须支持的——无痕窗口里装不了扩展（Chrome 不允许在无痕里
+//     装新扩展），用户能拿到的最短路径就是 F12 → Network → 任意 youtube.com 请求 →
+//     Request Headers 里那行 cookie。2026-11-03 之前这段原样存进库、原样丢给
+//     `yt-dlp --cookies`，而它只认 Netscape 格式，于是「粘了也没用」。
+func normalizeYtCookie(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	lines := []string{}
+	idx := map[string]int{}
+	add := func(domain, name, value string) {
+		key := strings.ToLower(name)
+		line := strings.Join([]string{domain, "TRUE", "/", "TRUE",
+			strconv.FormatInt(time.Now().Add(ytCookieTTL).Unix(), 10), name, value}, "\t")
+		if i, ok := idx[key]; ok {
+			lines[i] = line
+			return
+		}
+		idx[key] = len(lines)
+		lines = append(lines, line)
+	}
+
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
+		switch {
+		case line == "":
+			continue
+		case strings.HasPrefix(strings.ToLower(line), "cookie:"):
+			line = strings.TrimSpace(line[len("cookie:"):])
+		case strings.HasPrefix(line, "#HttpOnly_"):
+			line = strings.TrimPrefix(line, "#HttpOnly_")
+		case strings.HasPrefix(line, "#"):
+			continue // cookies.txt 的头几行
+		}
+		if domain, name, value, ok := parseNetscapeLine(line); ok {
+			add(domain, name, value)
+			continue
+		}
+		// 整段 Cookie 头：k=v; k=v（也兼容换行 / 制表符分隔）
+		for _, seg := range strings.FieldsFunc(line, func(r rune) bool { return r == ';' || r == '\t' }) {
+			k, v, ok := strings.Cut(strings.TrimSpace(seg), "=")
+			if !ok || strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+				continue
+			}
+			add(".youtube.com", strings.TrimSpace(k), strings.TrimSpace(v))
+		}
+	}
+	if len(lines) == 0 {
+		return "", fmt.Errorf("Cookie 里没认出任何字段：整份 cookies.txt 或请求头里那整段 Cookie 都行")
+	}
+	has := func(name string) bool { _, ok := idx[name]; return ok }
+	looksLoggedIn := false
+	for _, pair := range ytAuthCookies {
+		if has(pair[0]) && has(pair[1]) {
+			looksLoggedIn = true
+			break
+		}
+	}
+	if !looksLoggedIn {
+		return "", fmt.Errorf("这份 Cookie 里没有登录态（要 LOGIN_INFO 加一组 SID/SAPISID）：" +
+			"在无痕窗口按 F12 → Network → 刷新 youtube.com → 点任意请求，" +
+			"把 Request Headers 里 cookie 那一整行复制过来；document.cookie 看不到它们（HttpOnly）")
+	}
+	return "# Netscape HTTP Cookie File\n" + strings.Join(lines, "\n") + "\n", nil
+}
+
 // parseNetscapeLine 认 Netscape cookies.txt 的一行：域 子域 路径 安全 过期 名 值。
 // 制表符分隔是标准写法，某些导出会用空格对齐，所以空格分隔也认（过期列必须全是数字）。
 func parseNetscapeLine(line string) (domain, name, value string, ok bool) {
@@ -516,7 +606,11 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			set("ytdlp_path", strings.TrimSpace(*p.YouTube.YtDlpPath))
 		}
 		if p.YouTube.Cookies != nil {
-			raw := strings.TrimSpace(*p.YouTube.Cookies)
+			raw, cerr := normalizeYtCookie(*p.YouTube.Cookies)
+			if cerr != nil {
+				writeErr(w, http.StatusBadRequest, "bad_request", cerr.Error())
+				return
+			}
 			if err := s.st.SetSecret(s.box, "yt_cookies", raw); err != nil {
 				writeErr(w, http.StatusInternalServerError, "internal", "保存 Cookie 失败")
 				return

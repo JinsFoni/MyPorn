@@ -797,6 +797,11 @@
                         cookies → <strong>立刻关掉那个窗口</strong>。正常窗口挂着登录态时 YouTube 会一直轮换
                         <span class="text-muted">__Secure-3PSIDTS</span>，导出的副本用一次就被判「已失效」。
                       </p>
+                      <p class="mt-1 text-meta text-dim">
+                        无痕窗口里装不了扩展时走 F12：<strong>Network</strong> → 刷新 youtube.com → 点任意一条请求 →
+                        Request Headers 里 <span class="text-muted">cookie</span> 那一整行复制过来即可（会自动转成
+                        cookies.txt；<span class="text-muted">document.cookie</span> 看不到这些，它们是 HttpOnly）。
+                      </p>
                       <textarea
                         id="yt-cookie"
                         class="field mt-2 h-28 resize-y font-mono text-meta"
