@@ -119,7 +119,7 @@ B 站不是「追一个艺人」，是「订阅一个内容源」。所以它和
 
 | 入口 | 位置 | 内容 |
 |---|---|---|
-| 视频墙 | 侧边栏「B 站」（`/bilibili`，徽标 = 未看条数） | UP 主胶囊 + 全部/未看 + 封面墙 + 「全部标为已看」「添加 UP 主」 |
+| 视频墙 | 侧边栏「B 站」（`/bilibili`，徽标 = 未看条数） | UP 主头像条（和关注页同款：72px 圆头像，点谁筛谁）+ 全部/未看 + 封面墙 + 「全部标为已看」「添加 UP 主」 |
 | 管理 | 管理 → 「B 站」页签（`/manage?tab=bilibili`） | 读数、Cookie/ffmpeg 状态、加 UP 主、逐位 UP 主的同步/回填续翻/下载未看/停用/删除 |
 | 设置 | 设置 → 「B 站」 | Cookie（SESSDATA）+ 画质说明；「网络与代理」里多一行 B 站专用代理 |
 | 手机 | 底部导航第 4 格「B 站」（`grid-cols-8`） | 原先是「动态」顶部的分段控件；2026-10-29 拆掉那排切换，B 站和 YouTube 直接进底栏 |
@@ -578,7 +578,7 @@ curl -s 'https://api.bilibili.com/x/web-interface/nav' -H 'Cookie: SESSDATA=…'
 | `internal/store/bilibili_test.go` | 4 个用例（UP 主计数含软删、已看作用域、平台过滤、统计与未看片单） |
 | `internal/httpapi/handlers_bilibili.go` | `/api/bilibili/*` 与 `/api/manage/bilibili` |
 | `internal/store/migrations/0010_m7b_bilibili_page.sql` | 投稿墙与未看角标的两个索引 |
-| `web/src/routes/Bilibili.svelte` | 视频墙（UP 主胶囊 + 筛选 + 添加） |
+| `web/src/routes/Bilibili.svelte` | 视频墙（UP 主头像条 + 筛选 + 添加） |
 | `web/src/components/AppShell.svelte` | 手机底栏 8 格：YouTube / B 站 直接进底栏（原先那排「动态 / YouTube / B 站」分段控件已拆掉） |
 
 ### 7.13 横版封面被当成竖屏裁掉（2026-11-01 修）

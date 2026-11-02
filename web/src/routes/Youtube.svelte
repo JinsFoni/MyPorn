@@ -16,7 +16,7 @@
    */
   import { onMount } from 'svelte';
   import InfiniteList from '../components/InfiniteList.svelte';
-  import TopBar from '../components/TopBar.svelte';
+  import AvatarRail from '../components/AvatarRail.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import YtCard from '../components/YtCard.svelte';
   import { api, messageFor } from '../lib/api';
@@ -83,6 +83,23 @@
   let addInput = $state<HTMLInputElement | null>(null);
 
   const unseenTotal = $derived(channels.reduce((sum, c) => sum + c.unseenCount, 0));
+
+  /**
+   * 频道头像条要的数据，口径跟关注页那条一样：**版面只有头像和名字**（不显示计数），
+   * 条数与未看数放进 `title`（悬停/读屏还拿得到）。暂停同步的频道压暗。
+   */
+  const railItems = $derived(
+    channels.map((c) => ({
+      id: c.id,
+      name: c.title,
+      avatarUrl: c.avatarUrl,
+      dimmed: !c.enabled,
+      title: `${c.title} · 已收录 ${String(c.videoCount)} 条${c.unseenCount > 0 ? ` · 未看 ${String(c.unseenCount)}` : ''}`,
+    })),
+  );
+
+  /** 头像条里选中的那个频道（筛选行上要写名字） */
+  const picked = $derived(channels.find((c) => c.id === filterChannel) ?? null);
 
   async function loadChannels(): Promise<void> {
     channelsError = '';
@@ -309,29 +326,15 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<!-- 页头自己画：「全部标为已看 / 添加频道」要待在标题那一行，而不是在页内单独占一行
-     （那一行原来只在右边飘着两个按钮，左边空着，看着像没画完）。
-     这两个按钮的状态（未读总数、添加弹窗）都住在本页，所以标题由本页渲染，见 App.svelte 的 DEFAULT_TITLE。 -->
-<TopBar title="YouTube">
-  {#snippet actions()}
-    {#if unseenTotal > 0}
-      <button
-        type="button"
-        class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
-        onclick={() => void markAllSeen()}
-      >
-        全部标为已看
-      </button>
-    {/if}
-    <button
-      type="button"
-      class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
-      onclick={openAdd}
-    >
-      添加频道
-    </button>
-  {/snippet}
-</TopBar>
+<!-- 页面上不再有标题（用户要求去掉左上角那个「YouTube」）：顶部直接是频道头像条，
+     和关注页、B 站页同一个样子——横排 72px 圆头像，点谁筛谁。 -->
+<AvatarRail
+  items={railItems}
+  label="按频道筛选"
+  selected={filterChannel}
+  onSelect={setChannel}
+  loading={!channelsLoaded}
+/>
 
 <div class="flex flex-col gap-4">
 
@@ -381,50 +384,30 @@
   {/if}
 
   {#if channelsLoaded && channels.length > 0}
-    <!-- 筛选：频道胶囊 + 右侧的 全部/未看/收藏 -->
+    <!-- 筛选行：左边是「点了谁」（带 ✕ 的名字胶囊）+ 全部/未看/收藏，右边是页内动作。
+         频道列表不在这里再列一遍——上面那条头像条就是筛选器。 -->
     <div class="flex flex-wrap items-center gap-2">
-      <div class="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1 pb-1">
+      {#if filterChannel !== null}
         <button
           type="button"
+          class="flex shrink-0 items-center gap-1.5 rounded-full bg-raise py-1.5 pl-3 pr-2.5 text-meta text-fg"
+          title="取消频道筛选"
           onclick={() => setChannel(null)}
-          class="shrink-0 rounded-full px-3 py-1.5 text-meta transition-colors {filterChannel === null
-            ? 'bg-raise text-fg'
-            : 'text-muted hover:bg-panel hover:text-fg'}"
         >
-          全部频道
-        </button>
-        {#each channels as channel (channel.id)}
-          <button
-            type="button"
-            onclick={() => setChannel(channel.id)}
-            title={`${channel.title} · ${String(channel.videoCount)} 条视频`}
-            class="flex shrink-0 items-center gap-1.5 rounded-full py-1 pl-1 pr-2.5 text-meta transition-colors {filterChannel ===
-            channel.id
-              ? 'bg-raise text-fg'
-              : 'text-muted hover:bg-panel hover:text-fg'} {channel.enabled ? '' : 'opacity-50'}"
+          <span class="max-w-[9rem] truncate">{picked?.title ?? '这个频道'}</span>
+          <svg
+            viewBox="0 0 16 16"
+            class="h-3 w-3 shrink-0 text-dim"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            aria-hidden="true"
           >
-            {#if channel.avatarUrl}
-              <img
-                src={imageUrl(channel.avatarUrl, 44) ?? ''}
-                alt=""
-                class="h-5 w-5 rounded-full object-cover"
-                loading="lazy"
-                decoding="async"
-              />
-            {:else}
-              <span class="grid h-5 w-5 place-items-center rounded-full bg-panel text-[0.625rem] text-dim">
-                {channel.title.slice(0, 1).toUpperCase()}
-              </span>
-            {/if}
-            <span class="max-w-[9rem] truncate">{channel.title}</span>
-            {#if channel.unseenCount > 0}
-              <span class="rounded-full bg-hi px-1 text-[0.625rem] font-semibold leading-4 text-ink tabular-nums">
-                {channel.unseenCount > 99 ? '99+' : channel.unseenCount}
-              </span>
-            {/if}
-          </button>
-        {/each}
-      </div>
+            <path d="m4 4 8 8M12 4l-8 8" />
+          </svg>
+        </button>
+      {/if}
 
       <div class="flex shrink-0 items-center gap-0.5 rounded-full bg-panel p-0.5 text-meta">
         {#each MODES as item (item[0])}
@@ -438,6 +421,25 @@
             {item[1]}
           </button>
         {/each}
+      </div>
+
+      <div class="ml-auto flex shrink-0 items-center gap-2">
+        {#if unseenTotal > 0}
+          <button
+            type="button"
+            class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
+            onclick={() => void markAllSeen()}
+          >
+            全部标为已看
+          </button>
+        {/if}
+        <button
+          type="button"
+          class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
+          onclick={openAdd}
+        >
+          添加频道
+        </button>
       </div>
     </div>
   {/if}

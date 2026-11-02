@@ -19,7 +19,7 @@
   import { onMount } from 'svelte';
   import InfiniteList from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
-  import TopBar from '../components/TopBar.svelte';
+  import AvatarRail from '../components/AvatarRail.svelte';
   import BiliLoginDialog from '../components/BiliLoginDialog.svelte';
   import VideoCard from '../components/VideoCard.svelte';
   import PlatformIcon from '../components/PlatformIcon.svelte';
@@ -88,6 +88,25 @@
 
   const unseenTotal = $derived(channels.reduce((sum, c) => sum + c.unseenCount, 0));
   const failing = $derived(channels.filter((c) => c.lastError !== ''));
+
+  /**
+   * UP 主头像条要的数据。**版面只画头像和名字**（和关注页同口径，不显示任何计数）；
+   * 已收录条数 / 未看条数放进 `title`，悬停和读屏都还拿得到。
+   * 正在同步的那位在头像右上角点一颗呼吸的亮点——原来是胶囊上的小圆点。
+   */
+  const railItems = $derived(
+    channels.map((c) => ({
+      id: c.id,
+      name: c.name,
+      avatarUrl: c.avatarUrl,
+      dimmed: !c.enabled,
+      busy: live.isSyncing(c.id),
+      title: `${c.name} · 已收录 ${String(c.videoCount)} 条${c.unseenCount > 0 ? ` · 未看 ${String(c.unseenCount)}` : ''}`,
+    })),
+  );
+
+  /** 头像条里选中的那位（用来在筛选行上写「点谁筛谁」那句话） */
+  const picked = $derived(channels.find((c) => c.id === filterChannel) ?? null);
 
   async function loadChannels(): Promise<void> {
     channelsError = '';
@@ -226,28 +245,16 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<!-- 页头自己画：「全部标为已看 / 添加 UP 主」要待在标题那一行，和 YouTube 那页同构。
-     这两个按钮的状态（未读总数、添加弹窗）都住在本页，所以标题由本页渲染，见 App.svelte 的 DEFAULT_TITLE。 -->
-<TopBar title="B 站">
-  {#snippet actions()}
-    {#if unseenTotal > 0}
-      <button
-        type="button"
-        class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
-        onclick={() => void markAllSeen()}
-      >
-        {filterChannel === null ? '全部标为已看' : '这位标为已看'}
-      </button>
-    {/if}
-    <button
-      type="button"
-      class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
-      onclick={openAdd}
-    >
-      添加 UP 主
-    </button>
-  {/snippet}
-</TopBar>
+<!-- 页面上不再有标题（用户要求去掉左上角那个「B 站」）：顶部直接是 UP 主头像条，
+     和关注页同一个样子——横排 72px 圆头像，点谁筛谁。页面叫什么由侧边栏高亮和
+     浏览器标题（路由表里的「B 站 · MyPorn」）负责，内容区不用再写一遍。 -->
+<AvatarRail
+  items={railItems}
+  label="按 UP 主筛选"
+  selected={filterChannel}
+  onSelect={setChannel}
+  loading={!channelsLoaded}
+/>
 
 <div class="flex flex-col gap-4">
 
@@ -373,52 +380,30 @@
   {/if}
 
   {#if channelsLoaded && channels.length > 0}
-    <!-- 筛选：UP 主胶囊 + 右侧 全部/未看 -->
+    <!-- 筛选行：左边是「点了谁」（带 ✕ 的名字胶囊）+ 全部/未看，右边是页内动作。
+         谁可以筛、筛成什么样都在上面那条头像条里，这一行不再列一遍 UP 主。 -->
     <div class="flex flex-wrap items-center gap-2">
-      <div class="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1 pb-1">
+      {#if filterChannel !== null}
         <button
           type="button"
+          class="flex shrink-0 items-center gap-1.5 rounded-full bg-raise py-1.5 pl-3 pr-2.5 text-meta text-fg"
+          title="取消 UP 主筛选"
           onclick={() => setChannel(null)}
-          class="shrink-0 rounded-full px-3 py-1.5 text-meta transition-colors {filterChannel === null
-            ? 'bg-raise text-fg'
-            : 'text-muted hover:bg-panel hover:text-fg'}"
         >
-          全部 UP 主
-        </button>
-        {#each channels as channel (channel.id)}
-          <button
-            type="button"
-            onclick={() => setChannel(channel.id)}
-            title={`${channel.name} · 已收录 ${String(channel.videoCount)} 条`}
-            class="flex shrink-0 items-center gap-1.5 rounded-full py-1 pl-1 pr-2.5 text-meta transition-colors {filterChannel ===
-            channel.id
-              ? 'bg-raise text-fg'
-              : 'text-muted hover:bg-panel hover:text-fg'} {channel.enabled ? '' : 'opacity-50'}"
+          <span class="max-w-[9rem] truncate">{picked?.name ?? '这位 UP 主'}</span>
+          <svg
+            viewBox="0 0 16 16"
+            class="h-3 w-3 shrink-0 text-dim"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            aria-hidden="true"
           >
-            {#if channel.avatarUrl}
-              <img
-                src={imageUrl(channel.avatarUrl, 44) ?? ''}
-                alt=""
-                class="h-5 w-5 rounded-full object-cover"
-                loading="lazy"
-                decoding="async"
-              />
-            {:else}
-              <span class="grid h-5 w-5 place-items-center rounded-full bg-panel text-[0.625rem] text-dim">
-                {channel.name.slice(0, 1).toUpperCase()}
-              </span>
-            {/if}
-            <span class="max-w-[9rem] truncate">{channel.name}</span>
-            {#if live.isSyncing(channel.id)}
-              <span class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-hi" title="正在同步"></span>
-            {:else if channel.unseenCount > 0}
-              <span class="rounded-full bg-hi px-1 text-[0.625rem] font-semibold leading-4 text-ink tabular-nums">
-                {channel.unseenCount > 99 ? '99+' : channel.unseenCount}
-              </span>
-            {/if}
-          </button>
-        {/each}
-      </div>
+            <path d="m4 4 8 8M12 4l-8 8" />
+          </svg>
+        </button>
+      {/if}
 
       <div class="flex shrink-0 items-center gap-0.5 rounded-full bg-panel p-0.5 text-meta">
         {#each MODES as item (item[0])}
@@ -432,6 +417,25 @@
             {item[1]}
           </button>
         {/each}
+      </div>
+
+      <div class="ml-auto flex shrink-0 items-center gap-2">
+        {#if unseenTotal > 0}
+          <button
+            type="button"
+            class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
+            onclick={() => void markAllSeen()}
+          >
+            {filterChannel === null ? '全部标为已看' : '这位标为已看'}
+          </button>
+        {/if}
+        <button
+          type="button"
+          class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
+          onclick={openAdd}
+        >
+          添加 UP 主
+        </button>
       </div>
     </div>
   {/if}

@@ -234,7 +234,7 @@ yt-dlp --no-playlist --newline --socket-timeout 20 --retries 3 --concurrent-frag
 
 | 文件 | 内容 |
 |---|---|
-| `web/src/routes/Youtube.svelte` | 频道胶囊 + 16:9 网格 + `InfiniteList` + 嵌播弹层 |
+| `web/src/routes/Youtube.svelte` | 频道头像条（`AvatarRail`，和关注页同款）+ 16:9 网格 + `InfiniteList` + 嵌播弹层 |
 | `web/src/components/YtCard.svelte` | 封面（`hq720` 铺满 / `maxresdefault` 大图，均带 `f=` 兜底）、时长角标、两行标题、副行「频道 · 3 小时前 · 12.3 万次观看」、未看小圆点、未看状态下右上角下载按钮、直播标记 |
 | `web/src/routes/Manage.svelte` | 新 tab `youtube`（结构照抄 moments 那块）+ 顶部四格总览 |
 | `web/src/routes/Moments.svelte` | 页顶加「动态 / YouTube」切换 |
