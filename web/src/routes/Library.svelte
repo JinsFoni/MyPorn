@@ -219,35 +219,10 @@
 />
 
 <div class="flex flex-col gap-4">
-  <!-- 汇总行：一共多少部、占多大，右边是「有了新片要刷新 / 去管库」两个出口 -->
-  <div class="flex flex-wrap items-center gap-x-3 gap-y-2 text-ui text-muted">
-    <p>
-      {#if summary === null}
-        <span class="text-dim">正在数…</span>
-      {:else}
-        共 <span class="tabular-nums text-fg/90">{total}</span> 部 ·
-        占用 <span class="tabular-nums text-fg/90">{formatBytes(totalBytes)}</span>
-      {/if}
-    </p>
-    <div class="ml-auto flex shrink-0 items-center gap-1">
-      <button
-        type="button"
-        class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
-        onclick={() => ui.openSettings('libraries')}
-      >
-        管理本地库
-      </button>
-      <button
-        type="button"
-        class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
-        onclick={refresh}
-      >
-        刷新
-      </button>
-    </div>
-  </div>
+  <!-- 工具行（2026-11-03 按用户要求合成一行）：库胶囊 → 排序 → **统计** → …… → **管理本地库 / 刷新**
+       → 搜索。原来「共 N 部 · 占用 X」和两个按钮各占一行，白吃一条横带，而它们跟排序、搜索
+       本来就是同一件事（都在说「这一页看什么」）。宽度不够时整行折行，按钮组和搜索一起掉到第二行。 -->
 
-  <!-- 筛选行：库胶囊（多于一个库才画）+ 排序 + 搜索。手机上会折成两行 -->
   <div class="flex flex-wrap items-center gap-2">
     {#if chips.length > 1}
       <div class="flex flex-wrap items-center gap-1">
@@ -289,7 +264,37 @@
       {/each}
     </div>
 
-    <label class="ml-auto flex min-w-0 items-center gap-2 rounded-full bg-panel px-3 py-1.5">
+    <!-- 统计：紧跟在排序右边（用户要求）。whitespace-nowrap 是因为它一断行就变成
+         「共 5 部 ·」/「占用 1.1 GB」两截，数字对不上号。 -->
+    <p class="whitespace-nowrap text-ui text-muted">
+      {#if summary === null}
+        <span class="text-dim">正在数…</span>
+      {:else}
+        共 <span class="tabular-nums text-fg/90">{total}</span> 部 ·
+        占用 <span class="tabular-nums text-fg/90">{formatBytes(totalBytes)}</span>
+      {/if}
+    </p>
+
+    <!-- 两个出口放在搜索左边（用户要求）：ml-auto 从搜索挪到这里，把「筛选/排序/统计」和
+         「动作 + 搜索」推到两端。 -->
+    <div class="ml-auto flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
+        onclick={() => ui.openSettings('libraries')}
+      >
+        管理本地库
+      </button>
+      <button
+        type="button"
+        class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
+        onclick={refresh}
+      >
+        刷新
+      </button>
+    </div>
+
+    <label class="flex min-w-0 shrink-0 items-center gap-2 rounded-full bg-panel px-3 py-1.5">
       <span class="sr-only">搜索标题或文件名</span>
       <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0 text-dim" fill="none" stroke="currentColor" stroke-width="1.7">
         <circle cx="10.75" cy="10.75" r="5.75" />
