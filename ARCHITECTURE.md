@@ -422,6 +422,12 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
     现在用 hls.js 事件（`hlsFragLoading` / `hlsFragLoadProgress` / `hlsFragLoaded`，失败走 `hlsError` 的 `fragLoad*`）
     喂一个「在飞计数 + 最近动静时刻」：仍在飞且最近 30 秒内有动静就跳过一次 nudge（两个上限都看，防计数漏减把 nudge 永久挡住）。
     服务端同步改了块切法（见 `ytStairSpans`：首块 1 MiB，其余均分），首字节从「等 5.64 MB」变成「等 1 MiB」。
+  - **上游拒了一段就作废整条会话**（2026-11-03 修）：googlevideo 回 403 时不作废的代价是**每一段**各撞一次墙——
+    实测一条拒绝要 13.5 秒才回（`openUpstream` 3 次重试各自 ~4.5 秒），87 秒的片子 16 段就是三分多钟的转圈，
+    界面上一句提示都没有。现在 `/api/yt/seg` 拿到 4xx 就 `Manager.Forget(videoId)`（丢掉解析缓存，下次换一批 CDN 节点）
+    + `Manager.Drop(sess.ID)`（剩下的分片立刻 410），hls.js 当场致命退出 → 弹「站内播放失败」→ 用户点重试重新解析，
+    这一步才会把真正的原因（签名过期 / `LOGIN_REQUIRED` 人机验证）报出来。`proxyMedia` 同时把上游的 4xx 正文捞一句进日志
+    （`上游拒绝取流  platform=youtube status=403 host=… body=…`），不再只留一个状态码。
     改完实测：首帧 34.8/38.5/41.7 s → **9.7 s**（解析已缓存）/ 13.4 s（冷解析 8.8 s），nudge 次数 9~10 → **2**，
     拖到 120 s 从 7.3~11.4 s → **5.0 s**。
 - **全屏不许跟着屏宽继续放大控制条**（2026-11-01 用户报的「全屏模式下的底部菜单栏有点太高了」）：皮肤在

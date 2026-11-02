@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +51,9 @@ seg2.mp4
 #EXT-X-ENDLIST
 `
 
+// ytTestSegStatus 让假上游对分片回指定状态码（0 = 正常）。默认 0，别的用例不受影响。
+var ytTestSegStatus atomic.Int32
+
 // newYtStreamServer 起一套「上游 googlevideo + 本应用」的测试环境。
 func newYtStreamServer(t *testing.T) (*Server, int64) {
 	t.Helper()
@@ -63,6 +67,12 @@ func newYtStreamServer(t *testing.T) (*Server, int64) {
 			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 			_, _ = io.WriteString(w, testYtChild)
 		case strings.HasSuffix(r.URL.Path, ".mp4"):
+			// 开关：模拟 googlevideo 拒分片（403/410 那种），验证「一条被拒就作废会话」。
+			if code := int(ytTestSegStatus.Load()); code != 0 {
+				w.WriteHeader(code)
+				_, _ = io.WriteString(w, `{"error":"nope"}`)
+				return
+			}
 			w.Header().Set("Content-Type", "video/mp4")
 			_, _ = io.WriteString(w, "SEG:"+filepath.Base(r.URL.Path))
 		default:
@@ -210,6 +220,42 @@ func TestYtStreamUnknownSession(t *testing.T) {
 	rec := getStream(t, srv.handleYtStreamSeg, map[string]string{"sid": "deadbeef", "n": "0"})
 	if rec.Code != http.StatusGone {
 		t.Fatalf("状态码 = %d，想要 410", rec.Code)
+	}
+}
+
+// TestYtStreamSegmentRejectionDropsSession 上游拒一段分片之后，这条会话当场作废。
+//
+// 2026-11-03 的现场：出口 IP 被 YouTube 判「要人机验证」时，已经发出去的签名地址还能拉清单，
+// 但每一段分片都要等 **13.5 秒**才回 403（客户端 3 次重试各自 ~4.5 秒）。一条 87 秒的片子 16 段，
+// 播放器就那么转了三分钟，界面上什么提示都没有。作废会话之后，第二次要分片立刻 410，
+// hls.js 当场致命退出 → 界面弹「站内播放失败」→ 用户点重试 → 重新解析，那时才把真正的原因报出来。
+func TestYtStreamSegmentRejectionDropsSession(t *testing.T) {
+	// 预热会顺手把前两段分片取回本地，那样就撞不到上面那个 403 了。
+	origWarm := ytWarmEnabled
+	ytWarmEnabled = false
+	t.Cleanup(func() { ytWarmEnabled = origWarm })
+
+	srv, vid := newYtStreamServer(t)
+	master := getStream(t, srv.handleYtStreamMaster, map[string]string{"id": itoa(vid)}).Body.String()
+	sid, n := parseSegRef(t, master)
+	child := getStream(t, srv.handleYtStreamSeg, map[string]string{"sid": sid, "n": n}).Body.String()
+	sid, n = parseSegRef(t, child)
+
+	ytTestSegStatus.Store(http.StatusForbidden)
+	t.Cleanup(func() { ytTestSegStatus.Store(0) })
+
+	rec := getStream(t, srv.handleYtStreamSeg, map[string]string{"sid": sid, "n": n})
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("第一次要分片应报 502，实际 %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "403") {
+		t.Fatalf("错误里应带上游状态码:\n%s", rec.Body.String())
+	}
+
+	// 关键：会话已经被丢掉，再来一次应该立刻 410（前端据此重开一次），而不是再等一轮上游。
+	again := getStream(t, srv.handleYtStreamSeg, map[string]string{"sid": sid, "n": n})
+	if again.Code != http.StatusGone {
+		t.Fatalf("分片被拒之后会话应作废（410），实际 %d %s", again.Code, again.Body.String())
 	}
 }
 

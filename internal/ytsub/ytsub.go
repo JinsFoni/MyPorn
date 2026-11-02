@@ -431,7 +431,7 @@ func httpErr(resp *http.Response, body []byte, th *social.Throttle) error {
 		}
 		return social.RateLimited(fmt.Sprintf("YouTube 限流，%s 之后自动恢复", until.Format("15:04")), until)
 	case resp.StatusCode == http.StatusForbidden:
-		return social.Blocked("YouTube 拒绝了这次请求（多半是这个出口 IP 被要求人机验证）：去设置里给 YouTube 换个代理")
+		return social.Blocked("YouTube 拒绝了这次请求（多半是这个出口 IP 被要求人机验证）：去设置里给 YouTube 填 cookies.txt（登录态最有效），或换一条真换出口 IP 的代理")
 	case resp.StatusCode >= 400:
 		return social.Upstream(fmt.Sprintf("YouTube 返回 %d", resp.StatusCode), nil)
 	}

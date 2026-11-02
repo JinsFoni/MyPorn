@@ -120,6 +120,21 @@ func TestManagerEvictsOldSessions(t *testing.T) {
 
 // 悬停预热、弹窗信息、播放器清单会挤在一两秒内发出：
 // 没有去重就会并发起多个 yt-dlp，谁都慢。
+// TestManagerDrop 弃用会话之后按 id 再也拿不到（分片被上游拒绝时走这条路）。
+func TestManagerDrop(t *testing.T) {
+	m := NewManager(nil, nil)
+	s := m.NewSession("vid", time.Now().Add(time.Hour))
+	if _, ok := m.Session(s.ID); !ok {
+		t.Fatal("刚开的会话应该有")
+	}
+	m.Drop(s.ID)
+	if _, ok := m.Session(s.ID); ok {
+		t.Fatal("Drop 之后不该还拿得到")
+	}
+	// 丢掉不存在的 id 不能炸（并发里两个分片同时撞 403 会各调一次）。
+	m.Drop("nope")
+}
+
 func TestManagerResolveSingleFlight(t *testing.T) {
 	var calls atomic.Int32
 	release := make(chan struct{})

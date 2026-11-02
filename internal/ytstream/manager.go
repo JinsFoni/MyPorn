@@ -125,6 +125,19 @@ func (m *Manager) Forget(videoID string) {
 	m.mu.Unlock()
 }
 
+// Drop 弃用一个播放会话。
+//
+// 用在「上游已经把这条地址拒了」之后（分片 403 / 签名失效）。不弃用的代价是**每一段**
+// 都要各撞一次墙：2026-11-03 实测 googlevideo 一条拒绝要 13.5 秒才回（3 次重试各自 ~4.5 秒），
+// 16 段分片就是三分半钟的转圈；弃用之后前端再要分片立刻拿到 410 session_expired，
+// hls.js 当场致命退出，界面弹出「站内播放失败」可以点重试——重试会重新解析，
+// 那一步才会把真正的原因（比如 LOGIN_REQUIRED / 人机验证）报给用户。
+func (m *Manager) Drop(id string) {
+	m.mu.Lock()
+	delete(m.sessions, id)
+	m.mu.Unlock()
+}
+
 func (m *Manager) Upstream(ctx context.Context, videoID string) (Upstream, error) {
 	m.mu.Lock()
 	if c, ok := m.ups[videoID]; ok && m.now().Sub(c.at) < resolveTTL && m.now().Before(c.up.ExpiresAt.Add(-time.Minute)) {

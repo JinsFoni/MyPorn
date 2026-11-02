@@ -1107,3 +1107,44 @@ metadata 还没到的那几十毫秒按「铺满盒子」退化，`loadedmetadat
 **记在视频层，不记在频道层**：同一个频道横竖混着传。4kaamg 最新 10 张 `hq720` 封面拼成一张对照图看，
 6 张是躺着的（iEZ_quzVcOE / 8BVuTd9HzQ8 / Qa82_MK18gA / 745Sh3wIPHk / M34TIq4UBA0 / 3BaMT8c93lA），
 4 张正常（0ppSePkOJ58 / 2C8E1lfu-h8 / TeLVgIzTjcc / uXrLB42XCMc 这张只是模特歪着坐）。
+
+### 14.17 「视频一直加载不出来」：是 YouTube 要人机验证，不是网络（2026-11-03）
+
+**起因**：用户拿 `/youtube/j0X6nlksBdw` 问「视频一直加载不出来，是网络的问题吗」。量完：**不是带宽、不是我们的链路问题**，
+是 YouTube 直接拒答这条视频，而且拒得很有迷惑性——清单还能拿到，分片一个都不给。
+
+**现场（2026-11-03 00:39～00:49）**
+
+| 量什么 | 结果 |
+|---|---|
+| `.tmp/run/run.log` 00:30～00:35 | 19 条 `分片块取失败 offset=961 err="unexpected EOF" / "context canceled" / "上游分片返回 403"`——用户在反复点重试 |
+| 手动 `GET /api/yt/seg/67ae…/3`（第一段视频分片） | **502，等了 13.549 秒**，`{"error":{"code":"resolve_failed","message":"上游返回 403"}}` |
+| 换两条片子（`3BaMT8c93lA` / `hK0KGqEiOzY`）同一时刻测 | 同样 502、13.1 / 13.4 秒——**不是这一条片子的事** |
+| 观看页 HTML（带 UA 直取 `watch?v=j0X6nlksBdw`） | 200 / 1 260 120 字节，`playabilityStatus.status = "LOGIN_REQUIRED"`、`reason = "请登录，以便我们确认你不是聊天机器人"` |
+| `yt-dlp -j`（`visionos` / `tv` / `web_safari` / `mweb` / `ios` / `android_vr` / `web_embedded` 逐个试） | **7 个客户端全失败**：`Sign in to confirm you're not a bot` |
+| 同一时刻的对照：库里的 7 条（4kaamg / 쏘블리 / Leezy / draco_izu / shizuka. / Timeless Music） | 全失败；`dQw4w9WgXcQ`（超热门）**成功**——所以不是 IP 被整片封掉，是长尾视频被要求验证 |
+| 出口 IP 直连 vs `-x http://127.0.0.1:7890`（Clash） | **都是 `35.78.200.89`（AWS 机房段）**——现在这台机器的出口本来就是机房 IP，Clash 那条路对 YouTube 等于没换 |
+| 清掉解析缓存后再要 `/stream` | `{"error":{"code":"blocked","message":"YouTube 要求人机验证（出口 IP 被盯上了）…"}}` |
+
+那 13.5 秒不是网络慢：`openUpstream` 对 403 重试 3 次（150 / 400 毫秒退避），而 googlevideo 每次都要 ~4.5 秒才回 403。
+
+**为什么「清单能拿、分片全 403」**：解析那一步（yt-dlp 或缓存的签名地址）在 00:20 前后还是通的，
+00:30 之后 YouTube 才开始要验证；已经发出去的 master / 子清单还留在内存里，于是播放器欢快地拿到了清单，
+接着**每一段**分片去要都 403——旧代码在 403 之后既不丢解析缓存也不作废会话，用户看到的就是无限转圈。
+
+**改了什么**
+
+- `Manager.Drop(id)`：分片被上游 4xx 拒 → `Forget(videoId)` + `Drop(sess.ID)`，剩下的分片立刻 410 `session_expired`；
+  hls.js 当场致命退出，界面弹「站内播放失败」可以点重试，重试才会重新解析、把真正的原因（`blocked`）报出来。
+  不做这一步的话，一条 87 秒的片子要转三分多钟才失败（16 段 × 13.5 秒）。
+- `proxyMedia` 把上游 4xx 的**正文捞 400 字节进日志**：`上游拒绝取流 platform=youtube status=403 host=… body=…`。
+  过去只记一个状态码，而 googlevideo 的正文里写着原因（限流 / 签名失效 / IP 不符 / 要人机验证）。
+- `blocked` 的提示改成「填 cookies.txt（登录态最有效），或换一条真换出口 IP 的代理」——因为这台机器上
+  「换代理」这条建议目前是假的：Clash 出口和直连是同一个 IP。
+
+**怎么办（给用户的结论）**：这条路 20 分钟前还是好的，是 YouTube 在这个机房出口上临时收紧了；
+重试只会让它更盯你。要么等它自己松开，要么在设置 → YouTube 填一份**登录后的 cookies.txt**，
+要么换一条真能换出口 IP 的代理。站内的「改用 YouTube 播放器」走的是浏览器自己的会话，用户浏览器登录过就能放。
+
+**测试**：`TestYtStreamSegmentRejectionDropsSession`（假上游对分片回 403 → 第一次 502、第二次立刻 410）、
+`TestManagerDrop`（作废后按 id 拿不到，重复作废不炸）。

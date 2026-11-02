@@ -73,7 +73,10 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 // proxyMedia 是流代理的本体：校验地址 → 带上头去取 → 清单就地改写、媒体原样透传。
 // mapRef 决定改写后的地址长什么样（nil = /api/stream 的通用包装）。
-func (s *Server) proxyMedia(w http.ResponseWriter, r *http.Request, raw, platformKey string, mapRef refMapper) {
+//
+// onStatus 是可选的「上游给了这个状态码」回调（只在 ≥400 时调），YouTube 分片那条路用它
+// 当场作废播放会话：一条地址被拒之后剩下的分片只会重复撞墙，见 Manager.Drop。
+func (s *Server) proxyMedia(w http.ResponseWriter, r *http.Request, raw, platformKey string, mapRef refMapper, onStatus ...func(int)) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !streamHostAllowed(u.Hostname()) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "非法的播放地址")
@@ -90,6 +93,15 @@ func (s *Server) proxyMedia(w http.ResponseWriter, r *http.Request, raw, platfor
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
+		// 把上游给的错误正文也捞一句出来：googlevideo 的 403 正文里写着原因
+		//（限流 / 签名失效 / IP 不符 / 需要人机验证），过去只记一个状态码，
+		// 排查时只能靠猜。这里最多读 400 字节，够看第一行。
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 400))
+		s.log.Warn("上游拒绝取流", "platform", platformKey, "status", resp.StatusCode,
+			"host", u.Hostname(), "body", strings.TrimSpace(string(snippet)))
+		for _, cb := range onStatus {
+			cb(resp.StatusCode)
+		}
 		writeErr(w, http.StatusBadGateway, "resolve_failed", "上游返回 "+strconv.Itoa(resp.StatusCode))
 		return
 	}

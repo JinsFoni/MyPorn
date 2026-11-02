@@ -174,7 +174,16 @@ func (s *Server) serveYtSeg(w http.ResponseWriter, r *http.Request, sess *ytstre
 		}
 	}
 	s.log.Debug("预热未命中，回源", "url", abs)
-	s.proxyMedia(w, r, abs, "youtube", sess.Ref)
+	// 上游把这条地址拒了（4xx）：这条会话剩下的分片只会撞同一堵墙，而且每条要等十几秒。
+	// 一边丢掉解析缓存（下次重试换一批 CDN 节点），一边作废会话（剩下的分片立刻 410），
+	// 让播放器快速失败 → 用户点「重试」→ 重新解析才会拿到真正的原因（签名过期 / 人机验证）。
+	s.proxyMedia(w, r, abs, "youtube", sess.Ref, func(code int) {
+		if code < 500 {
+			s.log.Warn("上游拒绝分片，作废播放会话", "videoId", sess.VideoID, "status", code)
+			s.ytStream.Forget(sess.VideoID)
+			s.ytStream.Drop(sess.ID)
+		}
+	})
 }
 
 // writePrefetched 把预热取回来的字节发出去（子清单要现改写成会话地址，分片原样发）。

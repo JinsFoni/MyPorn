@@ -619,7 +619,7 @@ func (y *YtDlp) mapError(err error, stderr string) error {
 	msg := strings.ToLower(stderr + " " + err.Error())
 	switch {
 	case strings.Contains(msg, "sign in to confirm") || strings.Contains(msg, "not a bot"):
-		return social.Blocked("YouTube 要求人机验证（出口 IP 被盯上了）：去设置里给 YouTube 换个代理")
+		return social.Blocked("YouTube 要求人机验证（出口 IP 被盯上了）：去设置里给 YouTube 填 cookies.txt（登录态最有效），或换一条真换出口 IP 的代理")
 	case strings.Contains(msg, "http error 403"):
 		return social.Blocked("YouTube 拒绝下载（403）：多半是 yt-dlp 过期或出口 IP 被限，先升级 yt-dlp 再试")
 	case strings.Contains(msg, "http error 429") || strings.Contains(msg, "too many requests"):
