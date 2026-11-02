@@ -281,18 +281,18 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 	for i, vv := range variants {
 		src := streamURL(v.Platform, vv.URL)
 		hls := strings.Contains(vv.URL, ".m3u8")
-		// 音画分轨的档位（B 站 1080P+）没法直接代理：一条 URL 只有一个轨。
-		// 改成让服务端先合流成 mp4，再把成品当文件发（Range 都支持）。
-		if vv.AudioURL != "" {
-			src = remuxURL(v.ID, vv.ID())
-			hls = false
-		}
+		// 音画分轨的档位（B 站 1080P+ / 4K）：一条 URL 只有一个轨，<video> 直接放会没声音。
+		// 现在两条路都给出去，由页面按浏览器能力选：
+		//   - dash=true + audioUrl：页面自己用 MSE 把两条 fMP4 分片喂进同一个 MediaSource
+		//     （就是 B 站原站的做法，按 Range 取 5 秒一片，起播只要几十 KB、换档只换视频轨）；
+		//   - remuxUrl：老路，服务端 ffmpeg 合流成整条 mp4 再当文件发，MSE 不可用时兜底。
+		dash := vv.AudioURL != ""
 		first := i == 0
 		if first && defaultID == "" {
 			defaultID = vv.ID()
 			proxyURL = src
 		}
-		out = append(out, map[string]any{
+		item := map[string]any{
 			"id":        vv.ID(),
 			"height":    vv.Height,
 			"width":     vv.Width,
@@ -301,7 +301,13 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 			"url":       src,
 			"hls":       hls,
 			"isDefault": first && defaultID == vv.ID(),
-		})
+		}
+		if dash {
+			item["dash"] = true
+			item["audioUrl"] = streamURL(v.Platform, vv.AudioURL)
+			item["remuxUrl"] = remuxURL(v.ID, vv.ID())
+		}
+		out = append(out, item)
 	}
 
 	var expiresAt any

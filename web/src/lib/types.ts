@@ -286,10 +286,16 @@ export interface PlaybackVariant {
   width: number;
   bandwidth: number;
   codec: string;
-  /** 已经过 /api/stream 同源代理的播放地址 */
+  /** 已经过 /api/stream 同源代理的播放地址（dash 档位这条是**视频轨**） */
   url: string;
   /** true = HLS 清单（走 hls.js），false = 直链 mp4（原生 video） */
   hls: boolean;
+  /** true = 音画分轨（B 站 1080P+/4K）：`url` 是视频轨，另给 `audioUrl`，页面用 MSE 拼 */
+  dash?: boolean;
+  /** dash 档位的音频轨（同样过了 /api/stream 代理） */
+  audioUrl?: string;
+  /** dash 档位走服务端合流时的地址（MSE 不可用时兜底） */
+  remuxUrl?: string;
   isDefault: boolean;
   /** true = 走本地库里已下载的文件（不经过平台，也不经过 /api/stream） */
   local?: boolean;

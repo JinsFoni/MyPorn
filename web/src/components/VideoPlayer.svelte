@@ -29,6 +29,7 @@
   import '@videojs/html/ui/menu-checkbox-item';
   import { prefersReducedMotion, type QualityOption } from '../lib/player';
   import { mountPlayerBar, type PlayerBar, type PlayerBarState } from '../lib/playerBar';
+  import { DashMsePlayer, type DashSpec } from '../lib/dashMse';
   import VideoLoading from './VideoLoading.svelte';
   import { fade } from 'svelte/transition';
 
@@ -68,8 +69,18 @@
     src: string;
     /** Video.js 的 source.type：HLS 用 application/vnd.apple.mpegurl，直链用 video/mp4 */
     type: string;
-    /** 'hls' 用 `<hlsjs-video>`（也能放 mp4），'native' 用原生 `<video>` */
-    engine: 'hls' | 'native';
+    /**
+     * 'hls' 走 `<hlsjs-video>`（也能放 mp4），'native' 走原生 `<video>`，
+     * 'dash' 走自己实现的 MSE（音画分轨的 fMP4，见 lib/dashMse.ts）。
+     */
+    engine: 'hls' | 'native' | 'dash';
+    /**
+     * engine 为 'dash' 时必填：视频轨、音频轨的地址与 MIME。
+     * 换清晰度时只有 `video.url` 变，音频轨不变——播放器据此「只重建视频轨」。
+     */
+    dash?: DashSpec | null;
+    /** dash 起播就失败（MSE 不支持 / 上游不给 Range）：页面退回服务端合流 */
+    onDashFailed?: (message: string) => void;
     poster?: string | null;
     /** 封面取不到时退而求其次的那张（见 VideoLoading 的 posterFallback） */
     posterFallback?: string | null;
@@ -114,6 +125,8 @@
     src,
     type,
     engine,
+    dash = null,
+    onDashFailed,
     poster = null,
     posterFallback = null,
     title,
@@ -412,6 +425,13 @@
    */
   function applySource(el: HTMLElement, next: { src: string; type: string }, startAt = 0): void {
     if (el instanceof HTMLVideoElement) {
+      if (engine === 'dash' && dash !== null) {
+        mountDash(el, dash, startAt);
+        return;
+      }
+      // 从 dash 换到别的引擎（比如 B 站切到 durl 的 720p）：先把手上的 MSE 管线拆干净，
+      // 否则它还会往那个已经摘下来的 MediaSource 里继续喂分片、继续改 currentTime
+      teardownDash();
       el.src = next.src;
       return;
     }
@@ -422,6 +442,55 @@
       capRenditionToPlayerSize: false,
       engine: hlsEngineConfig(next.type, startAt),
     };
+  }
+
+  /**
+   * dash 起播 / 换档。同一个音频轨 + 同一个 <video> 元素 = 只换视频轨（画面一跳就换过去，
+   * 音频不断），其余情况才重建整条 MSE 管线。
+   */
+  function mountDash(el: HTMLVideoElement, spec: DashSpec, startAt: number): void {
+    const key = dashKey(spec);
+    if (dashDead.has(key)) return; // 这一组合已经证明拼不起来，等页面把片源换成合流那条
+    const reuse = dashPlayer !== null && dashPlayer.el === el && dashPlayer.audioUrl === spec.audio.url;
+    if (reuse) {
+      dashPlayer!.switchVideo(spec.video).catch((err: unknown) => dashFailed(key, err));
+      return;
+    }
+
+    teardownDash();
+    dashReady = false;
+    const player = new DashMsePlayer(el, spec, {
+      onFatal: (err) => dashFailed(key, err),
+      onReady: () => {
+        dashReady = true;
+        // 换到 dash 之前那次 play() 落在了旧片源上：这里补一次
+        if (pendingPlay) {
+          wantPlay = true;
+          kickDeadline = 0;
+          kickPlay();
+        }
+      },
+    });
+    dashPlayer = player;
+    player.start(startAt).catch((err: unknown) => dashFailed(key, err));
+  }
+
+  function teardownDash(): void {
+    const player = dashPlayer;
+    dashPlayer = null;
+    dashReady = false;
+    player?.destroy();
+  }
+
+  /** dash 走不通（浏览器不支持这个编码的 MSE、上游不给 Range……）：把声音交给页面去走服务端合流 */
+  function dashFailed(key: string, err: unknown): void {
+    if (dashDead.has(key)) return;
+    dashDead.add(key);
+    teardownDash();
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('[dash] 拼流失败，退回服务端合流：', message);
+    appliedSrc = '';
+    onDashFailed?.(message);
   }
 
   /** 只有 HLS 才带 hls.js 配置；mp4 直链走原生解码，给了也没人看。 */
@@ -450,6 +519,7 @@
     sawError = null;
     appliedSrc = '';
     beginBuffering();
+    teardownDash();
     if (el instanceof HTMLVideoElement) {
       el.removeAttribute('src');
       el.load();
@@ -682,6 +752,28 @@
   }
 
   // ---------- 加载态：糊封面 + 加载环 ----------
+
+  /**
+   * dash（MSE）那条管道。见 lib/dashMse.ts：
+   * 换清晰度时只要音频轨和 `<video>` 元素没变，就只重建视频那一个 SourceBuffer——
+   * 不重新装片源、不动进度、不等服务端合流，这就是原站「秒切」的做法。
+   */
+  let dashPlayer: DashMsePlayer | null = null;
+  /**
+   * 这一轮里试过拼不起来的「音频轨 + 视频轨」组合。非得记一笔不可：
+   * 拼流一失败就要退回服务端合流，而退回是页面状态变化 → 播放器重建 → 又走到拼流……
+   * 没有这道闸，实测在浏览器里把 Svelte 的效果递归撑爆（`effect_update_depth_exceeded`）。
+   */
+  const dashDead = new Set<string>();
+  /**
+   * dash 这条管线真的挂上了（MediaSource 打开、第一片喂进去）。
+   * 在那之前不算「片源已装好」：`el.src` 是异步设的，这中间去催 play() 催的是旧片源，
+   * promise 照样 resolve，然后新管线挂上去就没人在催了——实测就是这么停住的。
+   */
+  let dashReady = false;
+  function dashKey(spec: DashSpec): string {
+    return `${spec.audio.url}\u0000${spec.video.url}`;
+  }
 
   /** 已经挂上监听的那个 <video>（原生就是媒体元素本身，HLS 是 hlsjs-video 里那个） */
   let boundVideo: HTMLVideoElement | null = null;
@@ -1033,9 +1125,12 @@
       return;
     }
     const switching = appliedSrc !== '';
+    // dash 换清晰度只换视频轨：画面会自己接上，别盖加载态、别 seek、别重新起播
+    const dashSwap = switching && engine === 'dash' && dash !== null &&
+      dashPlayer !== null && dashPlayer.audioUrl === dash.audio.url;
     appliedSrc = src;
     // 只有「切清晰度/切代理」才续播；第一次挂载交给自动播放（被拦就停在海报上）
-    if (switching) {
+    if (switching && !dashSwap) {
       const at = s.currentTime;
       pendingSeek = Number.isFinite(at) && at > 1 ? at : 0;
       pendingPlay = !s.paused;
@@ -1054,6 +1149,8 @@
       // 新管线的 seekable 一开始是空的，这时 seek 会被浏览器夹到 0 附近，反倒把位置拽回去。
       // 原生 mp4 没有 startPosition 这个口子，仍然走下面的 seek。
       if (engine === 'hls') pendingSeek = 0;
+      // dash 的加载器自己从目标那一片起播（内部按索引定位），不需要事后 seek
+      if (engine === 'dash') pendingSeek = 0;
     }
     if (!switching) {
       wantPlay = true;
@@ -1482,7 +1579,8 @@
       // 还是上一条管线的，抢在这里 seek 一次就把「回到原位」的意图用掉了，
       // 等新片源真装上时 pendingSeek 已经是 0——实测这就是「救回来却从头放」的那一步。
       const applied = appliedSrc !== '' && Date.now() >= holdUntil;
-      if (applied && (pendingSeek > 0 || pendingPlay) && (s.canPlay || s.duration > 0)) {
+      const playReady = engine !== 'dash' || dashReady;
+      if (applied && (pendingSeek > 0 || (pendingPlay && playReady)) && (s.canPlay || s.duration > 0)) {
         const at = pendingSeek;
         const resume = pendingPlay;
         pendingSeek = 0;
@@ -1493,12 +1591,12 @@
           });
         }
         if (resume) {
-          tryPlay(
-            s,
-            () => {},
-            () => {},
-            () => {},
-          );
+          // 这里**不能**只 tryPlay 一次：新管线（尤其 dash：MediaSource 刚设成 src）在数据还没到时
+          // play() 会被拒或干脆挂着，一次失败就再也没人催，播放器停在新画面上不动。
+          // 交给 kickPlay 那套重试，判据还是「真的在播了」。
+          wantPlay = true;
+          kickDeadline = 0;
+          kickPlay();
         }
       }
 
@@ -1530,6 +1628,7 @@
       if (barTimer !== undefined) clearTimeout(barTimer);
       bar?.destroy();
       bar = null;
+      teardownDash();
       unbindMediaLoad();
       stopAmbientLoop();
     };

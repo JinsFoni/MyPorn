@@ -19,6 +19,7 @@
   import { platformLabel } from '../lib/platform';
   import { privacy } from '../lib/privacy.svelte';
   import {
+    MP4_TYPE,
     codecTag,
     needsHlsEngine,
     needsRemuxPrep,
@@ -30,6 +31,7 @@
     variantLabel,
     type QualityOption,
   } from '../lib/player';
+  import { canPlayDash, mseCodec, type DashSpec } from '../lib/dashMse';
   import { navigate, router } from '../lib/router.svelte';
   import type {
     PlaybackInfo,
@@ -119,6 +121,32 @@
   const variants = $derived(playback ? sortVariantsDesc(playback.variants) : []);
   const selectedVariant = $derived(variants.find((v) => v.id === selectedVariantId) ?? null);
   /**
+   * 这些档位试过 MSE、拼不起来（编码不支持、上游不给 Range……）：记下原因，退回服务端合流。
+   * 记在 id 上而不是全局一个开关：换一档（比如从 AV1 换到 H.264）常常就好了。
+   */
+  let dashBlocked = $state<Record<string, string>>({});
+  /** B 站音轨都是 AAC-LC（30216/30232/30280），杜比/无损我们在后端就没接 */
+  const DASH_AUDIO_CODEC = 'mp4a.40.2';
+
+  /** 这一档能不能自己拼流（MSE）而不是等服务端合流 */
+  function dashUsable(variant: PlaybackVariant | null): boolean {
+    if (!variant || variant.dash !== true || !variant.audioUrl) return false;
+    if (usingProxy) return false; // 代理播放是「整条文件」的降级通道，不拼流
+    if (dashBlocked[variant.id] !== undefined) return false;
+    return canPlayDash(variant.codec, DASH_AUDIO_CODEC);
+  }
+
+  /** dash 的两条轨：视频轨随清晰度变，音频轨不变（换档只重建视频那一个 SourceBuffer） */
+  const dashSpec = $derived.by((): DashSpec | null => {
+    const variant = selectedVariant;
+    if (!variant || !dashUsable(variant)) return null;
+    return {
+      video: { url: variant.url, mime: `video/mp4; codecs="${mseCodec(variant.codec)}"` },
+      audio: { url: variant.audioUrl ?? '', mime: `audio/mp4; codecs="${DASH_AUDIO_CODEC}"` },
+      durationSec: video?.durationSec ?? 0,
+    };
+  });
+  /**
    * 播放器的 poster（就是封面）。隐私模式下干脆不给：这个封面是 <video> 自己的属性，
    * CSS 没法只糊它而不糊画面。宁可在解析片源的这一两秒里黑着 + 转环，
    * 也不把一张高清封面亮在屏幕正中央——这页本来就是为了看片，一闪而过的封面没有信息价值。
@@ -139,14 +167,23 @@
   });
   const prepVeilDetail = $derived(preparing ? `${prepHeadline} · ${prepDetail}` : null);
 
-  /** 这批片源里只要有一条 HLS，就整个用 hls.js 引擎（它也能放 mp4） */
-  const engine = $derived(needsHlsEngine(playback?.variants ?? []) ? 'hls' : 'native');
+  /**
+   * 引擎三选一：能拼流就拼流（dash，MSE），否则这批片源里只要有一条 HLS 就整个用 hls.js
+   * （它也能放 mp4），再不然原生 <video>。
+   */
+  const engine = $derived.by((): 'hls' | 'native' | 'dash' => {
+    if (dashSpec !== null) return 'dash';
+    return needsHlsEngine(playback?.variants ?? []) ? 'hls' : 'native';
+  });
   const source = $derived.by((): { src: string; type: string } | null => {
     const info = playback;
     const variant = selectedVariant;
     if (!info || !variant) return null;
+    // 拼流那条路：src 就是视频轨。换档时它变，播放器据此「只重建视频轨」（见 dashMse.ts）
+    if (dashSpec !== null) return { src: dashSpec.video.url, type: MP4_TYPE };
     const isHls = usingProxy ? true : variant.hls;
-    const src = usingProxy && info.proxyPlaybackUrl ? info.proxyPlaybackUrl : variant.url;
+    const fallback = variant.remuxUrl ?? variant.url;
+    const src = usingProxy && info.proxyPlaybackUrl ? info.proxyPlaybackUrl : fallback;
     return { src, type: sourceTypeFor(isHls) };
   });
 
@@ -175,6 +212,7 @@
     // 换了一部片子（或重新解析）：上一次的准备进度、还在跑的轮询都作废。
     preparing = null;
     prepToken += 1;
+    dashBlocked = {};
     try {
       const info = await api.playback(videoId);
       // HLS 引擎是单独一个 chunk（含 hls.js）：只有真要放 HLS 时才下载
@@ -214,6 +252,18 @@
     playError = detail === '' ? '播放失败，请重试。' : `播放失败（${detail}）`;
   }
 
+  /**
+   * 拼流试过但没成（浏览器不支持这个编码的 MSE、上游不给 Range、append 被拒……）。
+   * 把这一档记成「别拼了」，退回服务端合流那条老路——用户要的是看片，不是看我在这里硬撑。
+   */
+  function onDashFailed(message: string): void {
+    const variant = selectedVariant;
+    if (!variant) return;
+    dashBlocked = { ...dashBlocked, [variant.id]: message };
+    live.toast('这一档没法直接拼流，改用服务端合流', 'info');
+    void activateVariant(variant);
+  }
+
   function retryPlayback(): void {
     playError = '';
     preparing = null;
@@ -247,7 +297,8 @@
   ): Promise<void> {
     const token = ++prepToken;
     playError = '';
-    if (needsRemuxPrep(variant)) {
+    // 能自己拼流的档位根本不用等合流：分片一到就出画面，换档只换视频轨
+    if (!dashUsable(variant) && needsRemuxPrep(variant)) {
       const ready = await waitForRemux(variant, token);
       if (!ready || token !== prepToken) return;
     }
@@ -535,6 +586,8 @@
           title={video.title}
           videoKey={videoId}
           {qualities}
+          dash={dashSpec}
+          onDashFailed={onDashFailed}
           selectedQuality={selectedQualityId}
           onSelectQuality={applyVariant}
           prevTitle={neighbors.prev?.title ?? null}

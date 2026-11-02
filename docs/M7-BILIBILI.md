@@ -648,3 +648,41 @@ curl -s 'https://api.bilibili.com/x/web-interface/nav' -H 'Cookie: SESSDATA=…'
 
 菜单改成**一个分辨率一行**：编码是同一清晰度内部的事（§7.4.1 已经定了「同分辨率内 AV1 优先」，
 `codecRankOf` 还会把本机解不了的编码排到最后），副文案里照样写着用的是 AV1 还是 HEVC、多少 Mbps。
+
+## 7.14 4K 不用再等合流：前端自己拼 DASH（MSE，2026-11-02 实现）
+
+上一版放分轨档位（B 站 1080P+/4K）的办法是**服务端合流**：ffmpeg 把两条 `.m4s` 合成一份 mp4 再交给 `<video>`。
+成品是按 key 缓存的，但**第一次**总得整条下完——1080P 88 MB / 十几秒，4K 一档 554 MB（AV1）到 1.77 GB（H.264），
+实测 49 秒 ~ 7 分半。用户看到的是「点 4K 先等两三分钟才出画面」。
+
+原站不是这么放的。拿 `BV1NTp26eEkn` 480p 的 dash 地址实测（`Range: bytes=0-65535`，206），头部结构：
+
+```
+ftyp 36 | moov 942（0–977 = 初始化段）| sidx 688（978–1665 = 分片表）| moof/mdat × 54
+sidx v1，timescale 16000，54 片 × 80080 ticks = 5.005 秒，合计 265.97 秒，文件 4,449,284 B，startWithSap=1
+```
+
+`startWithSap=1`：**每片开头都是关键帧**。真机抓包（静音的 browser 会话）里原站发的是
+`bytes=0-1665` → `0-977` → `1666-22170` → `22171-50146`…，全部 206，`<video>.src` 是 `blob:`。
+顺带验过「分片自足」：初始化段 978 B + 第 30 片 27,615 B（5.005 秒）拼起来，ffmpeg 能解出 852×480 AV1、150 个包。
+
+我们的同源代理本来就透传 Range（实测 `bytes=0-1665` → `206 Content-Range: bytes 0-1665/4449284`，
+`ETag` 还是上游的），所以缺的只是前端这一段：`web/src/lib/dashMse.ts` 里那个 `DashMsePlayer`
+读 sidx、按索引发 Range、把分片喂进两个 SourceBuffer（视频一个、音频一个）。
+
+| 场景 | 自己拼流（现在） | 服务端合流（以前） |
+| --- | --- | --- |
+| `BV1NTp26eEkn` 1080p AV1 起播 | 首帧 429 ms；播 4.3 秒累计下载 2.2 MB | 整条下完再 copy，1080p 十几秒 |
+| `BV1fiHN6zEfx` 4K AV1 起播（3.25 Mbps / 332 秒） | `loadedmetadata` 158 ms、`playing` 193 ms；前 5 秒 16 MB | 成品 134,890,739 B（128.6 MB），热缓存 6.1 秒、冷缓存分钟级 |
+| 4K 拖到第 200 秒 | 1.2 秒回到 200.0 秒，缓冲只有 [195.5, 225.2] | 等成品就绪才能拖 |
+| 换清晰度 | 只换视频那一路，音频与时间线不动（管线 150 ms） | 每档一份成品 |
+
+`playback` 接口为此多给了三个字段（dash 档位才有）：`dash: true`、`audioUrl`（音频轨的代理地址）、
+`remuxUrl`（合流兜底）。`url` 仍是视频轨的代理地址——换档时它变，播放器据此只重建视频那一路。
+`canPlayDash()` 为假（Safari 至今没有 AV1-MSE 之类）或拼流中途失败时，页面退回 `remuxUrl` + 原来那套进度条，
+并提示「这一档没法直接拼流，改用服务端合流」——**不静默降级**：画质不降，只是换回慢那条路。
+
+四个坑（都在代码注释里，ARCHITECTURE §13.3.1 有汇总）：换档「摘了再建」会撞 Chromium 的
+`addSourceBuffer: reached the limit of SourceBuffer objects`（同族改用 `changeType`）；
+`el.src` 是异步设的，提前催的 `play()` 落在旧片源上且 promise 照样 resolve，得靠 `onReady` 补催一次；
+「这一片在不在缓冲里」必须按整片判断；拼流失败要记成「这组合别再试」，否则和页面重建互相引爆。

@@ -203,6 +203,11 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
   （`画质 / 播放速度 / 字幕 / 静音 / 全屏` 等都是中文）。
 - **皮肤样式只能靠变量**：`--media-accent-color`（白 `#f5faff`）、`--media-accent-text-color`（画布黑）、
   `--media-font-family`（Roboto）、`--media-border-radius`、`--media-border-color`，其余交给皮肤，不改它的内部类名。
+- **三种引擎，由片源形状决定**（`VideoPlayer.svelte` 的 `engine`）：`hls` 走 `<hlsjs-video>`（HLS 清单 + 也能放 mp4）、
+  `native` 走原生 `<video>`（单文件直链/本地文件）、`dash` 走自己写的 MSE 管线（`lib/dashMse.ts`：音画分轨的 fMP4，
+  自己取 sidx 分片表、按 Range 一片片喂进两个 SourceBuffer）。B 站 1080P+/4K 是分轨的，选 `dash`：起播只要
+  「头部 + 前两片」（1080p 约 50 KB），换清晰度只动视频那一路、音频和时间线不断，不再等服务端合流。
+  详见 §13.3.1；`remuxUrl` 留着当兜底（浏览器不支持这档编码的 MSE、或 Range 拿不到 206 时退回合流）。
 - **片源策略不变**：每个清晰度仍是**一条独立清单/直链**，切换时读 store 的进度再 `seek` 回去续播。
   皮肤里那个「画质」菜单因此只有当前这一条（自动 + 当前档），不拿它当主入口——**清晰度菜单自己画**：
   分档列表来自后端（顺序即 §7.4.1 的排序），每行 `1080p` + `AV1 · 4.0 Mbps · 最高`，当前档打勾；侧边栏那个下拉框因此删了，
@@ -732,8 +737,9 @@ dash 只有 360/480P。合并规则：
 - durl 一档照留（单文件，`/api/stream` 直接播，不占合流）；
 - DASH 里**与 durl 同分辨率的那一档跳过**（否则下拉框里两条一模一样的 720p），更低/更高的照留。
 
-浏览器播不了分轨，所以 `Variant.AudioURL` 非空时前端拿到的是
-`/api/videos/{id}/remux?v=<variantID>`，服务端合流一次后当普通文件播：
+**现在前端能自己拼分轨了**（见 §13.3.1），合流退成兜底：`Variant.AudioURL` 非空的档位，
+`playback` 接口会给出 `dash: true` + `audioUrl` + `remuxUrl` 三个字段，前端优先走 MSE 自己拼。
+浏览器拼不了（`canPlayDash` 为假，或拼流中途失败）时再用 `remuxUrl`，服务端合流一次后当普通文件播：
 
 ```
 handler → muxcache.Ensure(key="<videoID>-<variantID>")
@@ -766,6 +772,57 @@ handler → muxcache.Ensure(key="<videoID>-<variantID>")
 之后 3 分半零字节、连接没断，ffmpeg 默认会一直等，最后只能由外层整体超时收场。下载复用同一判定：`best.AudioURL != ""` 就走
 `Encoder.RemuxFromURLs`（两路输入 + 每路各自的 `Referer`），估算体积用「视频带宽 + 音轨带宽」
 （实测 150,153,388 估算 vs 150,109,750 实际，差 0.03%）。
+
+### 13.3.1 前端自己拼 DASH（MSE）：4K 不再等合流
+
+原站怎么放，我们就怎么放。拿 `playurl` 的 dash 档位实测（`BV1NTp26eEkn` 480p）：
+
+```
+GET /api/stream?...-1-100022.m4s   Range: bytes=0-65535   → 206，头部里
+ftyp 36 | moov 942（0–977 = 初始化段）| sidx 688（978–1665 = 分片表）| moof/mdat × 54
+sidx v1，timescale 16000，54 片 × 80080 ticks = 5.005 秒，合计 265.97 秒，全文件 4,449,284 B，startWithSap=1
+```
+
+`startWithSap=1` 意味着**每一片开头都是关键帧**，所以按索引逐片 append 就能任意起播/拖动。
+原站抓包也是这么发的：`bytes=0-1665` → `0-977` → `1666-22170` → `22171-50146`…，全部 206，
+`<video>.src` 是 `blob:`。我们的同源代理本来就透传 Range（实测 `bytes=0-1665` → `206 Content-Range: bytes 0-1665/4449284`），
+缺的只是前端这一段。
+
+`web/src/lib/dashMse.ts`（`DashMsePlayer`）：
+
+```
+probe(url)        取 64 KB 头部（sidx 更大就按它的 offset+size 再补一次）→ 解析每片的 offset/size/start/dur
+start(atSec)      建 MediaSource → 视频、音频各一个 SourceBuffer → append 两条初始化段 → append 覆盖 atSec 的那一片
+                  → 把 currentTime 摆过去（先喂后摆，反过来会被夹回 0）
+#pump()           往前攒够 20 秒就停手；身后留 30 秒，再往前 remove 掉（4K 才不会把整条都拉下来）
+#seeked()         拖动时两条轨都重新对齐到目标那一片
+switchVideo()     换清晰度：只动视频 SourceBuffer（同 MIME 直接复用、同族不同 level 用 changeType、
+                  `remove` 掉播放位置之后那段旧画面再 append 新档的初始化段 + 当前片），音频轨和时间线都不碰
+```
+
+实测（本机，无头 Chromium，静音）：
+
+| 场景 | 这条新路 | 原来的服务端合流 |
+| --- | --- | --- |
+| `BV1NTp26eEkn` 1080p AV1 起播 | 首帧 429 ms，播 4.3 秒共下 2.2 MB（视频 1.44 + 音频 0.76） | 要整条下完再 copy 成 mp4，1080p 十几秒 |
+| `BV1fiHN6zEfx` 4K AV1（3.25 Mbps / 332 秒）起播 | `loadedmetadata` 158 ms、`playing` 193 ms，前 5 秒共 16 MB | 合流成品 134,890,739 B（128.6 MB），热缓存 6.1 秒、冷缓存分钟级 |
+| 4K 拖到第 200 秒 | 1.2 秒恢复，缓冲只有 [195.5, 225.2] | 整条文件就绪后才能拖 |
+| 换清晰度（管线本身） | 150 ms（探针 70 ms + 初始化段/当前片 80 ms），音频不断、时间不断 | 每换一档都要下发一整条成品 |
+
+新分辨率的画面在无头 Chromium 里 0.05~5 秒才出来（解码器得按新分辨率重置，跟分辨率/编码有关，
+不是网络：内部计时里探针和分片都在 150 ms 内到齐）。
+
+踩过的五个坑，都写进代码注释了，这里留个索引：
+
+1. **换档不能「摘了再建」**：`MediaSource` 短时间里反复 `removeSourceBuffer` + `addSourceBuffer`，
+   Chromium 会抛 `addSourceBuffer: This MediaSource has reached the limit of SourceBuffer objects it can handle`。
+   一抛就退回合流——4K 那一下要等 128 MB。所以同 MIME 直接复用、同族不同 level 只 `changeType`。
+2. **挑 SourceBuffer 之前先把轨道从状态里摘掉**，否则 pump 正往里 append，`removeSourceBuffer` 撞 `updating` 抛 InvalidStateError。
+3. **`el.src` 是异步设的**（先 probe 两条轨、再建 MediaSource）。这中间催的 `play()` 落在旧片源上、promise 还照样 resolve，
+   于是新管线挂上去以后没人再催：实测切到 dash 后 `paused=true`、`readyState=4` 一直不动。靠 `onReady` 回调补一次 `kickPlay()`。
+4. **「这一片在不在缓冲里」要按整片判断**：只看起点的话，跨播放位置那一片会被当成「已经有了」跳过，playhead 前面永远差一片。
+5. **失败要记成「这个组合拼过就死」**：否则「失败 → 退回合流 → 页面状态变 → 播放器重建 → 又拼一次」把 Svelte 的效果递归撑爆
+   （`effect_update_depth_exceeded`）。
 
 ### 13.4 画质与登录态
 

@@ -89,7 +89,9 @@ export function sourceTypeFor(isHls: boolean): string {
  * 不能让播放器挂着一个几分钟不回头的请求。
  */
 export function needsRemuxPrep(variant: PlaybackVariant): boolean {
-  return variant.local !== true && !variant.hls && /\/remux\?/.test(variant.url);
+  if (variant.local === true || variant.hls) return false;
+  // dash 档位的 url 现在是视频轨本身、合流地址单独给在 remuxUrl 里（见 lib/dashMse.ts）
+  return /\/remux\?/.test(variant.remuxUrl ?? variant.url);
 }
 
 // ---------- 编码偏好 ----------
