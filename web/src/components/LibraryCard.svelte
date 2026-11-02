@@ -1,21 +1,28 @@
 <script lang="ts">
   /**
-   * 媒体库的卡片：封面 + 时长 + 画质角标 + 「文件名 / 体积 / 库 / 下载时间」。
+   * 媒体库的卡片：**和关注流 / B 站 / YouTube 那三条墙同一套模板**
+   * （`CoverArt` 封面 + `CardDuration` 右下时长 + `CardByline` 圆头像/一行标题/副行
+   * + `CardDownloadButton` 右上角悬停动作）。要改卡片长相就改那几个组件，别在这里单独调。
    *
-   * 和关注流那张卡（VideoCard）的差别都来自「这行是磁盘上的一个文件」：
+   * 这张卡和三条墙的差别只有「它代表的是磁盘上的一个文件」：
    * - 封面优先用下载时落盘的 thumb.jpg（`localThumbUrl`），远端封面地址过期也照样有图；
    *   隐私模式下**必须**换回 /api/img 的小糊图——本地那张是按原尺寸发的，没有糊化那一层。
-   * - 角标是 `2160p`（落盘时 probe 的尺寸），不是平台的清晰度档位名。
-   * - 文件被挪走/删掉时整条压暗并写一句「文件已不在磁盘上」：记录还在，点进去会 404。
-   * - 右上角那颗按钮是「复制文件路径」（媒体库最常见的动作是把路径贴到别处去）。
+   * - 封面左上角是 `2160p`（落盘时 probe 的尺寸）：三条墙不知道分辨率所以没有这一格，
+   *   而这一页的每一行都带着分辨率，是「值不值得留」的依据之一。
+   * - 右上角那颗按钮是**复制文件路径**（已经下到盘上了，再下一次没有意义），
+   *   用的还是 `CardDownloadButton`，只换图标。
+   * - 文件被挪走 / 删掉时整条压暗、盖一条砖红色的「文件已不在磁盘上」（和 YouTube 卡的
+   *   「直播」标同一个位置同一个做法），链接直接不渲染——点过去只会 404。
    */
+  import CardByline from './CardByline.svelte';
+  import CardDownloadButton from './CardDownloadButton.svelte';
   import CardDuration from './CardDuration.svelte';
   import CoverArt from './CoverArt.svelte';
+  import { formatBytes, formatDate, relativeTime } from '../lib/format';
   import { imageUrl } from '../lib/img';
-  import { privacy } from '../lib/privacy.svelte';
-  import { formatBytes, relativeTime } from '../lib/format';
-  import { router } from '../lib/router.svelte';
   import { live } from '../lib/live.svelte';
+  import { privacy } from '../lib/privacy.svelte';
+  import { router } from '../lib/router.svelte';
   import type { LibraryVideo } from '../lib/types';
 
   interface Props {
@@ -32,13 +39,12 @@
    * `imageUrl(localThumbUrl)` 会原样返回（站内相对路径），所以这里要显式判断隐私模式。
    */
   const cover = $derived(
-    privacy.on || !item.localThumbUrl
-      ? imageUrl(item.thumbUrl, 480)
-      : item.localThumbUrl,
+    privacy.on || !item.localThumbUrl ? imageUrl(item.thumbUrl, 480) : item.localThumbUrl,
   );
 
   const back = $derived(`?back=${encodeURIComponent(`${router.path}${router.search}`)}`);
-  const when = $derived(relativeTime(item.downloadedAt));
+  /** 副行左边的「名字」位在媒体库里放库名（这一页靠它区分是哪个库的文件） */
+  const avatarMonogram = $derived(item.libraryName.trim().charAt(0).toUpperCase());
 
   let copied = $state(false);
 
@@ -56,19 +62,23 @@
   }
 </script>
 
-<article class="group relative min-w-0">
+<article class="group relative min-w-0 [contain-intrinsic-size:auto_16rem] [content-visibility:auto]">
   <a
     href={item.missing ? undefined : `/video/${String(item.videoId)}${back}`}
     data-link
-    class="block {item.missing ? 'pointer-events-none' : ''}"
+    class="block"
+    class:pointer-events-none={item.missing}
     aria-label={`${item.title}，${quality || '尺寸未知'}，${formatBytes(item.sizeBytes)}`}
   >
-    <div class="relative aspect-video overflow-hidden rounded-xl bg-panel {item.missing ? 'opacity-40' : ''}">
-      <CoverArt src={cover} scaleClass="transition-transform duration-300 group-hover:scale-[1.02]" />
+    <div class="relative aspect-video overflow-hidden rounded-xl bg-panel">
+      <!-- CoverArt 自己是「铺满父容器」的一层，压暗只能套在外面（它没有 class 入参） -->
+      <div class="absolute inset-0 {item.missing ? 'opacity-40' : ''}">
+        <CoverArt src={cover} scaleClass="transition-transform duration-300 group-hover:scale-[1.02]" />
+      </div>
 
       {#if quality}
         <span
-          class="pointer-events-none absolute left-2 top-2 rounded-md bg-ink/70 px-1.5 py-0.5 text-[0.6875rem] font-medium tabular-nums text-fg"
+          class="pointer-events-none absolute left-2 top-2 rounded bg-ink/70 px-1.5 py-0.5 text-[0.6875rem] font-medium tabular-nums text-fg"
         >
           {quality}
         </span>
@@ -78,48 +88,27 @@
 
       {#if item.missing}
         <span
-          class="absolute inset-x-0 bottom-0 bg-ink/85 px-2 py-1 text-center text-[0.6875rem] text-brick"
+          class="absolute bottom-2 left-2 rounded bg-brick/90 px-1.5 py-0.5 text-[0.6875rem] font-medium text-fg"
         >
           文件已不在磁盘上
         </span>
       {/if}
     </div>
 
-    <div class="mt-2.5 min-w-0">
-      <h3 class="truncate text-ui font-medium leading-snug text-fg group-hover:underline" title={item.title}>
-        {item.title}
-      </h3>
-      <p class="mt-1 flex min-w-0 items-center gap-x-2 text-meta tabular-nums text-muted">
-        <span class="shrink-0">{formatBytes(item.sizeBytes)}</span>
-        {#if item.performers.length > 0}
-          <span class="min-w-0 truncate">{item.performers.join('、')}</span>
-        {/if}
-      </p>
-      <p class="mt-0.5 flex min-w-0 items-center gap-x-2 text-meta text-dim">
-        <span class="min-w-0 truncate">{item.libraryName}</span>
-        <span class="shrink-0">{when}</span>
-      </p>
-    </div>
+    <CardByline
+      title={item.title}
+      name={item.libraryName}
+      monogram={avatarMonogram}
+      meta={formatBytes(item.sizeBytes)}
+      dateLabel={formatDate(item.downloadedAt)}
+      dateTitle={relativeTime(item.downloadedAt)}
+    />
   </a>
 
-  <button
-    type="button"
-    class="absolute right-2 top-2 z-10 rounded-full bg-ink/70 p-1.5 text-fg opacity-0 transition-opacity
-      hover:bg-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100
-      max-lg:opacity-100"
-    aria-label={`复制 ${item.fileName} 的路径`}
-    title="复制文件路径"
+  <CardDownloadButton
+    label={`复制 ${item.fileName} 的路径`}
+    title={copied ? '已复制' : '复制文件路径'}
+    icon={copied ? 'check' : 'copy'}
     onclick={(event) => void copyPath(event)}
-  >
-    {#if copied}
-      <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <path d="m5 12.5 4.5 4.5L19 7.5" />
-      </svg>
-    {:else}
-      <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="9" y="9" width="11" height="11" rx="2.5" />
-        <path d="M15 5.5A2.5 2.5 0 0 0 12.5 3H6.5A3.5 3.5 0 0 0 3 6.5v6A2.5 2.5 0 0 0 5.5 15" />
-      </svg>
-    {/if}
-  </button>
+  />
 </article>

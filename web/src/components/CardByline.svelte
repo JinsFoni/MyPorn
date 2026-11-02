@@ -2,7 +2,7 @@
   /**
    * 卡片封面下面那一段：36px 圆头像 + 单行标题 + 副行（名字 ▷ 观看数 日期）。
    *
-   * 三条墙（关注流 / B 站 / YouTube）共用这一个组件，样式口径以 YouTube 卡（YtCard）为准，
+   * 三条墙（关注流 / B 站 / YouTube）和媒体库共用这一个组件，样式口径以 YouTube 卡（YtCard）为准，
    * 理由都是量出来的：
    * - 头像 36px（`h-9 w-9`，imageUrl 也按 36 取，DPR2 下 72px 才不糊）。24px 那版既小、
    *   又和隔壁墙的卡片对不齐。
@@ -13,6 +13,8 @@
    * - 观看数画成「▷ 679」而不是「679 次观看」：副行只有 12px，三个中文字占掉一格宽度、
    *   还是把日期挤出去了；空心三角只描边不填色，和旁边 12px 的字一个重量。
    *   读屏仍念「679 次观看」（aria-label）。
+   * - 媒体库那张卡在副行中间多一格**体积**（`meta`）：那一页每行都是磁盘上的一个文件，
+   *   体积和日期一样是「判断要不要留」的依据；没有另开一套副行样式，多出来的就是这一段。
    * - 三段之间**只靠 8px 间距分隔，不画「·」**（2026-11-02 用户要求去掉那颗点：
    *   它夹在两串数字中间，比两边的字还抢眼）。原来那里是 `gap-1.5` + 一颗 4px 的点，
    *   间距等于 6+4+6；现在统一成 `gap-x-2`，名字与计数、计数与日期都是 8px。
@@ -35,6 +37,11 @@
     views?: number | null;
     /** 量词，读屏和悬停提示用：B 站「次播放」、YouTube「次观看」 */
     viewsLabel?: string;
+    /**
+     * 副行里额外一段文字（媒体库用它放体积，如 `391 MB`）。有 `views` 就排在计数后面，
+     * 否则直接接在名字后面——三段共用同一套 12px 灰字与 8px 间距。
+     */
+    meta?: string;
     /** 副行右边：绝对日期（2026-10-31），不是「1个月前」——卡片墙要能一眼比先后 */
     dateLabel: string;
     /** 日期悬停提示（相对时间之类） */
@@ -53,6 +60,7 @@
     monogram = '',
     views = null,
     viewsLabel = '次观看',
+    meta = '',
     dateLabel,
     dateTitle = undefined,
     onTitleClick = undefined,
@@ -119,6 +127,9 @@
           </svg>
           <span class="tabular-nums">{count}</span>
         </span>
+      {/if}
+      {#if meta}
+        <span class="shrink-0 tabular-nums">{meta}</span>
       {/if}
       <span class="shrink-0" title={dateTitle}>{dateLabel}</span>
     </p>
