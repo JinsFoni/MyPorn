@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * 卡片封面下面那一段：36px 圆头像 + 单行标题 + 副行（名字 · 观看数 · 日期）。
+   * 卡片封面下面那一段：36px 圆头像 + 单行标题 + 副行（名字 ▷ 观看数 日期）。
    *
    * 三条墙（关注流 / B 站 / YouTube）共用这一个组件，样式口径以 YouTube 卡（YtCard）为准，
    * 理由都是量出来的：
@@ -13,6 +13,9 @@
    * - 观看数画成「▷ 679」而不是「679 次观看」：副行只有 12px，三个中文字占掉一格宽度、
    *   还是把日期挤出去了；空心三角只描边不填色，和旁边 12px 的字一个重量。
    *   读屏仍念「679 次观看」（aria-label）。
+   * - 三段之间**只靠 8px 间距分隔，不画「·」**（2026-11-02 用户要求去掉那颗点：
+   *   它夹在两串数字中间，比两边的字还抢眼）。原来那里是 `gap-1.5` + 一颗 4px 的点，
+   *   间距等于 6+4+6；现在统一成 `gap-x-2`，名字与计数、计数与日期都是 8px。
    */
   import type { Snippet } from 'svelte';
   import { formatCount } from '../lib/format';
@@ -28,7 +31,7 @@
     avatarUrl?: string | null;
     /** 头像兜底：名字首字母（空着就留一个空圆，不留白洞） */
     monogram?: string;
-    /** 观看数；0 / null 就整段不画（连那个「·」一起） */
+    /** 观看数；0 / null 就整段不画（连它前面那段间距一起，日期直接贴到名字后面） */
     views?: number | null;
     /** 量词，读屏和悬停提示用：B 站「次播放」、YouTube「次观看」 */
     viewsLabel?: string;
@@ -95,7 +98,7 @@
       <h3 class={TITLE} title={titleHint ?? title}>{title}</h3>
     {/if}
 
-    <p class="mt-1 flex items-center gap-1.5 text-meta text-dim">
+    <p class="mt-1 flex items-center gap-x-2 text-meta text-dim">
       <span class="truncate">{name}</span>
       {#if count}
         <span
@@ -116,7 +119,6 @@
           </svg>
           <span class="tabular-nums">{count}</span>
         </span>
-        <span class="shrink-0" aria-hidden="true">·</span>
       {/if}
       <span class="shrink-0" title={dateTitle}>{dateLabel}</span>
     </p>
