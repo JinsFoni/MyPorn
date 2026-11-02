@@ -74,6 +74,9 @@
   const TAB_CLASS = (active: boolean): string =>
     `flex flex-col items-center gap-1 pb-2 pt-2.5 transition-colors ${active ? 'text-fg' : 'text-dim'}`;
 
+  /** SSE 第一次连上时 onMount 那边已经对齐过下载队列，别重复拉一次 */
+  let connectedOnce = false;
+
   onMount(() => {
     installScrollProbe();
     let bumpTimer = 0;
@@ -132,7 +135,18 @@
           if (data.newPhotos > 0) live.bumpMoments();
         },
       },
-      { onStatus: (connected) => live.setConnected(connected) },
+      {
+        onStatus: (connected) => {
+          live.setConnected(connected);
+          // 重连（含从隐藏切回来）：把下载队列对齐一次。这条连接在标签页隐藏时是**主动关掉**的
+          // （见 lib/sse.ts 的 onVisibility），那段时间的进度不会补发；要是它在那会儿跑完了，
+          // 界面会一直停在隐藏前的百分比——`job.updated` 只在运行时按 800ms 发，没有下一条来修。
+          // 首次连上不用拉：onMount 末尾已经对齐过一次。
+          if (!connected) return;
+          if (connectedOnce) live.refreshDownloads(true);
+          connectedOnce = true;
+        },
+      },
     );
 
     // 首次进来对齐一次下载队列，保证角标准确

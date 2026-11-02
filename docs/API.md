@@ -402,6 +402,12 @@ type Video = {
 | `job.updated` | 追加 `targetId` / `bytesDone` / `bytesTotal` / `speedBps`，`status` 可能是 `paused` |
 | `download.done` | `{videoId, libraryId, path, sizeBytes}`（下载完成，前端刷新「已存」标记） |
 
+`job.updated` 的 `type` 可能是 **`download`（本地库下载）或 `yt_download`（YouTube 存进本地库）**——
+两者在「下载」页看到的是同一件事（`GET /api/downloads` 也是两种都返回），前端别只认前者
+（2026-11-02 前端就是这么写的，YouTube 那条的进度条从 1% 直接冻到完成，见 `web/src/lib/live.svelte.ts`
+里的 `DOWNLOAD_TYPES`）。另外这条连接**在标签页隐藏时是主动关掉的**（`lib/sse.ts` 的 `onVisibility`），
+隐藏期间的进度不会补发，所以前端在重连时要自己拉一次 `/api/downloads` 对齐。
+
 ### A6. 错误码补充
 
 | code | HTTP | 含义 |

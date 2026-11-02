@@ -20,6 +20,15 @@ export interface SyncState extends SyncProgress {
 
 let toastSeq = 0;
 
+/**
+ * 「下载」页里的两种任务：`download`（本地库下载）与 `yt_download`（YouTube 存进本地库）。
+ * **两个都要收**——`/api/downloads` 两种都返回，用户在下载页看到的是同一件事。
+ * 2026-11-02 这里只放行 `download`，于是 YouTube 那条的进度条从排队到完成一直冻在 1%
+ * （实测：服务端 1.0 → 50.0 → 90 → done，界面上始终是「正在解析流… 1.0%」，
+ * 因为整条 SSE 事件被那一行丢掉了，只有任务落定的整表刷新才会跳一下）。
+ */
+const DOWNLOAD_TYPES: ReadonlySet<string> = new Set(['download', 'yt_download']);
+
 class LiveStore {
   toasts = $state<Toast[]>([]);
   /** 任何影响列表的事件都 +1，列表页据此刷新 */
@@ -182,7 +191,7 @@ class LiveStore {
     bytesTotal?: number;
     speedBps?: number;
   }): void {
-    if (event.type !== 'download') return;
+    if (!DOWNLOAD_TYPES.has(event.type)) return;
     const idx = this.downloads.findIndex((d) => d.id === event.id);
     if (idx === -1) {
       this.refreshDownloads();
