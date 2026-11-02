@@ -9,8 +9,18 @@
    * （`text-meta`，单行截断），**不显示任何计数**；点头像＝把 `id` 交回去，由页面写地址栏；
    * 选中态是头像外 2px 白环 + 姓名 `font-medium`，再点同一个取消。
    *
-   * 容器 `flex gap-3 overflow-x-auto no-scrollbar`，用 `-mx-3 px-3 sm:-mx-4 sm:px-4 lg:mx-0 lg:px-0`
-   * 做贴边滚动，首列头像与内容左边缘（桌面 296 / 移动 12px）对齐。
+   * 容器 `flex gap-3 overflow-x-auto no-scrollbar`，用「负外边距 + 等量内边距」做贴边滚动：
+   * 首列头像永远与内容左边缘（桌面 296 / 移动 12px）对齐，滚动盒自己往两侧多伸出去同样多。
+   *
+   * **白环画在头像盒子外面，所以滚动盒必须留出 6px 内边距，否则会被自己裁掉**
+   * （`overflow-x: auto` 会让 `overflow-y` 的计算值也变成 `auto`，内容在 padding box 处被切）。
+   * 选中环 = `ring-2` + `ring-offset-2` = 头像外 4px；「正在同步」小圆点的 `ring-2` 再往外 2px。
+   * 2026-11-02 实测（1600 宽、选中第一颗）：`paddingTop=0`、`roomTop=-4`、`roomLeft=-4`
+   * —— 白环的上弧和左弧各被切掉 4px，看起来像「圈没画完」。现在四个方向都留 6px
+   * （桌面 `px-1.5`、移动 `px-3`/`px-4`、上下 `pt-1.5`，多出的 2px 吃设备像素取整），
+   * 再用等量负外边距（`-mx-1.5`、`-mt-1.5`）把盒子拉回去：头像仍在 296/40，
+   * 下面第一条卡片仍在 202，一个像素都不动。
+   *
    * 首屏给同尺寸灰圆占位，避免加载完成时整页跳动。
    *
    * 这个组件只管画：谁来、怎么拉由页面决定（关注页是 PerformerRail，另两页各自有频道列表）。
@@ -59,7 +69,7 @@
   <nav class="mb-4 lg:mb-5" aria-label={label}>
     <ul
       bind:this={listEl}
-      class="no-scrollbar -mx-3 flex gap-3 overflow-x-auto px-3 pb-1 sm:-mx-4 sm:px-4 lg:mx-0 lg:px-0"
+      class="no-scrollbar -mx-3 -mt-1.5 flex gap-3 overflow-x-auto px-3 pb-1 pt-1.5 sm:-mx-4 sm:px-4 lg:-mx-1.5 lg:px-1.5"
     >
       {#each items as item (item.id)}
         <li class="shrink-0">
