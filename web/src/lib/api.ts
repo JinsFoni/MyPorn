@@ -286,9 +286,16 @@ export const api = {
       })}`,
     );
   },
-  newVideos(params: { since?: string | null; cursor?: string | null; limit?: number } = {}): Promise<VideoPage> {
+  newVideos(
+    params: { since?: string | null; cursor?: string | null; limit?: number; performerId?: number | null } = {},
+  ): Promise<VideoPage> {
     return request<VideoPage>(
-      `/api/videos/new${qs({ since: params.since, cursor: params.cursor, limit: params.limit })}`,
+      `/api/videos/new${qs({
+        since: params.since,
+        cursor: params.cursor,
+        limit: params.limit,
+        performerId: params.performerId,
+      })}`,
     );
   },
   video(videoId: number | string): Promise<VideoDetail> {

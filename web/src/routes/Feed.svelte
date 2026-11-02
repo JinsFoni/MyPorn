@@ -5,7 +5,8 @@
   import EmptyState from '../components/EmptyState.svelte';
   import { api, messageFor } from '../lib/api';
   import { live } from '../lib/live.svelte';
-  import type { Video } from '../lib/types';
+  import { patchQuery, router } from '../lib/router.svelte';
+  import type { Performer, Video } from '../lib/types';
 
   const LIMIT = 40;
 
@@ -131,14 +132,49 @@
   let mockNote = $state('');
   let lastBump = 0;
 
+  /**
+   * 只筛某位艺人：唯一真源是地址栏 `?performer=<id>`（和 B 站页的 `?up=`、
+   * YouTube 页的 `?channel=` 同一个套路）。放地址栏的理由也一样——点开影片是整页跳转，
+   * 退回来本组件会重新创建，状态只活在内存里就没了；顺带刷新不丢、链接能复制。
+   */
+  function readPerformer(): number | null {
+    const pid = Number.parseInt(router.query.get('performer') ?? '', 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  }
+
+  let performerFilter = $state<number | null>(readPerformer());
+  /** 头像条拉回的订阅列表：只用来把 id 翻成名字（筛选胶囊 / 说明栏要写「只看谁」） */
+  let railItems = $state<Performer[]>([]);
+  const picked = $derived(railItems.find((p) => p.id === performerFilter) ?? null);
+
+  // 地址栏变了（前进/后退、贴链接、点头像）→ 跟上并重拉；相等就什么都不做，不会自己打转。
+  $effect(() => {
+    const next = readPerformer();
+    if (next === performerFilter) return;
+    performerFilter = next;
+    reloadKey += 1;
+  });
+
+  function setPerformer(id: number | null): void {
+    if (id === performerFilter) return;
+    patchQuery({ performer: id === null ? null : String(id) });
+  }
+
   async function loadPage(cursor: string | null): Promise<{ items: Video[]; nextCursor: string | null }> {
     try {
-      if (newOnly) return await api.newVideos({ cursor, limit: LIMIT });
-      return await api.videos({ cursor, limit: LIMIT });
+      if (newOnly) {
+        return await api.newVideos({ cursor, limit: LIMIT, performerId: performerFilter });
+      }
+      return await api.videos({ cursor, limit: LIMIT, performerId: performerFilter });
     } catch (err) {
       if (import.meta.env.DEV && cursor === null) {
         mockNote = messageFor(err);
-        return { items: newOnly ? MOCK.filter((v) => v.isNew) : MOCK, nextCursor: null };
+        const items = MOCK.filter(
+          (v) =>
+            (!newOnly || v.isNew) &&
+            (performerFilter === null || v.performers.some((p) => p.id === performerFilter)),
+        );
+        return { items, nextCursor: null };
       }
       throw err;
     }
@@ -146,12 +182,14 @@
 
   async function refreshNewCount(): Promise<void> {
     try {
-      const res = await api.newVideos({ limit: 30 });
+      const res = await api.newVideos({ limit: 30, performerId: performerFilter });
       newCount = res.items.length;
       newCountMore = res.nextCursor !== null;
     } catch {
       if (import.meta.env.DEV) {
-        newCount = MOCK.filter((v) => v.isNew).length;
+        newCount = MOCK.filter(
+          (v) => v.isNew && (performerFilter === null || v.performers.some((p) => p.id === performerFilter)),
+        ).length;
         newCountMore = false;
       }
     }
@@ -175,10 +213,33 @@
   });
 </script>
 
-<PerformerRail />
+<PerformerRail selected={performerFilter} onSelect={setPerformer} onLoad={(items) => (railItems = items)} />
 
-<!-- 筛选胶囊的样式对齐 YouTube 页的「全部频道」：无底色、选中才吃 bg-raise，未看数走一个小角标 -->
+<!-- 筛选胶囊的样式对齐 YouTube 页的「全部频道」：无底色、选中才吃 bg-raise，未看数走一个小角标。
+     按艺人筛的时候，最前面多一颗带 ✕ 的名字胶囊——头像条上的白环是「选中」，
+     但这颗胶囊才是「怎么退出去」的那句明话（头像条一横屏可能已经滚出视野）。 -->
 <div class="mb-3 flex items-center gap-1.5 overflow-x-auto pb-1 lg:mb-5">
+  {#if performerFilter !== null}
+    <button
+      type="button"
+      class="flex shrink-0 items-center gap-1.5 rounded-full bg-raise py-1.5 pl-3 pr-2.5 text-meta text-fg"
+      title="取消艺人筛选"
+      onclick={() => setPerformer(null)}
+    >
+      <span class="max-w-[9rem] truncate">{picked?.name ?? '这位艺人'}</span>
+      <svg
+        viewBox="0 0 16 16"
+        class="h-3 w-3 shrink-0 text-dim"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        stroke-linecap="round"
+        aria-hidden="true"
+      >
+        <path d="m4 4 8 8M12 4l-8 8" />
+      </svg>
+    </button>
+  {/if}
   <button
     type="button"
     class="shrink-0 rounded-full px-3 py-1.5 text-meta transition-colors {newOnly
@@ -206,7 +267,11 @@
   </button>
 
   <p class="ml-auto hidden shrink-0 text-meta text-dim sm:block">
-    {newOnly ? '只看未看的新片' : '按发布时间倒序'}
+    {#if performerFilter !== null}
+      只看 {picked?.name ?? '这位艺人'}{newOnly ? ' 的未看新片' : ' 的片'}
+    {:else}
+      {newOnly ? '只看未看的新片' : '按发布时间倒序'}
+    {/if}
   </p>
 </div>
 
@@ -233,7 +298,28 @@
   {/snippet}
 
   {#snippet empty()}
-    {#if newOnly}
+    {#if performerFilter !== null && newOnly}
+      <EmptyState
+        title="这位艺人没有未看的新片"
+        hint={picked ? `${picked.name} 的片都看过了。` : '这位艺人的片都看过了。'}
+        icon="film"
+      >
+        {#snippet actions()}
+          <button type="button" class="btn" onclick={toggleNewOnly}>看他的全部影片</button>
+          <button type="button" class="btn" onclick={() => setPerformer(null)}>看所有艺人</button>
+        {/snippet}
+      </EmptyState>
+    {:else if performerFilter !== null}
+      <EmptyState
+        title="这位艺人这里还没有影片"
+        hint="可能是新订阅，历史影片还在回填；换一位艺人，或者看全部影片。"
+        icon="film"
+      >
+        {#snippet actions()}
+          <button type="button" class="btn btn-primary" onclick={() => setPerformer(null)}>查看全部影片</button>
+        {/snippet}
+      </EmptyState>
+    {:else if newOnly}
       <EmptyState
         title="没有未看的新片"
         hint="订阅的艺人都已经看完，等下一次同步即可。"

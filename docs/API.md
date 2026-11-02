@@ -118,7 +118,7 @@ type Video = {
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/videos?performerId=&cursor=&limit=30&q=` | 影片流，播放时间倒序，**keyset 游标**分页 → `{"items":Video[],"nextCursor":"..."\|null}` |
-| GET | `/api/videos/new?since=` | 新片（`isNew`）列表，同结构，首页角标用 |
+| GET | `/api/videos/new?performerId=&since=` | 新片（`isNew`）列表，同结构，首页角标用；`performerId` 只数这一位 |
 | GET | `/api/videos/{id}` | `Video` + `{"description":"...","related":Video[]}` |
 | GET | `/api/videos/{id}/adjacent` | 同一份列表里的上下家 → `{"prev":Video\|null,"next":Video\|null}`（见 A4·补·2） |
 | POST | `/api/videos/{id}/seen` | `204`，清除 isNew |
@@ -392,7 +392,8 @@ type Video = {
   （`(ts < ? OR (ts = ? AND id < ?))` 这种 keyset 条件，和翻页游标同一个写法）。
 - `Video` 结构和列表项一致（带 `performers`、本地档标记）；共用 `store.feedFilter` / `store.scanVideo`，
   列表加过滤条件时这里不会漂。
-- 前端按卡片链接上的 `?back=` 决定口径（关注流＝`excludePlatform=bilibili`、艺人页＝`performerId`、
+- 前端按卡片链接上的 `?back=` 决定口径（关注流＝`excludePlatform=bilibili`、关注页按艺人筛＝
+  `performerId` + `excludePlatform=bilibili`、艺人页＝`performerId`、
   B 站墙＝`platform=bilibili` + `subscribedOnly=1`），切过去时把 `?back=` 原样带下去。
 
 ### A5. SSE 新增事件

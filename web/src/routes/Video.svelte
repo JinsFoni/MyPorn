@@ -492,6 +492,9 @@
    * 三处口径必须和那边的列表接口**完全一致**，否则切着切着会冒出列表里根本没出现过的片子
    * （后端用的就是同一套 FeedQuery 条件，见 store.AdjacentVideos）：
    *   · 艺人页     → 只要这位艺人的片；
+   *   · 关注页按艺人筛（`/?performer=<id>`，点头像条筛出来的那种视角）
+   *                → 也是只要这位艺人的片，但**再排掉 B 站**——/api/videos 自己就带着
+   *                  ExcludePlatform: bilibili，不跟着排会切到关注流里根本不存在的投稿；
    *   · B 站墙     → platform=bilibili（可再按 UP 主 `?up=`、未看 `?mode=unseen` 过滤，
    *                 并且取消订阅的 UP 主不在墙上 → subscribedOnly）；
    *   · 关注流/其它 → 和 /api/videos 一样排除 B 站（它有自己的页面）。
@@ -502,6 +505,10 @@
     if (url.pathname.startsWith('/performer/')) {
       const pid = Number.parseInt(url.pathname.slice('/performer/'.length), 10);
       if (Number.isFinite(pid) && pid > 0) return { performerId: pid };
+    }
+    if (url.pathname === '/' && url.searchParams.has('performer')) {
+      const pid = Number.parseInt(url.searchParams.get('performer') ?? '', 10);
+      if (Number.isFinite(pid) && pid > 0) return { performerId: pid, excludePlatform: 'bilibili' };
     }
     if (url.pathname === '/bilibili') {
       const up = Number.parseInt(url.searchParams.get('up') ?? '', 10);
