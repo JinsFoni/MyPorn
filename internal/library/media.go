@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -151,12 +152,27 @@ func (e *Encoder) remuxTo(ctx context.Context, input, output, format string) err
 	return nil
 }
 
-// ResizeImage 把图片按"填满后居中裁切"的方式缩放到目标尺寸（用于 poster/thumb/fanart）。
+// ResizeImage 把图片按「填满后居中裁切」的画面比例出图（用于 poster/thumb/fanart）。
+//
+// **目标尺寸只是上限，不放大**：源图比目标小时按源图能给的最大尺寸出图。
+// 2026-11-02 之前这里是硬缩放（`scale=w:h:force_original_aspect_ratio=increase,crop=w:h`），
+// 而站方缩略图普遍很小——YouTube 的 `hqdefault` 只有 480×360（实测 13034 字节）、
+// pornhub 的 thumb URL 里直接写死 `rs:fit:320:180`、艺人头像常常 399×399。
+// 480×360 塞进 1000×1500 的海报＝先放大 4.17 倍到 2000×1500 再从中裁走 1000×1500，
+// 海报里真正的像素只有 240×360，糊到看不出人。
+// 现在一律「先裁到目标比例 → 只缩不放」：宁可交一张 720×1080 的海报，也不交 4 倍放大的糊图
+// （Emby / 浏览器的海报格子也就 300–500px 宽，720 宽绰绰有余）。
 func (e *Encoder) ResizeImage(ctx context.Context, input, output string, w, h int) error {
 	if w <= 0 || h <= 0 {
 		return fmt.Errorf("目标尺寸非法 %dx%d", w, h)
 	}
-	filter := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d", w, h, w, h)
+	sw, sh, err := e.ImageInfo(ctx, input)
+	if err != nil || sw <= 0 || sh <= 0 {
+		return fmt.Errorf("读不出底图尺寸: %w", err)
+	}
+	cw, ch := CoverCrop(sw, sh, w, h)
+	ow, oh := FitWithin(cw, ch, w, h)
+	filter := fmt.Sprintf("crop=%d:%d:(iw-%d)/2:(ih-%d)/2,scale=%d:%d", cw, ch, cw, ch, ow, oh)
 	args := []string{
 		"-y", "-hide_banner", "-loglevel", "error", "-nostdin",
 		"-i", input,
@@ -184,6 +200,109 @@ func ImageSize(path string) (int, int, error) {
 	}
 	defer f.Close()
 	return decodeConfig(f)
+}
+
+// CoverCrop 返回「按目标比例填满、且不超过源图」的裁切区域（源图像素，居中裁）。
+//
+// 目标比源图更竖（或更方）时裁掉左右，更宽时裁掉上下；比例一致时就是整张图。
+// 关键在于**永远不会超过源图**：区域一旦比源图大就得靠放大来填，那正是糊的来源。
+func CoverCrop(sw, sh, tw, th int) (int, int) {
+	if sw <= 0 || sh <= 0 || tw <= 0 || th <= 0 {
+		return 0, 0
+	}
+	cw := sw
+	if lim := float64(sh) * float64(tw) / float64(th); lim < float64(sw) {
+		cw = int(math.Round(lim))
+	}
+	if cw < 1 {
+		cw = 1
+	}
+	ch := int(math.Round(float64(cw) * float64(th) / float64(tw)))
+	if ch > sh {
+		ch = sh
+	}
+	if ch < 1 {
+		ch = 1
+	}
+	return cw, ch
+}
+
+// FitWithin 把 w×h 等比缩到不超过 maxW×maxH（**只缩不放**）。
+func FitWithin(w, h, maxW, maxH int) (int, int) {
+	if w <= 0 || h <= 0 || maxW <= 0 || maxH <= 0 {
+		return 0, 0
+	}
+	if w <= maxW && h <= maxH {
+		return w, h
+	}
+	s := math.Min(float64(maxW)/float64(w), float64(maxH)/float64(h))
+	ow := int(math.Round(float64(w) * s))
+	oh := int(math.Round(float64(h) * s))
+	if ow < 1 {
+		ow = 1
+	}
+	if oh < 1 {
+		oh = 1
+	}
+	return ow, oh
+}
+
+// ImageInfo 读出图片宽高。
+//
+// 先走标准库（jpeg/png/gif，够快），失败再走 ffprobe：站方缩略图常是 webp / avif
+// （bilibili 的 thumb 就是 `@960w_540h_1c.webp`，pornhub 按 `Accept: image/avif` 直接返 avif），
+// Go 标准库这两个都不认。没有尺寸就没法判断「这张底图够不够大」，所以这一步必须靠得住。
+func (e *Encoder) ImageInfo(ctx context.Context, path string) (int, int, error) {
+	if w, h, err := ImageSize(path); err == nil && w > 0 && h > 0 {
+		return w, h, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, e.FFprobe,
+		"-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path).Output()
+	if err != nil {
+		return 0, 0, fmt.Errorf("ffprobe 读图片失败: %w", err)
+	}
+	line := firstLine(out)
+	wStr, hStr, ok := strings.Cut(line, "x")
+	if !ok {
+		return 0, 0, fmt.Errorf("ffprobe 输出看不懂: %q", line)
+	}
+	w, _ := strconv.Atoi(strings.TrimSpace(wStr))
+	h, _ := strconv.Atoi(strings.TrimSpace(hStr))
+	if w <= 0 || h <= 0 {
+		return 0, 0, fmt.Errorf("尺寸非法: %q", line)
+	}
+	return w, h, nil
+}
+
+// ExtractFrame 从视频里取一帧当图片底图（poster / thumb / fanart 用）。
+//
+// 下载完的那份文件就是最高画质的那一份（库里 4K / 8K 的片子很常见），
+// 从里面裁出来的海报比站方 480×360 的缩略图清楚一个量级。atSec 是取帧位置（秒，从片头算）。
+func (e *Encoder) ExtractFrame(ctx context.Context, video string, atSec float64, dst string) error {
+	if atSec < 0 {
+		atSec = 0
+	}
+	args := []string{
+		"-y", "-hide_banner", "-loglevel", "error", "-nostdin",
+		// -ss 放在 -i 前面＝按关键帧快速定位，只需要一张静帧，不必整段解码
+		"-ss", strconv.FormatFloat(atSec, 'f', 3, 64),
+		"-i", video,
+		"-frames:v", "1",
+		"-q:v", "2",
+		dst,
+	}
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, e.FFmpeg, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &limitedWriter{buf: &stderr, max: 4096}
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("取帧失败: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // limitedWriter 只保留前 max 字节，避免 ffmpeg 日志吃掉内存。

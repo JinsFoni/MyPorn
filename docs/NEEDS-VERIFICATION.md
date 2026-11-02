@@ -219,7 +219,8 @@ make backend           # 先编译
 RSS 同步补齐最新 15 条时间 → 单条 refresh 补回 `2026-09-30` →
 下载 8K（4320p）AV1 + Opus → `-c copy` 合轨 → 358 MB 落盘 `YouTube/<频道>/<标题>/`，
 poster 1000×1500 / thumb 1280×720 / fanart 1920×1080 / nfo（含 `uniqueid type="youtube"`）齐全，
-`GET /api/downloads` 能看到该任务与本地路径。
+`GET /api/downloads` 能看到该任务与本地路径。（2026-11-02 起这三档尺寸是**上限**：底图不够大时按底图出，
+同一批片子重生成后是 poster 480×720 / thumb 1280×720 / fanart 1280×720，见 `internal/jobs/artwork.go`。）
 
 站内播放验收（2026-10-28，真机 Chrome，`127.0.0.1:18081`）：点开 `s8OtOH_Vfa0` →
 后端 4.9 秒解析出 8 档画质（最高 2160p VP9 18.7 Mbps）→ 播放器以 3840×2160 起播、

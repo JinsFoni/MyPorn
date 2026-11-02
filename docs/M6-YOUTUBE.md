@@ -202,8 +202,10 @@ yt-dlp --no-playlist --newline --socket-timeout 20 --retries 3 --concurrent-frag
    ——既让 nfo 的 `<plot>` 有内容，也把发布时间写回 `yt_videos`（墙上「时间未知」就是这么消掉的）
 6. 命名：`library.RenderName(tmpl, NameContext{Title, Performer=频道名, Platform="YouTube", ID=videoId, Date=published, Resolution})` → `library.BuildMoviePath`
 7. 移动到目标位置（同盘 rename，不复制）
-8. `writeArtwork` + `writeNFOFile`：封面优先取 `maxresdefault`（Emby 的 fanart 是 1920×1080，用卡片那张 320×180 会糊），
-   取不到（老的/低清视频没有 maxres）自动退回库里存的那张
+8. `writeArtwork` + `writeNFOFile`：底图按「站方封面（换成这条片子能给的最大尺寸）→ 视频自己的一帧 → 频道头像」
+   挑，见 `internal/jobs/artwork.go` 的 `pickSource`；**目标尺寸是上限，不放大**
+   （2026-11-02 之前这一步只用了库里存的 `hqdefault` 480×360 硬吹到 1000×1500，
+   海报真像素只有 240×360——用户报的「poster/thumb/fanart 太糊」就是它）
 9. `st.SaveLibraryFile`
 10. 事件 `download.done`（复用现有事件，前端下载记录自动更新）
 

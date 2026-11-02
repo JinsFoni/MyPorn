@@ -189,7 +189,7 @@ func (r *Runner) runDownloadJob(ctx context.Context, j *model.Job, c *Ctl) error
 
 	// 元数据（图片失败只记警告，不阻塞任务，见 FR-28）
 	c.Progress(96, "写入 Emby 元数据", 0, info.SizeBytes, info.SizeBytes)
-	art := r.writeArtwork(ctx, video, mp.AbsDir)
+	art := r.writeArtwork(ctx, video, finalPath, mp.AbsDir, info.DurationSec)
 	nfoPath := filepath.Join(mp.AbsDir, mp.VideoName+".nfo")
 	if err := writeNFOFile(nfoPath, video, ad.Name(), best.ID(), info); err != nil {
 		r.log.Warn("写入 nfo 失败", "video", video.ID, "err", err)

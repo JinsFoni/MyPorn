@@ -404,7 +404,7 @@ func (r *Runner) runYtDownloadJob(ctx context.Context, j *model.Job, c *Ctl) err
 	}
 
 	c.Progress(96, "写入 Emby 元数据", 0, info.SizeBytes, info.SizeBytes)
-	art := r.writeArtwork(ctx, video, mp.AbsDir)
+	art := r.writeArtwork(ctx, video, finalPath, mp.AbsDir, info.DurationSec)
 	nfoPath := filepath.Join(mp.AbsDir, mp.VideoName+".nfo")
 	if err := writeNFOFile(nfoPath, video, "YouTube", nameCtx.Resolution, info); err != nil {
 		r.log.Warn("写入 nfo 失败", "video", video.ID, "err", err)

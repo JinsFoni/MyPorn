@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/JinsFoni/MyPorn/internal/library"
@@ -16,6 +17,8 @@ import (
 )
 
 // 图片规格（FR-28）：poster 竖版 2:3，thumb/fanart 16:9。
+//
+// 这是**上限**，不是保证：底图不够大时按底图能给的最大尺寸出图，绝不放大（见 library.ResizeImage）。
 const (
 	posterW, posterH = 1000, 1500
 	thumbW, thumbH   = 1280, 720
@@ -29,71 +32,219 @@ type artworkResult struct {
 	warnings []string
 }
 
-// writeArtwork 生成 poster/thumb/fanart。任一失败只记警告，不阻塞下载任务。
-func (r *Runner) writeArtwork(ctx context.Context, video *model.Video, dir string) artworkResult {
-	res := artworkResult{}
-	client := r.httpClient(video.Platform)
+// artSource 一张候选底图（视频自己的一帧 / 站方缩略图 / 艺人头像）。
+type artSource struct {
+	kind string // frame | thumb | avatar
+	path string
+	w, h int
+}
 
-	thumbSrc := filepath.Join(dir, ".thumb.src")
-	hasThumb := false
-	if u := strings.TrimSpace(video.ThumbURL); u != "" {
-		if err := fetchImage(ctx, client, u, refererFor(u), thumbSrc); err != nil {
-			res.warnings = append(res.warnings, "缩略图下载失败")
-			r.log.Warn("下载缩略图失败", "video", video.ID, "err", err)
-		} else {
-			hasThumb = true
+// widthFor 这张底图在目标比例下不放大能给出的宽度（像素）。
+func (s artSource) widthFor(tw, th int) int {
+	cw, ch := library.CoverCrop(s.w, s.h, tw, th)
+	ow, _ := library.FitWithin(cw, ch, tw, th)
+	return ow
+}
+
+// areaFor 这张底图在目标尺寸里能画出多少像素（不放大）。
+func (s artSource) areaFor(tw, th int) int {
+	cw, ch := library.CoverCrop(s.w, s.h, tw, th)
+	ow, oh := library.FitWithin(cw, ch, tw, th)
+	return ow * oh
+}
+
+// pickSource 选底图，两步：
+//
+//  1. 先过「够清楚」的门槛：不放大能给出的宽度 ≥ minW 的候选里，按 pref 顺序取第一个。
+//     顺序是刻意的——站方封面是**设计过的图**（片名、构图都在上面），只要它够大就继续用它，
+//     哪怕视频帧更高清：实测把 4K 帧当海报，经常是「某个人在低头看纸」这种跟片名毫无关系的随机瞬间。
+//  2. 一个都过不了门槛时，取不放大能画得最大的那张。这时候官方图已经小到没救
+//     （YouTube 只有 `hqdefault` 480×360、pornhub 的 `rs:fit:320:180` 拉不到大图），
+//     换源拍一帧，比放大 4 倍清楚得多。
+func pickSource(sources []artSource, tw, th, minW int, pref ...string) *artSource {
+	pick := func(kind string) *artSource {
+		for i := range sources {
+			if sources[i].kind == kind {
+				return &sources[i]
+			}
+		}
+		return nil
+	}
+	for _, kind := range pref {
+		if s := pick(kind); s != nil && s.widthFor(tw, th) >= minW {
+			return s
 		}
 	}
+	var best *artSource
+	bestArea := -1
+	for i := range sources {
+		if a := sources[i].areaFor(tw, th); a > bestArea {
+			best, bestArea = &sources[i], a
+		}
+	}
+	return best
+}
 
-	avatarSrc := filepath.Join(dir, ".avatar.src")
-	hasAvatar := false
-	if len(video.Performers) > 0 && video.Performers[0].ID > 0 {
-		if p, err := r.st.GetPerformer(video.Performers[0].ID); err == nil && strings.TrimSpace(p.AvatarURL) != "" {
-			// 头像可能来自别站（beeg），客户端（即代理配置）要跟着图床走。
-			avatarClient := r.httpClient(platform.ImageHostPlatform(p.AvatarURL, video.Platform))
-			if err := fetchImage(ctx, avatarClient, p.AvatarURL, refererFor(p.AvatarURL), avatarSrc); err != nil {
-				r.log.Warn("下载艺人头像失败", "performer", p.ID, "err", err)
-			} else {
-				hasAvatar = true
+// frameAt 取帧位置：片头 1/4 处（避开黑场和片头字幕），短视频取中段。
+func frameAt(durSec int) float64 {
+	switch {
+	case durSec <= 0:
+		return 1
+	case durSec <= 4:
+		return float64(durSec) / 2
+	default:
+		return float64(durSec) / 4
+	}
+}
+
+// writeArtwork 生成 poster/thumb/fanart。任一失败只记警告，不阻塞下载任务。
+//
+// 底图有三类来源，选法见 pickSource：站方封面（并换成这条片子能给的最大尺寸）、
+// 视频自己的一帧、艺人头像。2026-11-02 之前是固定优先级 + 硬放大：
+// YouTube 的 `hqdefault` 480×360 直接吹成 1000×1500 的海报，糊到看不出人。
+func (r *Runner) writeArtwork(ctx context.Context, video *model.Video, videoPath, dir string, durSec int) artworkResult {
+	res := artworkResult{}
+	var sources []artSource
+
+	// ① 视频帧（临时文件跟 .thumb.src 一样用点开头，扫库时不会当成图片）
+	frameSrc := filepath.Join(dir, ".frame.src.jpg")
+	if videoPath != "" {
+		if err := r.enc.ExtractFrame(ctx, videoPath, frameAt(durSec), frameSrc); err != nil {
+			r.log.Warn("取视频帧当底图失败", "video", video.ID, "err", err)
+		} else if w, h, err := r.enc.ImageInfo(ctx, frameSrc); err != nil || w <= 0 {
+			r.log.Warn("读视频帧尺寸失败", "video", video.ID, "err", err)
+		} else {
+			sources = append(sources, artSource{kind: "frame", path: frameSrc, w: w, h: h})
+			r.log.Debug("底图：视频帧", "video", video.ID, "size", fmt.Sprintf("%dx%d", w, h))
+		}
+	}
+	defer os.Remove(frameSrc)
+
+	// ② 站方缩略图（先试大图，失败再退回库里存的那个 URL）
+	thumbSrc := filepath.Join(dir, ".thumb.src")
+	if u := strings.TrimSpace(video.ThumbURL); u != "" {
+		client := r.httpClient(video.Platform)
+		for _, cand := range biggerThumbVariants(video.Platform, u) {
+			if err := fetchImage(ctx, client, cand, refererFor(cand), thumbSrc); err != nil {
+				r.log.Debug("缩略图拉取失败", "video", video.ID, "url", cand, "err", err)
+				continue
 			}
+			w, h, err := r.enc.ImageInfo(ctx, thumbSrc)
+			if err != nil || w <= 0 {
+				r.log.Debug("缩略图尺寸读不出", "video", video.ID, "url", cand, "err", err)
+				continue
+			}
+			sources = append(sources, artSource{kind: "thumb", path: thumbSrc, w: w, h: h})
+			r.log.Debug("底图：站方缩略图", "video", video.ID, "url", cand, "size", fmt.Sprintf("%dx%d", w, h))
+			break
 		}
 	}
 	defer os.Remove(thumbSrc)
+
+	// ③ 艺人头像（可能来自别站（beeg），客户端（即代理配置）要跟着图床走）
+	avatarSrc := filepath.Join(dir, ".avatar.src")
+	if len(video.Performers) > 0 && video.Performers[0].ID > 0 {
+		if p, err := r.st.GetPerformer(video.Performers[0].ID); err == nil && strings.TrimSpace(p.AvatarURL) != "" {
+			avatarClient := r.httpClient(platform.ImageHostPlatform(p.AvatarURL, video.Platform))
+			if err := fetchImage(ctx, avatarClient, p.AvatarURL, refererFor(p.AvatarURL), avatarSrc); err != nil {
+				r.log.Debug("艺人头像拉取失败", "performer", p.ID, "err", err)
+			} else if w, h, err := r.enc.ImageInfo(ctx, avatarSrc); err != nil || w <= 0 {
+				r.log.Debug("艺人头像尺寸读不出", "performer", p.ID, "err", err)
+			} else {
+				sources = append(sources, artSource{kind: "avatar", path: avatarSrc, w: w, h: h})
+				r.log.Debug("底图：艺人头像", "performer", p.ID, "size", fmt.Sprintf("%dx%d", w, h))
+			}
+		}
+	}
 	defer os.Remove(avatarSrc)
 
-	if hasThumb {
-		if p := filepath.Join(dir, "fanart.jpg"); r.enc.ResizeImage(ctx, thumbSrc, p, fanartW, fanartH) == nil {
-			res.fanart = p
-		} else {
-			res.warnings = append(res.warnings, "fanart 生成失败")
+	// 三张图各自挑底图。门槛按「实际显示多大」定：fanart 铺满详情页背景要 960 宽，
+	// thumb 是卡片上的 16:9 小图 640 够，poster 在 Emby 里就 300–500px 宽、400 够。
+	// 过了门槛就按官方封面优先——实测同一部片子，官方封面（片名/构图都在上面）当背景
+	// 比随手拍的一帧好看太多，哪怕帧的像素更多。
+	write := func(dst string, tw, th, minW int, pref ...string) string {
+		src := pickSource(sources, tw, th, minW, pref...)
+		if src == nil {
+			return ""
 		}
-		if p := filepath.Join(dir, "thumb.jpg"); r.enc.ResizeImage(ctx, thumbSrc, p, thumbW, thumbH) == nil {
-			res.thumb = p
-		} else {
-			res.warnings = append(res.warnings, "thumb 生成失败")
+		if err := r.enc.ResizeImage(ctx, src.path, dst, tw, th); err != nil {
+			r.log.Warn("生成图片失败", "file", filepath.Base(dst), "from", src.kind, "err", err)
+			res.warnings = append(res.warnings, filepath.Base(dst)+" 生成失败")
+			return ""
+		}
+		return dst
+	}
+	// 竖屏片子（B 站竖版、YouTube Shorts 那种 9:16）反过来：它的一帧本来就是竖的，
+	// 裁 2:3 几乎不浪费，而且这块料是满画质的；站方封面却是 16:9 的横图（等于只截了中间一条）。
+	posterPref := []string{"avatar", "thumb", "frame"}
+	for _, s := range sources {
+		if s.kind == "frame" && s.h > s.w {
+			posterPref = []string{"avatar", "frame", "thumb"}
+			break
 		}
 	}
 
-	// poster 优先用艺人头像（更接近竖版海报），否则从 16:9 主图居中裁切。
-	posterSrc := ""
-	switch {
-	case hasAvatar:
-		posterSrc = avatarSrc
-	case hasThumb:
-		posterSrc = thumbSrc
-	}
-	if posterSrc != "" {
-		p := filepath.Join(dir, "poster.jpg")
-		if err := r.enc.ResizeImage(ctx, posterSrc, p, posterW, posterH); err == nil {
-			res.poster = p
-		} else {
-			res.warnings = append(res.warnings, "poster 生成失败")
-		}
-	}
-	if res.poster == "" && res.warnings == nil {
+	res.fanart = write(filepath.Join(dir, "fanart.jpg"), fanartW, fanartH, fanartW/2, "thumb", "frame", "avatar")
+	res.thumb = write(filepath.Join(dir, "thumb.jpg"), thumbW, thumbH, thumbW/2, "thumb", "frame", "avatar")
+	res.poster = write(filepath.Join(dir, "poster.jpg"), posterW, posterH, posterW*2/5, posterPref...)
+
+	if res.poster == "" && len(res.warnings) == 0 {
 		res.warnings = append(res.warnings, "没有可用图片")
 	}
 	return res
+}
+
+// biggerThumbVariants 把库里存的缩略图 URL 换成这条视频能给的更大版本，从大到小排。
+//
+// 库里存的是列表页用的尺寸（YouTube `hqdefault` 480×360、pornhub `rs:fit:320:180`、
+// bilibili `@960w_540h_1c`、xhamster `s(w:1280,h:720)`），拿来撑海报/背景都太小。
+// 每个平台的大图 URL 都是改后缀/参数，改完拉失败就算了，最后一定退回原 URL。
+func biggerThumbVariants(platformName, rawURL string) []string {
+	switch strings.ToLower(platformName) {
+	case "youtube":
+		// https://i1.ytimg.com/vi/<id>/hqdefault.jpg → maxresdefault(1920×1080) → sddefault(640×480) → hqdefault(480×360)
+		if i := strings.LastIndex(rawURL, "/"); i > 0 && strings.HasPrefix(rawURL, "http") {
+			base := rawURL[:i+1]
+			out := []string{base + "maxresdefault.jpg", base + "sddefault.jpg", rawURL}
+			return dedupe(out)
+		}
+	case "pornhub":
+		// .../rs:fit:320:180/vts:315?... → rs:fit:1920:1080
+		if out := replaceOnce(rawURL, regexp.MustCompile(`rs:fit:\d+:\d+`), "rs:fit:1920:1080"); out != rawURL {
+			return []string{out, rawURL}
+		}
+	case "bilibili":
+		// ...jpg@960w_540h_1c.webp → @1920w_1080h_1c.webp
+		if out := replaceOnce(rawURL, regexp.MustCompile(`@\d+w_\d+h`), "@1920w_1080h"); out != rawURL {
+			return []string{out, rawURL}
+		}
+	case "xhamster":
+		// .../s(w:1280,h:720),webp/... → s(w:1920,h:1080)
+		if out := replaceOnce(rawURL, regexp.MustCompile(`s\(w:\d+,h:\d+\)`), "s(w:1920,h:1080)"); out != rawURL {
+			return []string{out, rawURL}
+		}
+	}
+	return []string{rawURL}
+}
+
+func replaceOnce(s string, re *regexp.Regexp, repl string) string {
+	if loc := re.FindStringIndex(s); loc != nil {
+		return s[:loc[0]] + repl + s[loc[1]:]
+	}
+	return s
+}
+
+func dedupe(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := in[:0]
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // writeNFOFile 生成 Emby 规范 movie nfo（FR-27）。
