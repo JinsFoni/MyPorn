@@ -10,6 +10,11 @@
    *
    * 两层都用 CSS，不画 canvas：糊的那层是 `background-image` + `blur()`，sharp 那层还是 `<img>`
    * （留着 `loading=lazy` 与 `onerror` 的兜底）。一屏十几张卡片，画布方案每张要多留几百 KB。
+   *
+   * 三条墙的卡片封面都走这一个组件（YtCard / VideoCard），`<img>` 一律带 `data-media`：
+   * 隐私模式的模糊由 `imageUrl()` 换成小糊图来完成，这个标记是给「哪些是封面/头像」
+   * 留的审计入口（见 lib/privacy.svelte.ts）。以前只有 YouTube 卡用了本组件、影片卡是自己写的
+   * `<img>`，所以 B 站/关注流是硬裁切、YouTube 是两侧虚化，同一部竖屏片在两条墙上长得不一样。
    */
   import { coverCropFor, isWideFrame } from '../lib/coverCrop';
 
@@ -21,9 +26,11 @@
     imgClass?: string;
     /** 真画面那一竖条的圆角/投影之类；默认交给外层 overflow 裁 */
     alt?: string;
+    /** 首屏前几条用 eager，其余 lazy */
+    eager?: boolean;
   }
 
-  let { src, scaleClass = '', imgClass = '', alt = '' }: Props = $props();
+  let { src, scaleClass = '', imgClass = '', alt = '', eager = false }: Props = $props();
 
   let share = $state<number | null>(null);
   let failed = $state(false);
@@ -57,9 +64,10 @@
       ></div>
     {/if}
     <img
+      data-media
       {src}
       {alt}
-      loading="lazy"
+      loading={eager ? 'eager' : 'lazy'}
       decoding="async"
       class="absolute inset-0 h-full w-full object-cover {share !== null ? '' : imgClass}"
       style={share !== null ? `left:50%;transform:translateX(-50%);width:${share * 100}%` : ''}

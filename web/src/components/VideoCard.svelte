@@ -1,4 +1,22 @@
 <script lang="ts">
+  /**
+   * 影片卡（关注流 / B 站墙 / 艺人页 / 播放页「相关影片」共用）。
+   *
+   * 样式以 YouTube 卡（YtCard）为模板，两边共用同一套原子组件：
+   * `CoverArt`（封面 + 悬停放大 + 竖屏两侧虚化）、`CardDuration`（右下角时长）、
+   * `CardDownloadButton`（右上角下载按钮）、`CardByline`（36px 头像 / 单行标题 / 副行）。
+   * 要改卡片长相就改那几个组件，别在这张卡里单独调——2026-11 之前三条墙各写一份，
+   * 时长一半在左上、一半在右下，黑度还不一样，一换页就跳。
+   *
+   * 这张卡比 YouTube 卡多出来的都是「站内播放」这一侧的事：
+   * - 整张卡是一个 `<a href="/video/:id?back=...">`（YouTube 卡是弹窗，所以它用按钮）；
+   * - 悬停放预览片（`previewUrl`），滚动中/隐私模式下不放；
+   * - 下载走 `DownloadDialog`（选画质），不是后台直接排队。
+   */
+  import CardByline from './CardByline.svelte';
+  import CardDownloadButton from './CardDownloadButton.svelte';
+  import CardDuration from './CardDuration.svelte';
+  import CoverArt from './CoverArt.svelte';
   import DownloadDialog from './DownloadDialog.svelte';
   import { api } from '../lib/api';
   import { router } from '../lib/router.svelte';
@@ -33,13 +51,14 @@
   let previewEl = $state<HTMLVideoElement | null>(null);
   let previewTimer = 0;
   let downloadOpen = $state(false);
-  // 缩略图签名会过期、个别影片也可能压根没有封面：加载失败时退回占位图标，别留一块空白。
-  let thumbFailed = $state(false);
-  let avatarFailed = $state(false);
   // 预览片的签名会过期（抓取时写死的 URL），失效一次就别再反复拉：
   // 每次悬停都去请求一个必然失败的地址，纯属浪费带宽和解码。
   let previewBroken = $state(false);
 
+  // `w=` 只是「希望多大」的意图参数，不会真的缩图：`/api/img` 把它交给图床自己认，
+  // 而现有四个站里只有 beeg 的图床认它（实测 bilibili 封面在 w=480 与 w=640 下取回的是
+  // 同一份 960×540 / 61,592 字节的 webp；YouTube 的 i.ytimg 同理）。所以保持 480 不动——
+  // 改成 640 对像素和字节都没影响，只会让 beeg 多拉一档大图。
   const thumb = $derived(imageUrl(video.thumbUrl, 480));
   const performerLine = $derived(video.performers.map((p) => p.name).join('、'));
   const firstPerformer = $derived(video.performers[0] ?? null);
@@ -47,12 +66,10 @@
   // 优先用这一行自带的头像（videos 接口现在会跟着 performers 一起给，B 站墙离不开它：
   // 「订阅艺人头像表」只拉得到非 B 站的艺人），没有再退回全局头像表。
   const avatar = $derived(
-    avatarFailed
-      ? undefined
-      : imageUrl(
-          firstPerformer?.avatarUrl ?? (firstPerformer?.id != null ? live.performerAvatars[firstPerformer.id] : null),
-          36,
-        ),
+    imageUrl(
+      firstPerformer?.avatarUrl ?? (firstPerformer?.id != null ? live.performerAvatars[firstPerformer.id] : null),
+      36,
+    ),
   );
   const monogram = $derived(firstPerformer ? firstPerformer.name.trim().charAt(0).toUpperCase() : '');
 
@@ -125,33 +142,7 @@
     onfocusin={prefetchPlayback}
   >
     <div class="relative aspect-video overflow-hidden rounded-xl bg-panel">
-      {#if thumb && !thumbFailed}
-        <img
-          data-media
-          src={thumb}
-          onerror={() => (thumbFailed = true)}
-          alt=""
-          width="480"
-          height="270"
-          loading={eager ? 'eager' : 'lazy'}
-          decoding="async"
-          class="h-full w-full object-cover"
-        />
-      {:else}
-        <div class="flex h-full w-full items-center justify-center">
-          <svg
-            viewBox="0 0 24 24"
-            class="h-6 w-6 text-dim"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.4"
-            aria-hidden="true"
-          >
-            <rect x="3" y="5.5" width="18" height="13" rx="2.5" />
-            <path d="M8 5.5v13M16 5.5v13" />
-          </svg>
-        </div>
-      {/if}
+      <CoverArt src={thumb} {eager} scaleClass="transition-transform duration-300 group-hover:scale-[1.02]" />
 
       {#if previewOn && video.previewUrl}
         <video
@@ -170,70 +161,26 @@
         ></video>
       {/if}
 
-      <!-- 时长直接压在封面上（不要黑色药丸底），只给一层文字阴影保证亮封面上也能读；
-           封面左上角只有时长这一项——新片白药丸已按需求去掉，已存也从来不做标识 -->
-      <div class="pointer-events-none absolute left-0 top-0 flex items-center p-2">
-        <span
-          class="text-meta font-medium text-fg [text-shadow:0_1px_5px_rgba(0,0,0,1),0_0_12px_rgba(0,0,0,0.95),0_0_3px_rgba(0,0,0,1)]"
-        >
-          {formatDuration(video.durationSec)}
-        </span>
-      </div>
+      <CardDuration seconds={video.durationSec} />
     </div>
 
-    <div class="mt-2.5 flex items-start gap-2.5">
-      <span class="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-raise" aria-hidden="true">
-        {#if avatar}
-          <img
-            data-media
-            src={avatar}
-            onerror={() => (avatarFailed = true)}
-            alt=""
-            width="36"
-            height="36"
-            loading="lazy"
-            decoding="async"
-            class="h-full w-full object-cover"
-          />
-        {:else if monogram}
-          <span class="flex h-full w-full items-center justify-center text-meta font-medium text-muted">
-            {monogram}
-          </span>
-        {/if}
-      </span>
-
-      <div class="min-w-0 flex-1">
-        <h3 class="truncate text-ui text-fg/95 group-hover:text-fg">{video.title}</h3>
-        <p class="mt-0.5 flex items-center gap-1.5 text-meta text-dim">
-          <span class="truncate">{performerLine || '未知艺人'}</span>
-          <span aria-hidden="true">·</span>
-          <span class="shrink-0" title={relativeTime(video.publishedAt)}>{formatDate(video.publishedAt)}</span>
-        </p>
-      </div>
-    </div>
+    <CardByline
+      title={video.title}
+      name={performerLine || '未知艺人'}
+      avatarUrl={avatar}
+      {monogram}
+      views={video.viewCount}
+      viewsLabel="次播放"
+      dateLabel={formatDate(video.publishedAt)}
+      dateTitle={relativeTime(video.publishedAt)}
+    />
   </a>
 
-  <button
-    type="button"
-    class="absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-ink/80 text-fg opacity-0 transition hover:bg-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 max-lg:opacity-100"
-    aria-label={`下载 ${video.title}`}
+  <CardDownloadButton
+    label={`下载 ${video.title}`}
     title="下载到本地库"
     onclick={openDownload}
-  >
-    <svg
-      viewBox="0 0 20 20"
-      class="h-3.5 w-3.5"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.7"
-      stroke-linecap="round"
-      aria-hidden="true"
-    >
-      <path d="M10 3.5v8" />
-      <path d="m6.75 8.5 3.25 3.25L13.25 8.5" />
-      <path d="M4 15.5h12" />
-    </svg>
-  </button>
+  />
 
   <DownloadDialog videoId={video.id} open={downloadOpen} onClose={() => (downloadOpen = false)} />
 </article>
