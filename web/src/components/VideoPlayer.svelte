@@ -723,6 +723,33 @@
       if (step === undefined || el.value === step) continue;
       el.value = step;
     }
+    tuneSliderSteps(root);
+  }
+
+  /**
+   * 进度条 / 音量条**自己被聚焦**时，方向键走的是滑块自己的步长，不是热键那套。
+   *
+   * 复现（2026-11-03 用户报）：鼠标点一下进度条 → 焦点落进滑块的 thumb → 再按 → 只走 **1 秒**。
+   * 原因是两条路完全独立：焦点在 thumb 上时皮肤 `slider.js` 的 `onKeyDownCapture` 会先吃掉这颗
+   * 按键（`step 1`，`SliderCore.defaultProps.step = 1`），而 `.media-container` 上那个 hotkey
+   * 对同一颗键不再动作（实测 +1.00 秒，不是 +5，也不是 +6）。量到的步长：
+   *
+   *   焦点位置        ArrowRight 后的增量
+   *   页面 body             +5.00 s（走 hotkey，value=SEEK_STEP）
+   *   滑块 thumb            +1.00 s（走 SliderCore.step）
+   *
+   * 所以按同样的量把滑块自己的 `step` 也改成 5 s；音量条默认 `step 5`（单位是百分比），
+   * 跟我们的 VOLUME_STEP=10% 差一档，一起改成 10。改属性（不是 JS 属性）是因为元素靠
+   * `attributeChangedCallback` 把值灌进 core 再重算百分比，直接写 `.step` 有些版本不重渲染。
+   */
+  function tuneSliderSteps(root: ShadowRoot): void {
+    for (const el of root.querySelectorAll('media-time-slider')) {
+      if (el.getAttribute('step') !== String(SEEK_STEP)) el.setAttribute('step', String(SEEK_STEP));
+    }
+    for (const el of root.querySelectorAll('media-volume-slider')) {
+      const pct = String(Math.round(VOLUME_STEP * 100));
+      if (el.getAttribute('step') !== pct) el.setAttribute('step', pct);
+    }
   }
 
   /**
@@ -1711,10 +1738,31 @@
       }
     });
     window.addEventListener('keydown', onKeydown);
+    // 用户报「点击全屏、等控制条自动隐藏后，移动鼠标它再也不出现」（2026-11-03）。在 Chromium
+    // 156 的有头/无头两种会话里、真全屏 1440×900 都没复现：皮肤自己那条路是好的（`stopPropagation`
+    // 之外，1px 的移动就能把控制条点亮，截图前后各一张）。但它的实现确实只有一条独木桥——
+    // 「鼠标一动就亮」是挂在 shadow root 里 `.media-container` 上的**冒泡**监听，路径上任何人
+    // stopPropagation（我们自己的浮层、以后换皮肤、浏览器差异）就彻底哑掉，且没有任何兜底。
+    // 所以在**捕获阶段**、皮肤外面那层 `<video-player>` 上补一张网：只在皮肤认为控制条该隐藏时，
+    // 把一次 pointermove 直接派给 `.media-container`（target 就是它自己，绕开整条冒泡链）。
+    // `composed: false` 跟 pressInSkin 同理：这颗事件不该穿出 shadow root，否则会被自己再抓一次。
+    // 控制条已经亮着就什么都不做，不和皮肤抢状态；触摸不参与（手机上「点一下才出现」是另一套）。
+    // 实测：正常路径下它每颗真实 pointermove 会多派一颗（皮肤随后照样 setActive，结果不变）；
+    // 控制条亮着时 synthetic 计数不再增长。
+    const onPointerNet = (event: PointerEvent): void => {
+      if (event.pointerType === 'touch') return;
+      const container = skinContainer();
+      if (!container || container.hasAttribute('data-controls-visible')) return;
+      container.dispatchEvent(
+        new PointerEvent('pointermove', { bubbles: false, composed: false, pointerType: 'mouse' }),
+      );
+    };
+    playerEl?.addEventListener('pointermove', onPointerNet, { capture: true, passive: true });
     mountBar();
     return () => {
       unsubscribe();
       window.removeEventListener('keydown', onKeydown);
+      playerEl?.removeEventListener('pointermove', onPointerNet, { capture: true });
       if (retryTimer !== undefined) clearTimeout(retryTimer);
       if (kickTimer !== undefined) clearTimeout(kickTimer);
       stopSeekWatch();

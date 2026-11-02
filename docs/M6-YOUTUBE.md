@@ -1258,3 +1258,53 @@ yt-dlp 的原话是 `WARNING: Skipping client "visionos" since it does not suppo
 
 另外顺手省了冤枉路：默认档是 4K 时不再预热 1080 的 HLS 分片（那条是 302 兜底路径，
 预热它是往一台已经被盯上的出口 IP 上白烧 ~1.4 MB）。
+
+### 14.21 两个播放器手感 bug：点过进度条之后方向键只走 1 秒；全屏里控制条亮不回来（2026-11-03）
+
+#### 一、点过进度条，方向键就只剩 1 秒
+
+**复现**（静音、1440×900）：点一下进度条 → 焦点落进滑块 thumb → 按 →：
+
+| 焦点在哪 | ArrowRight 增量 |
+|---|---|
+| 页面 `body`（没点过滑块） | **+5.00 s** |
+| 滑块 thumb（点过进度条之后） | **+1.00 s** |
+
+**根因**：两条键盘路径完全独立，谁先拿到这颗键取决于焦点。
+
+- 我们的 5 秒步长是改在皮肤的 `<media-hotkey keys="ArrowRight" value=5>` 上（`tuneHotkeys()`），
+  监听挂在 `.media-container`（冒泡阶段）。
+- 焦点在 thumb 上时，`@videojs/core` 的 `slider.js` 里 `onKeyDownCapture` 先把这颗键吃掉：
+  它按滑块自己的 `step` 算，而 `SliderCore.defaultProps.step = 1`（时间滑块按秒、音量滑块按百分比，
+  默认是 1 和 5）。实测只 +1.00 秒，不是 +5、也不是 +6——说明 hotkey 那条路对它不动手（设计如此，
+  免得一次按键走两遍）。
+- 变的是「用哪个步长」，不是「往哪个方向」：上下键同理，音量条默认 5%。
+
+**改法**：`tuneSliderSteps()` 把滑块自己的 `step` 也改成本站的步长（时间 5、音量 10），
+改的是**属性**而不是 JS 属性——元素靠 `attributeChangedCallback` 把值灌进 core 再重算百分比。
+实测（鼠标点进度条 40% 之后连按）：`106.65 → 110 → 115 → 110 → 105`，即 +5 / +5 / −5 / −5。
+拖动/点击的定位不受影响（`step` 只参与键盘那段的 `roundToStep`，点 40% 仍是 106.65 这种细粒度值）。
+
+#### 二、全屏里控制条自动隐藏后，动鼠标亮不回来
+
+**没能复现**：Chromium 156 有头/无头两种会话、真全屏 1440×900、`3BaMT8c93lA`（4K），
+`data-controls-visible` 都是「隐藏 → 移动 1px → true」，截图前后各一张，控制条照常出现。
+（顺带量到空闲计时：移动后 **1.8 s** 重新隐藏，和包里的 `IDLE_DELAY = 2000` 对得上。）
+
+但实现只有一根独木桥：皮肤「鼠标一动就亮」是挂在 shadow root 里 `.media-container` 上的**冒泡**监听，
+路径上任何人 `stopPropagation`（我们自己的浮层、以后换皮肤、浏览器差异）它就直接哑掉，而且没有兜底。
+所以补一张网：`<video-player>` 上**捕获阶段**听 `pointermove`，只在皮肤认为控制条该隐藏
+（`.media-container` 上没有 `data-controls-visible`）时，把一颗
+`pointermove` **直接派给 `.media-container`**（`bubbles:false, composed:false`，target 就是它自己，
+绕开整条冒泡链；`composed:false` 跟 `pressInSkin` 同理，否则会被自己再抓一次）。
+
+这层网能不能真救回来，用「事件到不了容器」的等价条件量过：
+
+| 操作 | 容器收到的 pointermove | 控制条 |
+|---|---|---|
+| 隐藏态，事件只派到 `<video-player>`（永远到不了 `.media-container`） | 1 颗，`target === 容器`（就是我们补的那颗） | 隐藏 → **显示** |
+| 已经是显示态，再派一颗 | 1 颗，`target !== 容器`（皮肤自己收到的），没有再补 | 保持显示 |
+
+也就是说：正常路径下它是冗余的（结果不变），皮肤那条路断掉时它是唯一把控制条点亮的东西。
+顺手记两条实测：`isTrusted` 的真实移动 + 我们补的那颗是 1:1，没有递归（`composed:false` 挡住了穿出
+shadow root 的那一段）；暂停时控制条本来就不收，网也不会动手。
