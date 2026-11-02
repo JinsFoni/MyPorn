@@ -37,7 +37,8 @@
   class="group flex min-w-0 flex-col text-center"
   aria-label={`${performer.name}${performer.newVideoCount > 0 ? `，${String(performer.newVideoCount)} 部新片` : ''}`}
 >
-  <!-- 头像宽度由栅格轨道固定（96/128px，桌面端约等于 X 的 133px 头像），所以左边缘和页面标题对齐；间距只由 gap 决定 -->
+  <!-- 头像宽度由栅格轨道固定（2026-11-02 按用户要求「头像改小一点」：96 / `sm` 104 / `xl` 112，
+       原来是 104/128），所以左边缘和页面标题对齐；间距只由 gap 决定 -->
   <div class="aspect-square w-full">
     <div class="h-full w-full overflow-hidden rounded-full bg-panel">
       {#if avatar && !avatarFailed}
@@ -68,7 +69,7 @@
 
   </div>
 
-  <!-- 名字最多两行（格子 96/128px 宽，单行会被截得只剩半句）；加粗对标 X 上的用户名；状态行用 mt-auto 贴底，同一行卡片仍对齐 -->
+  <!-- 名字最多两行（格子 96–112px 宽，单行会被截得只剩半句）；加粗对标 X 上的用户名；状态行用 mt-auto 贴底，同一行卡片仍对齐 -->
   <h3 class="mt-3 line-clamp-2 text-ui font-bold leading-snug text-fg transition-colors group-hover:text-fg/95">{performer.name}</h3>
   <p class="mt-auto flex items-center justify-center gap-1.5 pt-1 text-meta text-dim">
     <span

@@ -5,17 +5,23 @@
    * 三件事：看照片（瀑布流 + 灯箱）、管博主（添加 / 启停 / 立即同步）、
    * 存档（勾几张 → 存进本地库，走后台任务）。
    *
+   * 页面顶部**没有标题**（2026-11-02 用户要求去掉左上角那个「动态」）：直接是博主头像条，
+   * 和关注页 / B 站页 / YouTube 页同一套 `AvatarRail`——56px 圆头像，点谁筛谁、再点一次取消。
+   * 下面那行工具栏只剩「全部」+ 平台筛选 + 「添加博主」。
+   *
    * 契约见 docs/M5-SOCIAL.md §10/§11。
    */
   import { onMount, untrack } from 'svelte';
+  import AvatarRail from '../components/AvatarRail.svelte';
   import InfiniteList from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import { ApiError, api, messageFor } from '../lib/api';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
-  import { router } from '../lib/router.svelte';
+  import { patchQuery, router } from '../lib/router.svelte';
   import { ui } from '../lib/ui.svelte';
   import { formatDateTime } from '../lib/format';
+  import type { RailItem } from '../lib/rail';
   import type {
     Library,
     MomentAccount,
@@ -66,6 +72,20 @@
 
   const activeAccounts = $derived(accounts.filter((a) => a.enabled));
 
+  /**
+   * 头像条的条目：一位博主一颗。名字用 `@handle`（跟原来那排胶囊一致，`displayName`
+   * 里常带「| ONLYFANS」这类后缀，放 80px 宽的一列里更认不出是谁）；照片数只进 `title`。
+   */
+  const railItems = $derived<RailItem[]>(
+    accounts.map((a) => ({
+      id: a.id,
+      name: `@${a.handle}`,
+      avatarUrl: a.avatarUrl || null,
+      title: `@${a.handle} · ${String(a.photoCount)} 张`,
+      dimmed: !a.enabled,
+    })),
+  );
+
   async function loadAccounts(): Promise<void> {
     accountsError = '';
     try {
@@ -91,11 +111,17 @@
     return { items: res.items, nextCursor: res.nextCursor ?? null };
   }
 
+  /**
+   * 换筛选。**地址栏是唯一真源**，和关注页 / B 站页 / YouTube 页那三条头像条一个规矩：
+   * 点谁筛谁就写 `?account=`，取消就删掉这个参数——刷新、复制给别人、后退回来都还是同一面墙。
+   * （平台筛选仍只在内存里：它是这一页的第二维，没有深链需求。）
+   */
   function setFilter(accountId: number | null, platform: string | null): void {
     filterAccount = accountId;
     filterPlatform = platform;
     selection = new Set();
     wallKey += 1;
+    patchQuery({ account: accountId === null ? null : String(accountId) });
   }
 
   // 后台抓到新照片时自动刷新（只刷第一页：照片墙按时间倒序，新的都在最前面）
@@ -303,51 +329,34 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="flex flex-col gap-4">
-  <!-- 这一页不再挂「动态 / YouTube / B 站」那排分段控件：三个入口已经都在导航里
-       （桌面侧边栏、手机底栏），页面顶部只留工具栏。 -->
-  <!-- 工具栏：筛选用横向胶囊，右侧是唯一的主动作 -->
-  <div class="flex flex-wrap items-center gap-2">
-    <div class="-mx-1 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-1 pb-1">
-      <button
-        type="button"
-        onclick={() => setFilter(null, null)}
-        class="shrink-0 rounded-full px-3 py-1.5 text-meta transition-colors {filterAccount === null &&
-        filterPlatform === null
-          ? 'bg-raise text-fg'
-          : 'text-muted hover:bg-panel hover:text-fg'}"
-      >
-        全部
-      </button>
-      {#each accounts as account (account.id)}
-        <button
-          type="button"
-          onclick={() => setFilter(account.id, null)}
-          title={`@${account.handle} · ${String(account.photoCount)} 张`}
-          class="flex shrink-0 items-center gap-1.5 rounded-full py-1 pl-1 pr-3 text-meta transition-colors {filterAccount ===
-          account.id
-            ? 'bg-raise text-fg'
-            : 'text-muted hover:bg-panel hover:text-fg'} {account.enabled ? '' : 'opacity-50'}"
-        >
-          {#if account.avatarUrl}
-            <img
-              src={imageUrl(account.avatarUrl, 44) ?? ''}
-              alt=""
-              class="h-5 w-5 rounded-full object-cover"
-              loading="lazy"
-              decoding="async"
-            />
-          {:else}
-            <span class="grid h-5 w-5 place-items-center rounded-full bg-panel text-[0.625rem] text-dim">
-              {account.handle.slice(0, 1).toUpperCase()}
-            </span>
-          {/if}
-          <span class="max-w-[9rem] truncate">@{account.handle}</span>
-        </button>
-      {/each}
-    </div>
+<!-- 这一页不再挂「动态 / YouTube / B 站」那排分段控件：三个入口已经都在导航里
+     （桌面侧边栏、手机底栏），页面顶部只有这条头像条 + 一行工具栏。 -->
+<!-- 博主头像条：和关注页 / B 站页 / YouTube 页同一个组件（2026-11-02 用户要求）——
+     顶部不再有「动态」这两个字，谁可以筛、现在筛的是谁，全在这条上。
+     点谁筛谁，再点一次同一颗＝取消（「全部」那颗胶囊仍然留着，语义一样）。 -->
+<AvatarRail
+  items={railItems}
+  label="按博主筛选"
+  selected={filterAccount}
+  onSelect={(id) => setFilter(id, null)}
+  loading={!accountsLoaded}
+/>
 
-    <div class="flex shrink-0 items-center gap-2">
+<div class="flex flex-col gap-4">
+  <!-- 工具栏：左边只有「全部」，右边是平台筛选 + 唯一的主动作 -->
+  <div class="flex flex-wrap items-center gap-2">
+    <button
+      type="button"
+      onclick={() => setFilter(null, null)}
+      class="shrink-0 rounded-full px-3 py-1.5 text-meta transition-colors {filterAccount === null &&
+      filterPlatform === null
+        ? 'bg-raise text-fg'
+        : 'text-muted hover:bg-panel hover:text-fg'}"
+    >
+      全部
+    </button>
+
+    <div class="ml-auto flex shrink-0 items-center gap-2">
       <!-- 平台在手机上留给「艺人页」那种场景，这里 390px 一行塞不下，直接藏掉 -->
       {#each platforms as p (p.key)}
         <button
