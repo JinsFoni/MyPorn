@@ -618,6 +618,25 @@ export const api = {
       body: { deg },
     });
   },
+  /** 记住这条影片要顺时针转多少度显示（0/90/180/270）：给「躺着拍」的片子用 */
+  videoRotate(videoId: number | string, deg: number): Promise<{ ok: boolean; rotateDeg: number }> {
+    return request<{ ok: boolean; rotateDeg: number }>(`/api/videos/${id(videoId)}/rotate`, {
+      method: 'POST',
+      body: { deg },
+    });
+  },
+  /**
+   * 把这部影片从本地库删掉（**磁盘文件一起删**，不是只删索引）。
+   * kept 非空表示有东西没删掉（越界、被占用、权限），reason 给人看。
+   */
+  deleteLibraryVideo(
+    videoId: number | string,
+  ): Promise<{ ok: boolean; removed: string[]; kept: { libraryId: number; path: string; reason: string }[] }> {
+    return request<{ ok: boolean; removed: string[]; kept: { libraryId: number; path: string; reason: string }[] }>(
+      `/api/library/videos/${id(videoId)}`,
+      { method: 'DELETE' },
+    );
+  },
   /** 按 YouTube 视频 id 单取一条（深链接 /youtube?v=… 用：墙上那一页未必包含这条） */
   ytVideoLookup(videoId: string): Promise<YtVideo> {
     return request<YtVideo>(`/api/yt/videos/lookup?videoId=${encodeURIComponent(videoId)}`);

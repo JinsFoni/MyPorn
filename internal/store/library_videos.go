@@ -52,7 +52,7 @@ type LibraryVideoCounter struct {
 	SizeBytes int64
 }
 
-// 一行 = library_files 的全部列（16）+ 库名（1）+ videos 的展示列（14）+ YouTube 频道头像/名字（2）。
+// 一行 = library_files 的全部列（16）+ 库名（1）+ videos 的展示列（15）+ YouTube 频道头像/名字（2）。
 // 列名和 scanLibraryVideo 的扫描顺序必须一一对应，改一处就得改另一处。
 //
 // 频道那两列是 LEFT JOIN 来的（见 ListLibraryVideos 的 `libraryVideoJoins`）：
@@ -85,7 +85,7 @@ func scanLibraryVideo(row rowScanner) (*LibraryVideo, error) {
 		&f.NFOPath, &f.PosterPath, &f.ThumbPath, &f.FanartPath, &f.StrmPath,
 		&f.SizeBytes, &f.Width, &f.Height, &f.DurationSec, &created, &name,
 		&v.ID, &v.Platform, &v.PlatformVideoID, &v.Title, &v.URL, &v.ThumbURL, &v.PreviewURL,
-		&v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew,
+		&v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew, &v.RotateDeg,
 		&avatar, &channel); err != nil {
 		return nil, err
 	}

@@ -148,5 +148,7 @@ func videoDTO(v *model.Video) map[string]any {
 		"isNew":           v.IsNew,
 		"hasLocalFile":    len(v.LocalLibraryIDs) > 0,
 		"localLibraryIds": v.LocalLibraryIDs,
+		// 播放时画面顺时针转多少度（0/90/180/270）：「躺着拍」的片子用户点一次就记住
+		"rotateDeg": v.RotateDeg,
 	}
 }

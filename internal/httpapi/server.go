@@ -196,10 +196,14 @@ func (s *Server) Routes() http.Handler {
 
 			// 媒体库：磁盘上已经落盘的影片（下载队列在 /api/downloads，两件事）
 			pr.Get("/library/videos", s.handleListLibraryVideos)
+			// 播放页那颗「删除」：把这部片从本地库删掉（磁盘文件一起删）
+			pr.Delete("/library/videos/{id}", s.handleDeleteLibraryVideo)
 
 			pr.Get("/downloads", s.handleListDownloads)
 			pr.Get("/videos/{id}/download-options", s.handleDownloadOptions)
 			pr.Post("/videos/{id}/download", s.handleCreateDownload)
+			// 播放页那颗「旋转」：角度记在 videos.rotate_deg 上（给「躺着拍」的片子用）
+			pr.Post("/videos/{id}/rotate", s.handleVideoRotate)
 
 			pr.Get("/videos", s.handleListVideos)
 			pr.Get("/videos/new", s.handleListNewVideos)

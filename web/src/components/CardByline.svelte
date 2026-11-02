@@ -73,8 +73,9 @@
   const showAvatar = $derived(!!avatarUrl && brokenAvatar !== avatarUrl);
   const count = $derived(views && views > 0 ? formatCount(views) : '');
 
-  const TITLE =
-    'block w-full truncate text-left text-ui font-medium leading-snug text-fg group-hover:underline';
+  // 悬浮时**不加下划线**（2026-11-03 用户要求）：卡片整块都是可点的，
+  // 标题下面那条线一出现就把「标题」变成「链接」，卡片看着像普通网页链接列表。
+  const TITLE = 'block w-full truncate text-left text-ui font-medium leading-snug text-fg';
 </script>
 
 <div class="mt-2.5 flex items-start gap-2.5">

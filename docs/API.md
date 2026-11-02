@@ -111,7 +111,9 @@ type Video = {
   tags: string[]
   performers: { id:number|null, name:string, url:string|null }[]
   isNew: boolean               // 同步后新增且未看
-  hasLocalFile: boolean        // M1 恒为 false
+  hasLocalFile: boolean        // 是否已落盘到某个本地库
+  localLibraryIds: number[]    // 落在哪几个库
+  rotateDeg: number            // 播放时画面顺时针转多少度（0/90/180/270），见 E3
 }
 ```
 
@@ -122,6 +124,7 @@ type Video = {
 | GET | `/api/videos/{id}` | `Video` + `{"description":"...","related":Video[]}` |
 | GET | `/api/videos/{id}/adjacent` | 同一份列表里的上下家 → `{"prev":Video\|null,"next":Video\|null}`（见 A4·补·2） |
 | POST | `/api/videos/{id}/seen` | `204`，清除 isNew |
+| POST | `/api/videos/{id}/rotate` | `{"deg":90}` → `{"ok":true,"rotateDeg":90}`，角度记在 `videos.rotate_deg`（见 E3） |
 
 ### 播放
 
@@ -1167,6 +1170,37 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
   代理用的平台参数是**头像所属平台**（艺人的 `platform`），不是影片的：图床认 Referer，
   拿影片的平台去拉一张跨站头像会被挡掉。
 - 播放直接复用 `GET /api/videos/{id}/file`（`handlePlayback` 里本地那一路本来就排第一）。
+
+### E3. `POST /api/videos/{id}/rotate` —— 记住画面上转了多少度
+
+`{"deg": 90}` → `{"ok": true, "rotateDeg": 90}`。只收 0/90/180/270（别的值 400：45° 会让画面
+转出一个黑三角），负数按模归到正角度；影片不存在 → 404。
+
+**为什么要有它**：有些片子**像素本身就是横的**，容器里没有任何 rotation 元数据（ffprobe 读不出来），
+任何播放器都只能照着横的放，只有用户知道该往哪边转。前端点一下转 90°（0→90→180→270→0），
+先把本地状态改掉让画面立刻转，再把角度写回来，写失败就退回并报一句。
+
+角度记在 **`videos.rotate_deg`**（不是 `library_files`）：转不转是**画面内容**的属性，同一部片下到
+两个库里不该有两个角度。和 `/api/yt/videos/{id}/rotate`（`yt_videos.rotate_deg`）是同一套做法——
+两条表是两条链路（YouTube 墙 vs 关注流/媒体库），谁也没法引用谁。
+
+### E4. `DELETE /api/library/videos/{id}` —— 把这部片从本地库删掉（磁盘文件一起删）
+
+```
+→ 200 {"ok": true,
+       "removed": ["/…/主库/xHamster/Hot Pearl/…/xxx.mp4", "…/xxx.nfo", "…/poster.jpg", …],
+       "kept": []}
+```
+
+- **磁盘文件真删**，不是只删索引（这一页叫「删除」，不是「移除记录」；下载页的「移除」才是只删任务）。
+  边角文件（`nfo` / `poster` / `thumb` / `fanart` / `strm`）一起走，空目录一路收回到库根。
+- **先删文件、后删记录**：文件删不掉（播放器占着、权限不够）就留着记录并写进 `kept[].reason`
+  （`ok` 变 `false`），否则媒体库里会剩一条指着空气的记录。
+- 路径必须落在库根之内才删（`insideRoot`，和 `/file`、`/art` 同一道闸门）：`kept[].reason` 会是
+  「文件不在库目录内」。库里的字符串**永远**不能直接拿去 `os.Remove`。
+- 影片本身（`videos` 行）留着：播放页删完要能退回平台在线播放；已经没本地文件时再删 → 404。
+- 前端入口是播放页标题行那颗垃圾桶（本地已有的片子才有，见 ARCHITECTURE §7.6 媒体库行），
+  点之前 `window.confirm` 问一句「磁盘上的文件会一起删掉」。
 
 ### E2. `GET /api/videos/{id}/art?libraryId=1&k=thumb` —— 本地海报 / 剧照
 

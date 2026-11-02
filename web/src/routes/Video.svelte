@@ -91,6 +91,14 @@
   let mockNote = $state('');
   let downloadOpen = $state(false);
   /**
+   * 画面顺时针转多少度（0/90/180/270），存在 `videos.rotate_deg` 上。
+   * 有些片子像素本身就是横的（容器里没有 rotation 元数据，ffprobe 也读不出来），
+   * 任何播放器都只能照着横的放，只能由用户点一次然后记住——和 `/youtube/:id` 同一套做法。
+   */
+  let rotateDeg = $state(0);
+  /** 删本地文件时那颗键先转圈，避免连点两下 */
+  let removing = $state(false);
+  /**
    * 「正在准备这一档」的进度：只有分轨档位（B 站 1080P+/4K）会用到。
    * 这些档位要先在服务端把音画两条流合成一份 mp4，4K 一档 554 MB~1.77 GB，
    * 头一次点要等 1~3 分钟。以前这段时间是一个不回头的 HTTP 请求，用户只看到转圈，
@@ -201,6 +209,7 @@
     try {
       const detail = await api.video(videoId);
       video = detail;
+      rotateDeg = detail.rotateDeg ?? 0;
       mockNote = '';
     } catch (err) {
       if (import.meta.env.DEV) {
@@ -211,6 +220,53 @@
       }
     } finally {
       loadingVideo = false;
+    }
+  }
+
+  /**
+   * 点一下转 90°：0 → 90 → 180 → 270 → 0。
+   * 先改本地（画面立刻转），再把角度写回库；写失败就退回去并报一句，
+   * 免得下次进来发现「我刚才明明转正了」。和 `/youtube/:id` 的 rotate() 同口径。
+   */
+  async function rotate(): Promise<void> {
+    if (video === null) return;
+    const prev = rotateDeg;
+    const next = (rotateDeg + 90) % 360;
+    rotateDeg = next;
+    try {
+      await api.videoRotate(video.id, next);
+      video = { ...video, rotateDeg: next };
+    } catch (err) {
+      rotateDeg = prev;
+      live.toast(messageFor(err), 'error');
+    }
+  }
+
+  /**
+   * 删掉本地文件（磁盘上的文件一起删，不是只删索引）。
+   * 删完重新取一遍详情与片源：这部片就从「本地播放」退回「平台在线播放」，
+   * 标题行那颗键也随之从「删除」变回「下载」。
+   */
+  async function removeLocal(): Promise<void> {
+    if (video === null || removing) return;
+    const where = video.localLibraryIds.length > 1 ? `这 ${String(video.localLibraryIds.length)} 个库里的文件` : '磁盘上的文件';
+    if (!window.confirm(`删除《${video.title}》的本地文件？\n${where}会一起删掉，删了找不回来（Emby 那边也会消失）。`)) return;
+    removing = true;
+    try {
+      const res = await api.deleteLibraryVideo(video.id);
+      if (res.removed.length === 0) {
+        const why = res.kept[0]?.reason ?? '没有删除任何文件';
+        live.toast(`删除失败：${why}`, 'error');
+        return;
+      }
+      live.toast('本地文件已删除', 'success');
+      if (res.kept.length > 0) live.toast(`有 ${String(res.kept.length)} 个文件没删掉：${res.kept[0].reason}`, 'error');
+      await loadVideo();
+      await loadPlayback();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      removing = false;
     }
   }
 
@@ -561,6 +617,7 @@
     tagsExpanded = false;
     usingProxy = false;
     proxyAvailable = false;
+    rotateDeg = 0;
     playError = '';
     preparing = null;
     prepToken += 1;
@@ -600,6 +657,7 @@
           poster={poster}
           title={video.title}
           videoKey={videoId}
+          {rotateDeg}
           {qualities}
           dash={dashSpec}
           onDashFailed={onDashFailed}
@@ -663,9 +721,11 @@
          把它整体压低了 20px，标题和资料表之间凭空错开半行（窄屏是单列，那一行间距要留着）。 -->
     <div class="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_14rem]">
       <div class="min-w-0">
-        <!-- 下载 / 在平台打开跟着标题走（和 YouTube 弹窗那排同一套 `icon-act`）。
-             原来是侧栏两颗整宽按钮 + 窄屏标题下再来一颗「下载到本地库」：同一个动作在
-             两个位置各写一遍，窄屏那颗还把标题和标签之间撑出一行。现在收成标题行右端两颗。 -->
+        <!-- 标题行右端那排图标键（和 `/youtube/:id` 同一套 `icon-act`）。
+             本地已经有的片子**不给「下载」**（2026-11-03 用户要求）：文件就在盘上，
+             再点一次只是把同一部片再下一遍。这一排换成它真正需要的两件事——
+             旋转（给「躺着拍」的片子）和删除（盘上那份不要了）。
+             还没落盘的片子仍然是「下载 + 在平台打开」。 -->
         <div class="flex items-start gap-3">
           <h2 class="min-w-0 flex-1 text-film-title font-bold text-fg lg:text-film-title-lg">
             {video.title}
@@ -675,28 +735,70 @@
                36px 的按钮从上下各溢出几像素，圆心正好压在首行中线上；
                不钉的话 items-start 会把 36px 的方框顶对齐到行框上，看着偏低。 -->
           <div class="flex h-[var(--text-film-title--line-height)] shrink-0 items-center gap-1 lg:h-[var(--text-film-title-lg--line-height)]">
-            <button
-              type="button"
-              class="icon-act"
-              data-emphasis="primary"
-              title={video.hasLocalFile ? '再下载一份' : '下载到本地库'}
-              aria-label={video.hasLocalFile ? '再下载一份' : '下载到本地库'}
-              onclick={() => (downloadOpen = true)}
-              disabled={playback === null && loadingPlayback}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                class="h-5 w-5"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.8"
-                stroke-linecap="round"
+            {#if video.hasLocalFile}
+              <!-- 躺着拍的片子只能手动转：点一下转 90°，角度记在库里（见 rotate()） -->
+              <button
+                type="button"
+                class="icon-act"
+                data-rotated={rotateDeg === 0 ? undefined : ''}
+                title={rotateDeg === 0 ? '旋转画面 90°（横着拍的片子用）' : `画面已转 ${rotateDeg}°，再点转 90°`}
+                aria-label={rotateDeg === 0 ? '旋转画面 90°' : `画面已转 ${rotateDeg} 度，再点转 90 度`}
+                onclick={() => void rotate()}
               >
-                <path d="M12 4v10" />
-                <path d="m8 10.5 4 4 4-4" />
-                <path d="M4.5 18.5h15" />
-              </svg>
-            </button>
+                <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" />
+                  <path d="M20.6 3.6v5.2h-5.2" />
+                </svg>
+              </button>
+
+              <!-- 删除：磁盘上的文件一起删（会先问一句），删完这部片退回「在线播放」 -->
+              <button
+                type="button"
+                class="icon-act"
+                data-danger=""
+                title="删除本地文件"
+                aria-label="删除本地文件"
+                onclick={() => void removeLocal()}
+                disabled={removing}
+              >
+                {#if removing}
+                  <svg viewBox="0 0 24 24" class="h-5 w-5 animate-spin" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="8" stroke-opacity="0.25" />
+                    <path d="M20 12a8 8 0 0 0-8-8" />
+                  </svg>
+                {:else}
+                  <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                    <path d="M4.5 7h15" />
+                    <path d="M9.5 7V5.2a1.2 1.2 0 0 1 1.2-1.2h2.6a1.2 1.2 0 0 1 1.2 1.2V7" />
+                    <path d="M6.5 7l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7" />
+                    <path d="M10.5 11v6M13.5 11v6" />
+                  </svg>
+                {/if}
+              </button>
+            {:else}
+              <button
+                type="button"
+                class="icon-act"
+                data-emphasis="primary"
+                title="下载到本地库"
+                aria-label="下载到本地库"
+                onclick={() => (downloadOpen = true)}
+                disabled={playback === null && loadingPlayback}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  class="h-5 w-5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                >
+                  <path d="M12 4v10" />
+                  <path d="m8 10.5 4 4 4-4" />
+                  <path d="M4.5 18.5h15" />
+                </svg>
+              </button>
+            {/if}
 
             <a
               href={video.url}

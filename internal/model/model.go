@@ -74,6 +74,9 @@ type Video struct {
 	Performers      []PerformerRef
 	// LocalLibraryIDs 记录该影片已落盘到哪些本地库（M2）。
 	LocalLibraryIDs []int64
+	// RotateDeg 是播放时画面顺时针转多少度（0/90/180/270），给「躺着拍」的片子用。
+	// 记在影片这一层而不是 library_files：角度是画面内容的属性，见 0013_video_rotate.sql。
+	RotateDeg int
 }
 
 type PerformerRef struct {

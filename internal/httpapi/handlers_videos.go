@@ -144,6 +144,36 @@ func (s *Server) handleVideoSeen(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleVideoRotate 记住这部影片要顺时针转多少度显示（0/90/180/270，点一次转 90°）。
+//
+// 和 /api/yt/videos/{id}/rotate 同一个口径，只是角度存在 videos 上（见 0013_video_rotate.sql）：
+// 有些片子**画面本身就是躺着的**（像素横着、容器里没有 rotation 元数据），任何播放器都只能照着
+// 横的放，只有用户知道该往哪边转。前端先改本地状态让画面立刻转，再把角度写回来，写失败就退回。
+func (s *Server) handleVideoRotate(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "影片 id 不对")
+		return
+	}
+	var in struct {
+		Deg int `json:"deg"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "请求格式不对")
+		return
+	}
+	if err := s.st.SetVideoRotateDeg(id, in.Deg); err != nil {
+		// 角度不在 0/90/180/270 里是调用方写错了，别报成 500
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "not_found", "影片不存在")
+			return
+		}
+		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "rotateDeg": ((in.Deg % 360) + 360) % 360})
+}
+
 // ensureVariants 返回（必要时解析并落库）该影片的清晰度列表，按质量降序，缓存 5 分钟。
 // needBandwidth=false 时走快路径：不额外查真实码率，起播更快（播放用不到码率）。
 // 第二个返回值是解析时顺手拿到的详情页元数据（标签、简介等），命中缓存时为 nil。
@@ -404,7 +434,7 @@ func (s *Server) serveLibraryPath(w http.ResponseWriter, r *http.Request, librar
 		return
 	}
 	root := filepath.Clean(lib.RootPath)
-	if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
+	if !insideRoot(root, abs) {
 		s.log.Warn("库文件路径越界，拒绝下发", "library", libraryID, "path", abs, "root", root)
 		writeErr(w, http.StatusForbidden, "forbidden", "文件不在库目录内")
 		return

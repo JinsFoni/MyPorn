@@ -679,3 +679,52 @@ func TestMigration0011MergesDuplicateXhamsterVideos(t *testing.T) {
 		t.Fatalf("清晰度缓存没搬过来: n=%d err=%v", n, err)
 	}
 }
+
+// 「躺着拍」的片子要靠用户点「旋转」，角度记在 videos.rotate_deg 上（0013 迁移）。
+// 这里守两件事：读回来的是刚写进去的角度；0/90/180/270 之外的值直接拒掉
+// （45° 会让画面转出一个黑三角，播放器也没法算缩放）。
+func TestVideoRotateDeg(t *testing.T) {
+	st := newTestStore(t)
+	id, _, err := st.UpsertVideo(&model.Video{
+		Platform: "xhamster", PlatformVideoID: "rotate-v1", Title: "躺着拍的", URL: "https://example.invalid/v",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := st.GetVideo(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.RotateDeg != 0 {
+		t.Fatalf("默认角度应为 0，得到 %d", v.RotateDeg)
+	}
+
+	if err := st.SetVideoRotateDeg(id, 90); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = st.GetVideo(id); err != nil {
+		t.Fatal(err)
+	}
+	if v.RotateDeg != 90 {
+		t.Fatalf("写 90 读回来是 %d", v.RotateDeg)
+	}
+
+	// 负数按模归到正角度：前端连点四次回到 0，不该因为 -90 报错
+	if err := st.SetVideoRotateDeg(id, -90); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = st.GetVideo(id); err != nil {
+		t.Fatal(err)
+	}
+	if v.RotateDeg != 270 {
+		t.Fatalf("-90 应归到 270，得到 %d", v.RotateDeg)
+	}
+
+	if err := st.SetVideoRotateDeg(id, 45); err == nil {
+		t.Fatal("45° 应该被拒绝")
+	}
+	if err := st.SetVideoRotateDeg(999999, 90); err == nil {
+		t.Fatal("不存在的影片应该报错")
+	}
+}

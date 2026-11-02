@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -240,7 +241,7 @@ func feedFilter(q FeedQuery) ([]string, []any) {
 
 // videoColumns 是 videos 行的读取顺序；ListFeed 与 AdjacentVideos 共用，保证 scanVideo 对得上。
 const videoColumns = `v.id, v.platform, v.platform_video_id, v.title, v.url, v.thumb_url, v.preview_url,
-			v.duration_sec, v.published_at, v.view_count, v.rating, v.tags, v.description, v.is_new`
+			v.duration_sec, v.published_at, v.view_count, v.rating, v.tags, v.description, v.is_new, v.rotate_deg`
 
 // scanVideo 按 videoColumns 的顺序扫一行出来（sql.Row 与 sql.Rows 都满足 rowScanner）。
 func scanVideo(row rowScanner) (*model.Video, error) {
@@ -250,7 +251,8 @@ func scanVideo(row rowScanner) (*model.Video, error) {
 	var rating sql.NullFloat64
 	var tags string
 	if err := row.Scan(&v.ID, &v.Platform, &v.PlatformVideoID, &v.Title, &v.URL, &v.ThumbURL,
-		&v.PreviewURL, &v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew); err != nil {
+		&v.PreviewURL, &v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew,
+		&v.RotateDeg); err != nil {
 		return nil, err
 	}
 	applyVideoScalars(v, pub, vc, rating, tags)
@@ -456,9 +458,10 @@ func (s *Store) GetVideo(id int64) (*model.Video, error) {
 	var rating sql.NullFloat64
 	var tags string
 	err := s.db.QueryRow(`SELECT id, platform, platform_video_id, title, url, thumb_url, preview_url,
-			duration_sec, published_at, view_count, rating, tags, description, is_new
+			duration_sec, published_at, view_count, rating, tags, description, is_new, rotate_deg
 		FROM videos WHERE id = ?`, id).Scan(&v.ID, &v.Platform, &v.PlatformVideoID, &v.Title, &v.URL,
-		&v.ThumbURL, &v.PreviewURL, &v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew)
+		&v.ThumbURL, &v.PreviewURL, &v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew,
+		&v.RotateDeg)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -580,4 +583,23 @@ func decodeTags(s string) []string {
 		out = []string{}
 	}
 	return out
+}
+
+// SetVideoRotateDeg 记住这部影片要顺时针转多少度显示（0/90/180/270）。
+// 只接受这四个值：别的角度（比如 45°）在 CSS 里会把画面转出一个黑三角，播放器也没法算缩放。
+func (s *Store) SetVideoRotateDeg(id int64, deg int) error {
+	deg = ((deg % 360) + 360) % 360
+	switch deg {
+	case 0, 90, 180, 270:
+	default:
+		return fmt.Errorf("旋转角度只能是 0/90/180/270，收到 %d", deg)
+	}
+	res, err := s.db.Exec(`UPDATE videos SET rotate_deg = ? WHERE id = ?`, deg, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

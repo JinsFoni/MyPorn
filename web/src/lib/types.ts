@@ -164,6 +164,13 @@ export interface Video {
   hasLocalFile: boolean;
   /** 已落盘的库 id 列表（M2） */
   localLibraryIds: number[];
+  /**
+   * 播放时画面顺时针转多少度（0/90/180/270）。
+   * 给「躺着拍」的片子用：像素本身就是横的、容器里也没有 rotation 元数据，
+   * 只能由用户点一次、把角度记在 `videos.rotate_deg` 上（见 `/api/videos/{id}/rotate`）。
+   * 缺省当 0 处理（离线预览那几份 mock 数据不带这个字段）。
+   */
+  rotateDeg?: number;
 }
 
 // ---- B 站（M7）----

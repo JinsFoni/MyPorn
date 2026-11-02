@@ -349,6 +349,12 @@
   &[data-rotated]:focus-visible {
     color: var(--color-hi);
   }
+  /* 破坏性动作（播放页那颗「删除」）：平时和别人一样是灰的，悬停才泛砖红——
+     不能一进页面就红着一颗键杵在那儿，那会让整排图标都在喊。 */
+  &[data-danger]:hover:not(:disabled),
+  &[data-danger]:focus-visible {
+    color: var(--color-brick);
+  }
   &:disabled {
     opacity: 0.45;
     pointer-events: none;
