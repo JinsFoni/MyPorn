@@ -5,6 +5,7 @@
    * 与影片卡（VideoCard）的差别：YouTube 的视频一律是 16:9，不做 3:4 竖版裁切；
    * 时间可能未知（深度回填走 yt-dlp flat，实测没有时间戳），所以「时间未知」是正常态，
    * 不显示成错误、也不要显示 1970。想让它有日期：点开单条会补，墙上的「补齐」整批补（jobs 的 yt_meta）。
+   * 时长同理——RSS 通道不给时长，也是这条任务补上（卡片上没有时长就是还没补过）。
    */
   import CoverArt from './CoverArt.svelte';
   import { imageUrl } from '../lib/img';

@@ -592,11 +592,15 @@ export const api = {
     return request<YtHealth>('/api/yt/health');
   },
   /**
-   * 给「时间未知」的那批视频补发布时间：后台任务，一条一个普通 GET。
-   * total = 当前缺多少条；jobId = 0 表示本来就一条不缺。
+   * 给缺元信息的那批视频补一遍（发布时间 / 时长 / 播放量）：后台任务，一条一个普通 GET。
+   * total = 当前要补多少条；jobId = 0 表示本来就一条不缺。
+   * 两样缺口分开数：RSS 通道不给时长、yt-dlp flat 通道不给时间戳。
    */
-  ytFillDates(): Promise<{ jobId: number; total: number }> {
-    return request<{ jobId: number; total: number }>('/api/yt/fill-dates', { method: 'POST' });
+  ytFillMeta(): Promise<{ jobId: number; total: number; missingDates: number; missingDurations: number }> {
+    return request<{ jobId: number; total: number; missingDates: number; missingDurations: number }>(
+      '/api/yt/fill-meta',
+      { method: 'POST' },
+    );
   },
   manageYt(): Promise<YtManageResponse> {
     return request<YtManageResponse>('/api/manage/youtube');

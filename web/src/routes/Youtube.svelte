@@ -39,8 +39,17 @@
   let channelsLoaded = $state(false);
   let channelsError = $state('');
   let health = $state<YtHealth | null>(null);
-  /** 补发布时间正在排队/执行（按钮转圈，避免连点排一串任务） */
+  /** 补元信息正在排队/执行（按钮转圈，避免连点排一串任务） */
   let filling = $state(false);
+  /** 墙上那条提示的文字：把「缺时间」「缺时长」两个数拼成一句话，都缺就都写 */
+  const metaGapHint = $derived.by(() => {
+    const parts: string[] = [];
+    const dates = health?.missingDates ?? 0;
+    const durations = health?.missingDurations ?? 0;
+    if (dates > 0) parts.push(`${String(dates)} 条没有发布时间`);
+    if (durations > 0) parts.push(`${String(durations)} 条没有时长`);
+    return parts.join('、');
+  });
 
   // ---- 筛选（唯一真源是地址栏：?channel=<id>&mode=unseen|saved） ----
   /**
@@ -120,20 +129,22 @@
   }
 
   /**
-   * 补齐「时间未知」：排一个后台任务，一条一个普通 GET（观看页），跑完 SSE 会把墙重拉一遍。
-   * 为什么需要：深度回填走 yt-dlp 的 flat 列表，那个通道一个时间戳都不给，老条目全是未知。
+   * 补齐缺的元信息（发布时间 / 时长）：排一个后台任务，一条一个普通 GET（观看页），
+   * 跑完 SSE 会把墙重拉一遍。
+   * 为什么需要：两组通道各缺一半——深度回填走 yt-dlp 的 flat 列表，那个通道一个时间戳都不给；
+   * RSS 增量那条通道不给时长。缺哪样都走同一个任务补齐。
    */
-  async function fillDates(): Promise<void> {
+  async function fillMeta(): Promise<void> {
     if (filling) return;
     filling = true;
     try {
-      const res = await api.ytFillDates();
+      const res = await api.ytFillMeta();
       if (res.total === 0) {
-        live.toast('已经没有缺发布时间的视频了', 'success');
+        live.toast('已经没有缺元信息的视频了', 'success');
         await loadHealth();
         return;
       }
-      live.toast(`正在补齐 ${String(res.total)} 条发布时间`, 'success');
+      live.toast(`正在补齐 ${String(res.total)} 条（发布时间 / 时长）`, 'success');
     } catch (err) {
       live.toast(messageFor(err), 'error');
     } finally {
@@ -182,7 +193,7 @@
     seenVersion = v;
     wallKey += 1;
     void loadChannels();
-    // 补发布时间的任务跑完也走这条路（AppShell 里 yt_meta done → bumpYt），
+    // 补元信息的任务跑完也走这条路（AppShell 里 yt_meta done → bumpYt），
     // 顺手把「还缺多少条」重新数一遍。
     void loadHealth();
   });
@@ -358,18 +369,19 @@
     </div>
   {/if}
 
-  <!-- 深度回填来的条目没有发布时间（yt-dlp 的 flat 列表不给）：一条条补，别让它一直显示「时间未知」 -->
-  {#if (health?.missingDates ?? 0) > 0}
+  <!-- 两条抓取通道各缺一半：深度回填（yt-dlp flat）不给时间戳、RSS 增量不给时长。
+       缺哪样，卡片上就少哪一块（「时间未知」或者干脆没有时长），所以一条条补一遍。 -->
+  {#if metaGapHint}
     <div class="flex items-center gap-2 rounded-xl bg-panel px-3 py-2 text-meta text-muted">
       <span class="text-brick">●</span>
       <p class="min-w-0 flex-1">
-        有 {String(health?.missingDates)} 条视频没有发布时间（深度回填只给了标题和时长）。
+        有 {metaGapHint}（缺的这些卡片上就没有时长或显示「时间未知」）。
       </p>
       <button
         type="button"
         class="shrink-0 rounded-full px-3 py-1 text-meta text-muted transition-colors hover:bg-raise hover:text-fg disabled:opacity-50"
         disabled={filling}
-        onclick={() => void fillDates()}
+        onclick={() => void fillMeta()}
       >
         {filling ? '排队中…' : '补齐'}
       </button>

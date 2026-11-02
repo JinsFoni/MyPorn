@@ -136,12 +136,40 @@ func (r *Runner) runYtSyncJob(ctx context.Context, j *model.Job, c *Ctl) error {
 		r.recordYtError(ch.ID, nil)
 	}
 
+	r.autoFillYtMeta()
 	if failed > 0 {
 		c.Progress(100, fmt.Sprintf("同步完成，%d 个频道失败", failed), 0, 0, 0)
 		return nil
 	}
 	c.Progress(100, fmt.Sprintf("同步完成，共 %d 个频道", len(channels)), 0, 0, 0)
 	return nil
+}
+
+// ytMetaAutoLimit 是「同步完顺手补一次」的上限。
+//
+// 一轮 RSS 增量最多进 15 条/频道，40 条足够把这次新增的缺口清掉；更大的积压（比如刚点过
+// 深度回填，200 行全缺发布时间）不在同步里顺手跑——那是十几分钟的观看页请求，
+// 留给墙上的「补齐」按钮，用户点了才跑。顺带也避免了「永远补不上的行（已删除/私享）」
+// 在每轮同步里被反复重抓：积压超过这个数就不再自动跑。
+const ytMetaAutoLimit = 40
+
+// autoFillYtMeta 同步完检查一次缺口，积压不大的话直接排一个 yt_meta。
+//
+// 为什么需要：RSS 那条通道**不带时长**（yt-dlp flat 才带），所以每轮增量同步之后，
+// 新进来的那批行就有日期没时长、卡片上光秃秃的。补一次是每条一次 GET（实测 1.5 秒），
+// 十几条也就十几秒，比让用户自己发现「有的卡没有时长」再点补齐强。
+func (r *Runner) autoFillYtMeta() {
+	gaps, err := r.st.CountYtVideosMissingMeta()
+	if err != nil {
+		r.log.Warn("统计缺元信息的视频失败", "err", err)
+		return
+	}
+	if gaps.Rows == 0 || gaps.Rows > ytMetaAutoLimit {
+		return
+	}
+	if _, err := r.EnqueueYtMeta(ytMetaAutoLimit); err != nil {
+		r.log.Warn("排队补元信息失败", "err", err)
+	}
 }
 
 // ytIncrement 走 RSS：1 次请求、最近 15 条、有绝对时间。
@@ -475,19 +503,19 @@ func moveFile(src, dst string) error {
 	return os.Remove(src)
 }
 
-// ---- yt_meta：给「时间未知」的视频补发布时间 ----
+// ---- yt_meta：给缺元信息（发布时间 / 时长 / 播放量）的视频补一遍 ----
 
 // ytMetaDefault 是一次补多少条。
 //
 // 一条一次普通 GET（实测 1.29MB 响应、1.5 秒），所以 500 条上限 ≈ 12 分钟；
-// 排在后台、可中断，跑完墙上的「时间未知」就没了。默认给足，让用户点一次就清干净。
+// 排在后台、可中断，跑完墙上的「时间未知」和「没有时长」就没了。默认给足，让用户点一次就清干净。
 const ytMetaDefault = 500
 
 type ytMetaPayload struct {
 	Limit int `json:"limit"`
 }
 
-// EnqueueYtMeta 投递一次「补发布时间」；已经有在跑的就不重复投。
+// EnqueueYtMeta 投递一次「补元信息」；已经有在跑的就不重复投。
 func (r *Runner) EnqueueYtMeta(limit int) (int64, error) {
 	if limit <= 0 {
 		limit = ytMetaDefault
@@ -498,11 +526,14 @@ func (r *Runner) EnqueueYtMeta(limit int) (int64, error) {
 	return r.st.Enqueue(model.JobTypeYtMeta, ytMetaPayload{Limit: limit}, 9)
 }
 
-// runYtMetaJob 逐条补发布时间。
+// runYtMetaJob 逐条补元信息。
 //
 // 为什么不用 yt-dlp：单条要起进程、实测 4.1 秒，补 200 条得十几分钟；
 // 观看页是一次 GET、1.5 秒，同样的三个字段（发布时间 / 播放量 / 时长）都在页面 JSON 里。
 // 拿不到就跳过那一条（视频可能已删除），不因为一条失败放弃整批。
+//
+// 补的到底是哪种缺口：见 store 的 `ListYtVideosMissingMeta`——两条抓取通道各缺一半
+// （RSS 有日期没时长、yt-dlp flat 有时长没日期），哪边缺都走这一条路补齐。
 func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 	var p ytMetaPayload
 	if j.Payload != "" {
@@ -510,12 +541,12 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 			return fmt.Errorf("任务参数损坏")
 		}
 	}
-	rows, err := r.st.ListYtVideosMissingDate(p.Limit)
+	rows, err := r.st.ListYtVideosMissingMeta(p.Limit)
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 {
-		c.Progress(100, "没有缺发布时间的视频", 0, 0, 0)
+		c.Progress(100, "没有缺元信息的视频", 0, 0, 0)
 		return nil
 	}
 
@@ -526,14 +557,14 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 			return err
 		}
 		c.Progress(float64(i)/float64(len(rows))*100,
-			fmt.Sprintf("补发布时间 %d/%d（已补 %d，跳过 %d）", i+1, len(rows), filled, failed), 0, 0, 0)
+			fmt.Sprintf("补元信息 %d/%d（已补 %d，跳过 %d）", i+1, len(rows), filled, failed), 0, 0, 0)
 
 		info, err := ytsub.WatchMeta(ctx, client, r.ytThrottle, row.VideoID)
 		if err != nil {
 			failed++
 			// 限流 / 被拦：后面的必然也失败，收工（已经补上的那条条都写库了）。
 			if k := social.KindOf(err); k == social.KindRateLimited || k == social.KindBlocked {
-				c.Progress(100, fmt.Sprintf("补发布时间被拦：%v", err), 0, 0, 0)
+				c.Progress(100, fmt.Sprintf("补元信息被拦：%v", err), 0, 0, 0)
 				return nil
 			}
 			continue
@@ -543,7 +574,7 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 			published = &info.PublishedAt
 		}
 		if err := r.st.FillYtVideoMeta(row.ID, published, info.DateSource, info.DurationSec, info.Views); err != nil {
-			r.log.Warn("写回发布时间失败", "ytVideo", row.ID, "err", err)
+			r.log.Warn("写回元信息失败", "ytVideo", row.ID, "err", err)
 			failed++
 			continue
 		}
@@ -555,6 +586,6 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 		msg += fmt.Sprintf("，%d 条这次没拿到（可能已删除，也可能只是这次请求失败，可以再点一次）", failed)
 	}
 	c.Progress(100, msg, 0, 0, 0)
-	r.log.Info("补发布时间完成", "filled", filled, "failed", failed)
+	r.log.Info("补元信息完成", "filled", filled, "failed", failed)
 	return nil
 }

@@ -226,7 +226,7 @@ yt-dlp --no-playlist --newline --socket-timeout 20 --retries 3 --concurrent-frag
 | 深度回填 | `yt_sync`（`deep=true` 参数） | 1 | 添加频道时自动跑；管理页可手动重跑 |
 | 下载 | `yt_download` | 由现有下载并发控制 | §6 |
 | 单条补时间 | 不是任务：`POST /api/yt/videos/{id}/refresh` | — | 点开一条没有时间的视频时同步调一次（4 秒） |
-| 整批补时间 | `yt_meta` | 1 | 走观看页（`internal/ytsub/watch.go`），不依赖 yt-dlp；墙上「补齐」按钮 = `POST /api/yt/fill-dates` |
+| 整批补元信息 | `yt_meta` | 1 | 走观看页（`internal/ytsub/watch.go`），不依赖 yt-dlp；补**发布时间 / 时长 / 播放量**三样（两条抓取通道各缺一半：RSS 不给时长、yt-dlp flat 不给时间戳）。墙上「补齐」按钮 = `POST /api/yt/fill-meta`；每轮 `yt_sync` 结束时缺的行 ≤ 40 条会自动排一次 |
 
 调度沿用现有 scheduler；`enabled=0` 跳过。SSE 新增 `yt.new`（`{channelId, title, count}`），侧边栏未看角标复用 `live`。
 
@@ -257,8 +257,8 @@ POST   /api/yt/videos/{id}/save               {saved:true|false}
 POST   /api/yt/videos/{id}/download           {libraryId} → 入队 yt_download
 POST   /api/yt/channels/{id}/download-unseen  {libraryId} → 整频道批量入队
 GET    /api/manage/youtube                    管理页总览
-GET    /api/yt/health                         yt-dlp 路径 / 版本 / 是否过期 / ffmpeg 可用 / missingDates（还缺多少条发布时间）
-POST   /api/yt/fill-dates                     → 入队 yt_meta（整批补发布时间），返回 {jobId, total}
+GET    /api/yt/health                         yt-dlp 路径 / 版本 / 是否过期 / ffmpeg 可用 / missingDates、missingDurations（还缺多少条时间 / 时长）
+POST   /api/yt/fill-meta                      → 入队 yt_meta（整批补元信息），返回 {jobId, total, missingDates, missingDurations}
 PUT    /api/settings                          + platformProxy.youtube / yt_* 五项
 GET    /api/yt/videos/{id}/stream             站内播放：解析结果 + 画质清单（§14）
 GET    /api/yt/videos/{id}/stream.m3u8[?q=]   改写后的单变体 master

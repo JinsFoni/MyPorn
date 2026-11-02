@@ -658,17 +658,23 @@ type YtVideoLite struct {
 	ChannelID int64
 }
 
-// ListYtVideosMissingDate 列出还没有发布时间的视频（墙上的「时间未知」）。
+// ListYtVideosMissingMeta 列出缺元信息的视频：没有发布时间的，或者没有时长的（直播除外）。
 //
-// 为什么会有这种行：yt-dlp 的 flat 列表不给时间戳，深度回填回来的老条目全是空的；
-// RSS 那条通道只覆盖最近 15 条。补齐的办法见 jobs 里的 yt_meta（走观看页，一次 GET 一个）。
-func (s *Store) ListYtVideosMissingDate(limit int) ([]YtVideoLite, error) {
+// 为什么会有这种行：两条抓取通道各缺一半——RSS（`yt_sync` 的默认模式）有绝对时间但**不带时长**；
+// yt-dlp 的 flat 列表（深度回填）有时长但没有时间戳。所以「订阅后只跑过 RSS」的那些行
+// 卡片上就没有时长（2026-11-02 实测库里 184 条里 54 条这样，`date_source` 全是 rss），
+// 而墙上原来那条提示条只数「缺发布时间」，这批一条都不会去补。
+// 补齐的办法见 jobs 里的 yt_meta：走观看页，一次 GET 同时带回时间 / 时长 / 播放量。
+//
+// 直播不算缺时长（本来就没有固定时长），`hidden` 的行也不补——看不见，白花请求。
+func (s *Store) ListYtVideosMissingMeta(limit int) ([]YtVideoLite, error) {
 	if limit <= 0 {
 		limit = 500
 	}
 	rows, err := s.db.Query(`SELECT id, video_id, channel_id FROM yt_videos
-		WHERE COALESCE(published_at, '') = ''
-		ORDER BY id LIMIT ?`, limit)
+		WHERE hidden = 0
+		  AND (COALESCE(published_at, '') = '' OR (duration_sec = 0 AND is_live = 0))
+		ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -684,11 +690,25 @@ func (s *Store) ListYtVideosMissingDate(limit int) ([]YtVideoLite, error) {
 	return out, rows.Err()
 }
 
-// CountYtVideosMissingDate 数一下还有多少条没发布时间（给墙上的提示条用）。
-func (s *Store) CountYtVideosMissingDate() (int, error) {
-	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM yt_videos WHERE COALESCE(published_at, '') = ''`).Scan(&n)
-	return n, err
+// YtMetaGaps 是「缺元信息」的三个数（墙上的提示条和补齐接口都用它）。
+type YtMetaGaps struct {
+	// Rows 是要补的行数：缺时间或缺时长，一行只算一次（两样都缺不会算两遍）
+	Rows int
+	// Dates 是缺发布时间的行数
+	Dates int
+	// Durations 是缺时长的行数（直播不算——直播本来就没有固定时长）
+	Durations int
+}
+
+// CountYtVideosMissingMeta 数一下还有多少条缺元信息（给墙上的提示条用）。
+func (s *Store) CountYtVideosMissingMeta() (YtMetaGaps, error) {
+	var g YtMetaGaps
+	err := s.db.QueryRow(`SELECT
+		COALESCE(SUM(COALESCE(published_at, '') = '' OR (duration_sec = 0 AND is_live = 0)), 0),
+		COALESCE(SUM(COALESCE(published_at, '') = ''), 0),
+		COALESCE(SUM(duration_sec = 0 AND is_live = 0), 0)
+		FROM yt_videos WHERE hidden = 0`).Scan(&g.Rows, &g.Dates, &g.Durations)
+	return g, err
 }
 
 // ---- 游标 ----

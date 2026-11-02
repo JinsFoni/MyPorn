@@ -49,15 +49,14 @@ func parseWatchMeta(page string) (Video, error) {
 	if raw == "" {
 		raw = firstMatch(page, watchItemDateRe)
 	}
-	if raw == "" {
-		// 视频不存在 / 已被删除 / 被登录墙挡住，都归到这里：没有时间就不补。
-		return Video{}, social.NotFound("观看页里没有发布时间（视频可能已删除或需要登录）")
+	v := Video{DateSource: "watch"}
+	if raw != "" {
+		t, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+		if err != nil {
+			return Video{}, social.Upstream("发布时间格式不认识："+raw, err)
+		}
+		v.PublishedAt = t.UTC()
 	}
-	t, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
-	if err != nil {
-		return Video{}, social.Upstream("发布时间格式不认识："+raw, err)
-	}
-	v := Video{PublishedAt: t.UTC(), DateSource: "watch"}
 	// viewCount 在 microformat 里常常是 0（没开放），真正的数字在 videoDetails 里，
 	// 所以取第一个非 0 的；时长同理（0 当没拿到）。
 	if n := firstPositive(page, watchViewsRe); n > 0 {
@@ -65,6 +64,12 @@ func parseWatchMeta(page string) (Video, error) {
 	}
 	if n := firstPositive(page, watchLengthRe); n > 0 {
 		v.DurationSec = int(n)
+	}
+	// 只有时间缺、时长在的页面也要收：卡片上那块「时长」是独立补的
+	// （RSS 通道不带时长），这里拿不到时间就别连时长一起丢了。
+	// 两样都没有才是真正的「没戏」——视频不存在 / 已被删除 / 被登录墙挡住。
+	if v.PublishedAt.IsZero() && v.DurationSec == 0 {
+		return Video{}, social.NotFound("观看页里没有发布时间也没有时长（视频可能已删除或需要登录）")
 	}
 	if strings.Contains(page, `"isLiveContent":true`) {
 		v.IsLive = true

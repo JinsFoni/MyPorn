@@ -480,15 +480,17 @@ func (s *Server) handleYtHealth(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		info = dlp.Version(ctx)
 	}
-	// 顺带把「有多少条没发布时间」带回去：墙上要靠它决定显不显示「补齐」那一条。
-	missing := 0
-	if n, err := s.st.CountYtVideosMissingDate(); err == nil {
-		missing = n
+	// 顺带把「有多少条缺元信息」带回去：墙上要靠它决定显不显示「补齐」那一条。
+	// 两样分开数——缺时间（深度回填来的老条目）和缺时长（只跑过 RSS 的条目）是两批不同的行。
+	var gaps store.YtMetaGaps
+	if g, err := s.st.CountYtVideosMissingMeta(); err == nil {
+		gaps = g
 	}
 	writeJSON(w, http.StatusOK, struct {
 		ytsub.VersionInfo
-		MissingDates int `json:"missingDates"`
-	}{VersionInfo: info, MissingDates: missing})
+		MissingDates     int `json:"missingDates"`
+		MissingDurations int `json:"missingDurations"`
+	}{VersionInfo: info, MissingDates: gaps.Dates, MissingDurations: gaps.Durations})
 }
 
 // ---- 内部工具 ----
@@ -525,28 +527,33 @@ func (s *Server) ytLibraryID(explicit int64) (int64, error) {
 	return lib.ID, nil
 }
 
-// handleYtFillDates 把「时间未知」的那批视频排进后台补发布时间（jobs 的 yt_meta）。
+// handleYtFillMeta 把缺元信息的那批视频排进后台补一遍（jobs 的 yt_meta）。
 //
-// 为什么会缺：深度回填走 yt-dlp 的 flat 列表，那个通道不给时间戳；RSS 只覆盖最近 15 条。
-// 所以墙上下半截（越老越靠后）全是「时间未知」。补一次以后就归一了。
-func (s *Server) handleYtFillDates(w http.ResponseWriter, r *http.Request) {
+// 为什么会缺：两条抓取通道各缺一半——深度回填走 yt-dlp 的 flat 列表，那个通道不给时间戳；
+// RSS（增量同步）不给时长。所以「只跑过 RSS」的行卡片上没有时长、「只深度回填过」的行显示
+// 「时间未知」。观看页一次 GET 三个字段都有，补一次以后就归一了。
+func (s *Server) handleYtFillMeta(w http.ResponseWriter, r *http.Request) {
 	if s.runner == nil {
 		writeErr(w, http.StatusConflict, "no_runner", "后台任务没启动")
 		return
 	}
-	total, err := s.st.CountYtVideosMissingDate()
+	// total 取「要补的行数」而不是两个数之和：一行可能两样都缺，加两次会多算。
+	gaps, err := s.st.CountYtVideosMissingMeta()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", "统计缺发布时间的视频失败")
+		writeErr(w, http.StatusInternalServerError, "internal", "统计缺元信息的视频失败")
 		return
 	}
-	if total == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"jobId": 0, "total": 0})
+	if gaps.Rows == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"jobId": 0, "total": 0,
+			"missingDates": gaps.Dates, "missingDurations": gaps.Durations})
 		return
 	}
 	jobID, err := s.runner.EnqueueYtMeta(0)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", "排队补齐发布时间失败")
+		writeErr(w, http.StatusInternalServerError, "internal", "排队补齐元信息失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"jobId": jobID, "total": total})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"jobId": jobID, "total": gaps.Rows, "missingDates": gaps.Dates, "missingDurations": gaps.Durations,
+	})
 }

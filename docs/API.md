@@ -796,20 +796,25 @@ POST /api/moments/cooldown
 `fork/exec … no such file or directory`。现在 `path` 照旧回显用户填过的那一条，
 `error` 说明为什么用不了，界面两处（管理 → YouTube、设置 → YouTube）都直接显示它。
 
-`missingDates` = 还没有发布时间的视频条数（墙上据此决定显不显示「有 N 条视频没有发布时间 · 补齐」那一条）。
+`missingDates` / `missingDurations` = 还没有发布时间 / 还没有时长的视频条数（墙上据此决定显不显示「有 N 条没有时长 · 补齐」那一条）。两样分开数是因为两条抓取通道各缺一半：RSS（增量同步）不给时长，yt-dlp 的 flat 列表（深度回填）不给时间戳。直播不算「缺时长」。
 
 `stale` 的判据是版本日期超过 90 天。这个接口给的是「为什么下载会失败」的答案：
 实测 2026.07.04 版全线 403，2026.10.26 正常——所以版本号必须能在界面上看到。
 
-### C13b. `POST /api/yt/fill-dates`
+### C13b. `POST /api/yt/fill-meta`
 
 ```json
-{} → 200 { "jobId": 85, "total": 27 }
+{} → 200 { "jobId": 85, "total": 54, "missingDates": 0, "missingDurations": 54 }
 ```
 
-排一个 `yt_meta` 任务，逐条打开观看页补发布时间（一次普通 GET，实测 1.5s/条，27 条 45 秒）。
-一条不缺时返回 `{ "jobId": 0, "total": 0 }`，同类型任务已在队列里时 `jobId=0`。
-跑完 SSE 会推 `job.updated`（`type=yt_meta, status=done`），墙上重拉并重新数 `missingDates`。
+排一个 `yt_meta` 任务，逐条打开观看页补**发布时间 / 时长 / 播放量**（一次普通 GET，实测 1.5s/条，
+54 条约 90 秒）。`total` 是「要补的行数」（缺时间或缺时长，一行只算一次），
+`missingDates` / `missingDurations` 分开给两个口径。
+一条不缺时返回 `{ "jobId": 0, "total": 0, … }`，同类型任务已在队列里时 `jobId=0`。
+跑完 SSE 会推 `job.updated`（`type=yt_meta, status=done`），墙上重拉并重新数那两个数。
+
+观看页偶尔会请求失败（实测 54 条一轮补上 44 条、再点两次补完剩下 10 条），
+所以任务文案写「N 条这次没拿到（可能已删除，也可能只是这次请求失败，可以再点一次）」。
 
 ### C14. `GET /api/manage/youtube`
 

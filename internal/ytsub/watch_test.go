@@ -50,3 +50,21 @@ func TestParseWatchMetaNoDate(t *testing.T) {
 		t.Fatal("没有发布时间时应当报错，不能瞎猜一个值")
 	}
 }
+
+// 时间被隐藏（或页面只放了 videoDetails）但时长在的页面：时长要照样收下来。
+// 卡片上的时长是独立补的一格（RSS 通道不给时长），别因为时间缺就整条丢掉。
+func TestParseWatchMetaDurationOnly(t *testing.T) {
+	page := `<html><head><title>一条视频 - YouTube</title></head><body>
+		"videoDetails":{"lengthSeconds":"247","viewCount":"1234"}
+	</body></html>`
+	got, err := parseWatchMeta(page)
+	if err != nil {
+		t.Fatalf("只有时长时应该收下时长，却报错: %v", err)
+	}
+	if got.DurationSec != 247 {
+		t.Fatalf("时长 = %d，期望 247", got.DurationSec)
+	}
+	if !got.PublishedAt.IsZero() {
+		t.Fatalf("没有时间就该是零值，实际 = %v", got.PublishedAt)
+	}
+}

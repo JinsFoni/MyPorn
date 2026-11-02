@@ -949,4 +949,6 @@ export interface YtHealth {
   error: string;
   /** 还没有发布时间的视频条数（墙上显示「补齐」那一条用） */
   missingDates: number;
+  /** 还没有时长的视频条数（只跑过 RSS 的那批；直播不算） */
+  missingDurations: number;
 }
