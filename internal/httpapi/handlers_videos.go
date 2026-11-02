@@ -387,16 +387,25 @@ func (s *Server) handleVideoFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	abs := filepath.Clean(lf.VideoPath)
-	lib, err := s.st.GetLibrary(lf.LibraryID)
+	// 落库路径理论上都来自我们自己，但这条接口是"按库根放行任意文件"，
+	// 万一库根被改小、或者记录被写脏，这里必须拦住，不能变成任意文件读取。
+	s.serveLibraryPath(w, r, lf.LibraryID, abs)
+}
+
+// serveLibraryPath 把库里某个绝对路径发出去，越界/不存在都在这里挡掉。
+//
+// 两道闸门共用一份：视频文件（/api/videos/{id}/file）和海报剧照（/api/videos/{id}/art）。
+// 它们都是「按库根放行任意文件」，只要有一处漏了校验就是任意文件读取。
+func (s *Server) serveLibraryPath(w http.ResponseWriter, r *http.Request, libraryID int64, absPath string) {
+	abs := filepath.Clean(absPath)
+	lib, err := s.st.GetLibrary(libraryID)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "库不存在")
 		return
 	}
-	// 落库路径理论上都来自我们自己，但这条接口是"按库根放行任意文件"，
-	// 万一库根被改小、或者记录被写脏，这里必须拦住，不能变成任意文件读取。
 	root := filepath.Clean(lib.RootPath)
 	if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
-		s.log.Warn("库文件路径越界，拒绝下发", "video", id, "path", abs, "root", root)
+		s.log.Warn("库文件路径越界，拒绝下发", "library", libraryID, "path", abs, "root", root)
 		writeErr(w, http.StatusForbidden, "forbidden", "文件不在库目录内")
 		return
 	}

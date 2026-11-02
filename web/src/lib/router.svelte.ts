@@ -22,6 +22,7 @@ export type RouteName =
   | 'performer'
   | 'discover'
   | 'downloads'
+  | 'library'
   | 'moments'
   | 'youtube'
   | 'ytvideo'
@@ -39,6 +40,8 @@ const ROUTES: readonly RouteDef[] = [
   { name: 'performer', pattern: '/performer/:id', title: '艺人' },
   { name: 'discover', pattern: '/discover', title: '发现艺人' },
   { name: 'downloads', pattern: '/downloads', title: '下载' },
+  // 媒体库：磁盘上已经下载下来的影片（和 /downloads 那个任务队列不是一回事）
+  { name: 'library', pattern: '/library', title: '媒体库' },
   { name: 'moments', pattern: '/moments', title: '动态' },
   { name: 'youtube', pattern: '/youtube', title: 'YouTube' },
   // 单条 YouTube 视频：和 `/video/:id` 一样是整页播放（2026-11-02 从墙上的弹窗搬过来的）。

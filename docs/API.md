@@ -1106,3 +1106,67 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
 | `GET /api/manage` 的 `performers*` | 同样排除；`videos` / `files` / `bytes` / `downloads` 仍是全库口径 |
 | 影片 DTO 的 `performers[]` | 多一个 `avatarUrl`（已代理）。B 站墙上每张卡的圆头像靠它：「订阅艺人头像表」不含 B 站 |
 | SSE `video.new` | 多一个 `platform` 字段；前端据此只刷 B 站墙，不动「关注」流 |
+
+## 附：媒体库（本地已下载的影片）
+
+「下载」页看的是**任务队列**（排队中 / 下载中 / 失败 / 历史），这一组接口看的是
+**磁盘上已经有的东西**（`library_files` 里那些文件真在的记录）。页面是 `/library`，
+2026-11-03 加（用户要求「加一个媒体库页面，显示下载的视频」）。
+
+### E1. `GET /api/library/videos` —— 已落盘的影片列表
+
+查询参数（都可选，全部走服务端）：
+
+| 参数 | 含义 |
+|---|---|
+| `libraryId` | 只看某个库；缺省 = 全部库 |
+| `q` | 标题 **或** 文件名模糊匹配（`videos.title LIKE ? OR library_files.video_name LIKE ?`——下载会按命名模板改名，两边不一定一样） |
+| `sort` | `recent`（默认，按 `library_files.created_at` 倒序） / `size`（体积） / `duration`（时长） / `title`（文件名升序） |
+| `cursor` / `limit` | keyset 分页，默认 24，上限 100 |
+
+```
+→ 200 {
+  "items": [{
+    "videoId": 2893, "libraryId": 1, "libraryName": "主库",
+    "title": "4K 美女外拍｜克罗拉[04]｜Bikini Lookbook｜비키니 룩북 (2026)",
+    "fileName": "4K 美女外拍｜克罗拉[04]｜….mp4",
+    "platform": "youtube", "performers": [],
+    "durationSec": 201, "width": 3840, "height": 2160, "sizeBytes": 410375125,
+    "downloadedAt": "2026-11-02T17:51:58Z",
+    "thumbUrl": "/api/img?p=youtube&u=https%3A%2F%2Fi2.ytimg.com%2F…",
+    "localThumbUrl": "/api/videos/2893/art?libraryId=1&k=thumb",
+    "videoPath": "/…/媒体库/YouTube/4kaamg/…/4K 美女外拍….mp4",
+    "relDir": "YouTube/4kaamg/4K 美女外拍…",
+    "missing": false,
+    "fileUrl": "/api/videos/2893/file?libraryId=1"
+  }],
+  "nextCursor": "…" | null,
+  "total": 8, "totalSizeBytes": 1296960839,
+  "byLibrary": [{ "libraryId": 1, "name": "主库", "fileCount": 8, "sizeBytes": 1296960839 }]
+}
+```
+
+几个口径，改之前先看：
+
+- **排序键是落盘时间，不是发布时间**：这一页回答的是「我什么时候下回来的」，不是「平台什么时候发的」。
+- `total` / `totalSizeBytes` 跟随**全部筛选**；`byLibrary` 只跟随 `q`（不跟 `libraryId`）——
+  它画的是筛选胶囊上的数字，得先看得见「每个库各有几部」才点得下去。
+- `localThumbUrl` 只在**那张图真的还在磁盘上**时才给（服务端 `os.Stat` 过）；为 null 时前端退回
+  `thumbUrl`（远端代理）。这样封面不会出现「404 破图」。
+- `missing=true` = 记录在、文件没了（被手动删/挪走）。卡片要压暗并写「文件已不在磁盘上」，
+  点击不再跳播放页（跳过去只会 404）。
+- 同一部影片可以同时出现在两个库 → 返回**两行**，`keyOf` 用 `videoId-libraryId`，不要只用 `videoId`。
+- 播放直接复用 `GET /api/videos/{id}/file`（`handlePlayback` 里本地那一路本来就排第一）。
+
+### E2. `GET /api/videos/{id}/art?libraryId=1&k=thumb` —— 本地海报 / 剧照
+
+`k` = `thumb`（默认） / `poster` / `fanart`，对应下载时一起落盘的 `thumb.jpg` / `poster.jpg` /
+`fanart.jpg`。`→ 200 image/jpeg`，带 `Cache-Control: private, max-age=86400`；
+没落盘（字段为空）或文件不在磁盘上 → 404。
+
+**它和 `/api/img` 是两条线**：`/api/img` 是远端代理（平台封面地址会过期），这个是本地文件。
+路径校验和 `/api/videos/{id}/file` 共用同一个 `serveLibraryPath`：库根之外一律 403
+（`library_files.thumb_path` 被写脏时也不会变成任意文件读取，已有测试 `TestVideoArtRejectsOutsideRoot`）。
+
+实测（2026-11-03，本机 4K 那条 2893）：`k=thumb` → 200 `image/jpeg` 121 664 B；
+`k=poster` → 200 53 746 B；`k=fanart` → 200（这条片 fanart 与 thumb 是同一张）。

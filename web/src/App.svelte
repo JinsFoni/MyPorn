@@ -52,6 +52,13 @@
     return momentsPage;
   }
 
+  /** 媒体库（本地已下载的影片）同样懒加载：卡片墙的代码不该进首屏包 */
+  let libraryPage: Promise<{ default: PlainPage }> | null = null;
+  function loadLibrary(): Promise<{ default: PlainPage }> {
+    libraryPage ??= import('./routes/Library.svelte') as Promise<{ default: PlainPage }>;
+    return libraryPage;
+  }
+
   /** B 站视频墙同样是独立一页，一样懒加载 */
   let bilibiliPage: Promise<{ default: PlainPage }> | null = null;
   function loadBilibili(): Promise<{ default: PlainPage }> {
@@ -77,6 +84,7 @@
     performer: '',
     discover: '',
     downloads: '',
+    library: '媒体库',
     // 动态页同样不画标题（2026-11-02：和 YouTube / B 站一样，顶部直接是博主头像条）
     moments: '',
     // YouTube / B 站这两页**连标题都不画**（2026-11-02：用户要求去掉左上角那个页面名）：
@@ -200,6 +208,15 @@
       {/await}
     {:else if shown.name === 'downloads'}
       <Downloads />
+    {:else if shown.name === 'library'}
+      {#await loadLibrary()}
+        <p class="py-16 text-center text-ui text-dim">正在载入…</p>
+      {:then mod}
+        {@const LibraryPage = mod.default}
+        <LibraryPage />
+      {:catch}
+        <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
+      {/await}
     {:else if shown.name === 'manage'}
       {#await loadManage()}
         <p class="py-16 text-center text-ui text-dim">正在载入…</p>

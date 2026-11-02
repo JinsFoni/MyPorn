@@ -194,6 +194,9 @@ func (s *Server) Routes() http.Handler {
 			pr.Patch("/libraries/{id}", s.handlePatchLibrary)
 			pr.Delete("/libraries/{id}", s.handleDeleteLibrary)
 
+			// 媒体库：磁盘上已经落盘的影片（下载队列在 /api/downloads，两件事）
+			pr.Get("/library/videos", s.handleListLibraryVideos)
+
 			pr.Get("/downloads", s.handleListDownloads)
 			pr.Get("/videos/{id}/download-options", s.handleDownloadOptions)
 			pr.Post("/videos/{id}/download", s.handleCreateDownload)
@@ -208,6 +211,9 @@ func (s *Server) Routes() http.Handler {
 			pr.Get("/videos/{id}/playback", s.handlePlayback)
 			// 本地库文件的直接下发（Range 续传）：下载过的影片不再依赖平台解析。
 			pr.Get("/videos/{id}/file", s.handleVideoFile)
+			// 下载时一起落盘的海报/剧照（媒体库的卡片封面）：不经过远端图片代理，
+			// 平台那边的封面地址过期了这页也照样有图。
+			pr.Get("/videos/{id}/art", s.handleVideoArt)
 			// 音画分轨的档位（B 站 1080P+）：服务端合流成一份 mp4 再下发。
 			pr.Get("/videos/{id}/remux", s.handleVideoRemux)
 

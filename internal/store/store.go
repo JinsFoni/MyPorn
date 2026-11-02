@@ -122,6 +122,25 @@ func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
 func fmtTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
+// parseSQLiteTime 认两种时间文本：
+//   - RFC3339（我们自己的写入路径普遍这么写）；
+//   - `YYYY-MM-DD HH:MM:SS`（列默认值 `datetime('now')` 给的，UTC）。
+//
+// 必须两种都认：library_files.created_at 走的就是默认值，早先只按 RFC3339 解，
+// 结果每一行的 CreatedAt 都是零值时间（媒体库页面上会显示成 0001 年）。
+func parseSQLiteTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t.UTC()
+	}
+	return time.Time{}
+}
+
 func scanTime(ns sql.NullString) *time.Time {
 	if !ns.Valid || ns.String == "" {
 		return nil

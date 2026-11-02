@@ -629,6 +629,53 @@ export interface DownloadsResponse {
   totalSizeBytes: number;
 }
 
+/** 媒体库的排序：落盘时间 / 体积 / 时长 / 文件名 */
+export type LibrarySort = 'recent' | 'size' | 'duration' | 'title';
+
+/**
+ * 媒体库里的一行 = 一部**已经躺在磁盘上**的影片（library_files 一条记录）。
+ * 和 DownloadItem 不是一回事：那边是任务（还在跑的、失败的），这边是文件。
+ */
+export interface LibraryVideo {
+  videoId: number;
+  libraryId: number;
+  libraryName: string;
+  title: string;
+  /** 磁盘上的文件名（下载时按命名模板改过，和 title 不一定一样） */
+  fileName: string;
+  platform: PlatformKey;
+  /** 平台影片才有艺人名；YouTube / B 站这类是空的 */
+  performers: string[];
+  /** 落盘时 probe 出来的时长，0 表示未知 */
+  durationSec: number;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  /** 落盘时间（RFC3339）；理论上有，解析不出来时是 null */
+  downloadedAt: string | null;
+  /** 远端封面（走 /api/img 代理）：本地封面缺失时的兜底，隐私模式也走它 */
+  thumbUrl: string;
+  /** 下载时一起落盘的 thumb.jpg，只有文件真在磁盘上时才给 */
+  localThumbUrl: string | null;
+  /** 库内绝对路径，用于「复制路径」 */
+  videoPath: string;
+  relDir: string;
+  /** 文件已经不在磁盘上（记录还在）：卡片要标出来，别让人点了才发现播不动 */
+  missing: boolean;
+  /** 本地下发地址（Range 续传） */
+  fileUrl: string;
+}
+
+export interface LibraryVideosPage {
+  items: LibraryVideo[];
+  nextCursor: string | null;
+  /** 当前筛选下的总条数与总占用 */
+  total: number;
+  totalSizeBytes: number;
+  /** 每个库有多少部（筛选胶囊上的数字；不跟随库筛选，跟随搜索词） */
+  byLibrary: { libraryId: number; name: string; fileCount: number; sizeBytes: number }[];
+}
+
 export interface Health {
   ok: boolean;
   version: string;

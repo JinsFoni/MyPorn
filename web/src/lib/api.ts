@@ -19,6 +19,7 @@ import type {
   LibrariesResponse,
   Library,
   LibraryInput,
+  LibraryVideosPage,
   PathValidation,
   Performer,
   PerformerPage,
@@ -375,6 +376,37 @@ export const api = {
   },
   downloads(params: { limit?: number; status?: string } = {}): Promise<DownloadsResponse> {
     return request<DownloadsResponse>(`/api/downloads${qs({ limit: params.limit, status: params.status })}`);
+  },
+
+  /**
+   * 媒体库：磁盘上已经下载下来的影片（不是任务队列，队列在 downloads）。
+   * 排序/筛选/搜索都走服务端，游标分页。
+   */
+  libraryVideos(
+    params: {
+      cursor?: string | null;
+      libraryId?: number | null;
+      platform?: string | null;
+      q?: string | null;
+      sort?: string | null;
+      limit?: number;
+    } = {},
+  ): Promise<LibraryVideosPage> {
+    return request<LibraryVideosPage>(
+      `/api/library/videos${qs({
+        cursor: params.cursor,
+        libraryId: params.libraryId,
+        platform: params.platform,
+        q: params.q,
+        sort: params.sort,
+        limit: params.limit,
+      })}`,
+    );
+  },
+
+  /** 某个库封面图（下载时落盘的 thumb.jpg）；给 <img src> 直接用，不需要鉴权头 */
+  libraryThumb(videoId: number, libraryId: number): string {
+    return `/api/videos/${id(videoId)}/art?libraryId=${id(libraryId)}&k=thumb`;
   },
   pauseJob(jobId: number | string): Promise<void> {
     return request<void>(`/api/jobs/${id(jobId)}/pause`, { method: 'POST' });

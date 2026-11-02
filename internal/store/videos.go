@@ -253,6 +253,14 @@ func scanVideo(row rowScanner) (*model.Video, error) {
 		&v.PreviewURL, &v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew); err != nil {
 		return nil, err
 	}
+	applyVideoScalars(v, pub, vc, rating, tags)
+	return v, nil
+}
+
+// applyVideoScalars 把 videos 行里那几个「可空 / 编码过的」列装回 model.Video。
+// scanVideo 和媒体库那条联表查询（library_videos.go 的 scanLibraryVideo）共用，
+// 免得两处各写一份、迟早有一处漏掉某个字段。
+func applyVideoScalars(v *model.Video, pub sql.NullString, vc sql.NullInt64, rating sql.NullFloat64, tags string) {
 	v.PublishedAt = scanTime(pub)
 	if vc.Valid {
 		n := int(vc.Int64)
@@ -263,7 +271,6 @@ func scanVideo(row rowScanner) (*model.Video, error) {
 		v.Rating = &r
 	}
 	v.Tags = decodeTags(tags)
-	return v, nil
 }
 
 type rowScanner interface {

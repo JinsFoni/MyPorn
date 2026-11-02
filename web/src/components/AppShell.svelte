@@ -30,6 +30,7 @@
       | 'performers'
       | 'discover'
       | 'downloads'
+      | 'library'
       | 'manage'
       | 'settings';
     isActive: (path: string) => boolean;
@@ -44,6 +45,8 @@
     { href: '/performers', label: '艺人', icon: 'performers', isActive: (p) => p.startsWith('/performer') },
     { href: '/discover', label: '发现', icon: 'discover', isActive: (p) => p.startsWith('/discover') },
     { href: '/downloads', label: '下载', icon: 'downloads', isActive: (p) => p.startsWith('/downloads') },
+    // 媒体库：已经下到磁盘上的片子（下载页是任务队列，两件事分开放）
+    { href: '/library', label: '媒体库', icon: 'library', isActive: (p) => p.startsWith('/library') },
     { href: '/manage', label: '管理', icon: 'manage', isActive: (p) => p.startsWith('/manage') },
     { href: '/settings', label: '设置', icon: 'settings', isActive: (p) => p.startsWith('/settings') },
   ];
@@ -213,6 +216,12 @@
       <path d="M12 4v10" />
       <path d="m8 10.5 4 4 4-4" />
       <path d="M4.5 17.5h15" />
+    {:else if name === 'library'}
+      <!-- 媒体库：一排书脊 + 底下的托盘，比「下载」那个箭头一眼分得开 -->
+      <rect x="3.2" y="4" width="4.2" height="12" rx="1.2" />
+      <rect x="9.9" y="4" width="4.2" height="12" rx="1.2" />
+      <path d="M16.4 4.9l3.6 1.1a1.2 1.2 0 0 1 .83 1.49l-3 10.2" />
+      <path d="M3 19.5h18" />
     {:else if name === 'manage'}
       <!-- 管理：扳手（维护 / 调校）。
            扳手是斜的，图形几乎顶满 24 的方框（实测外框 19×19），比同排那些矩形/圆形的图标（13.5–14.5）
@@ -460,7 +469,9 @@
     class="fixed inset-x-0 bottom-0 z-40 bg-ink/85 pb-safe backdrop-blur-xl backdrop-saturate-150 lg:hidden"
     aria-label="主导航"
   >
-    <ul class="grid grid-cols-8">
+    <!-- 列数跟着 MOBILE_NAV 走：加一格不用再去改 class（2026-11-03 加「媒体库」时才发现
+         这里写死 grid-cols-8，多出来那格会被挤到第二行）。 -->
+    <ul class="grid" style={`grid-template-columns:repeat(${String(MOBILE_NAV.length)},minmax(0,1fr))`}>
       {#each MOBILE_NAV as item (item.href)}
         {@const isActive = item.icon === 'settings' ? settingsActive : activeHref === item.href}
         <li>

@@ -128,6 +128,8 @@ func scanLibraryFile(sc interface{ Scan(...any) error }) (*model.LibraryFile, er
 	}
 	if t, err := time.Parse(time.RFC3339, created); err == nil {
 		f.CreatedAt = t
+	} else {
+		f.CreatedAt = parseSQLiteTime(created)
 	}
 	return &f, nil
 }
