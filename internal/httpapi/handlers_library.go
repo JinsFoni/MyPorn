@@ -303,11 +303,23 @@ func insideRoot(root, abs string) bool {
 
 // pruneEmptyDirs 从 dir 往上收空目录，收到 root（不含）为止。
 // 只在「真空了」的时候删，删不动就停——绝不递归删有内容的目录。
+//
+// **目录已经不在了不算「停」**：purgeVideoDir 会先把整片文件夹端掉，再从这里开始往上收，
+// 第一层就 ReadDir 失败。原来那种写法（err != nil 就 return）会停在原地，于是
+// 删掉库里最后一部片之后，`YouTube/T-Series`、`YouTube/Lofi Girl`、`bilibili/影视飓风`
+// 三个空壳一直留在盘上（2026-11-03 实测，用户删完 1/2/3/15/60 之后亲眼看到）。
+// 不存在就是「这层没东西」，继续往上问。
 func pruneEmptyDirs(root, dir string) {
 	root = filepath.Clean(root)
 	for dir = filepath.Clean(dir); dir != root && insideRoot(root, dir); dir = filepath.Dir(dir) {
 		entries, err := os.ReadDir(dir)
-		if err != nil || len(entries) > 0 {
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return
+		}
+		if len(entries) > 0 {
 			return
 		}
 		if err := os.Remove(dir); err != nil {

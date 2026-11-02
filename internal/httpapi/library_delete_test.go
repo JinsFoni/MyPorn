@@ -53,6 +53,16 @@ func TestDeleteLibraryVideoRemovesFiles(t *testing.T) {
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("空目录没清掉：%s", dir)
 	}
+	// 收空目录必须一路收到库根：整片文件夹是被 RemoveAll 端掉的，第一层就 ReadDir 失败，
+	// 早先那种「err != nil 就 return」会停在原地，留下 `YouTube/测试频道` 这种空壳
+	for _, up := range []string{
+		filepath.Join(fx.libRoot, "YouTube", "测试频道"),
+		filepath.Join(fx.libRoot, "YouTube"),
+	} {
+		if _, err := os.Stat(up); !os.IsNotExist(err) {
+			t.Errorf("上层空目录没清掉：%s", up)
+		}
+	}
 	if _, err := os.Stat(fx.libRoot); err != nil {
 		t.Errorf("库根不能被删掉：%v", err)
 	}

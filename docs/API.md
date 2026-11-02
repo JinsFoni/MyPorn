@@ -1207,6 +1207,10 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
 - 这条片派生的大文件一起清（`clearVideoDerived`）：合流成品 `data/mux/<videoId>-<variant>.mp4`
   （实测 4K 一档 500 MB 起步，本机 mux 目录一度 512 MB / 13 个文件）和下载工作目录
   `data/tmp/dl-<videoId>-<lib>`（下载中途失败会留下它）。
+- 删完从影片文件夹往上收空目录，一路收到库根（`pruneEmptyDirs`）。**「这一层已经不存在」不算停**：
+  整片文件夹是被 `RemoveAll` 端掉的，第一层就 `ReadDir` 失败，早先那种 `err != nil` 就 `return`
+  的写法会停在原地——2026-11-03 用户删完 1/2/3/15/60 之后，`YouTube/T-Series`、`YouTube/Lofi Girl`、
+  `bilibili/影视飓风` 三个空壳一直留在盘上。
 - **先删文件、后删记录**：文件删不掉（播放器占着、权限不够）就留着记录并写进 `kept[].reason`
   （`ok` 变 `false`），否则媒体库里会剩一条指着空气的记录。
 - 路径必须落在库根之内才删（`insideRoot`，和 `/file`、`/art` 同一道闸门）：`kept[].reason` 会是
