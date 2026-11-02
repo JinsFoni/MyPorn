@@ -22,6 +22,7 @@ import (
 	"github.com/JinsFoni/MyPorn/internal/platform"
 	"github.com/JinsFoni/MyPorn/internal/proxying"
 	"github.com/JinsFoni/MyPorn/internal/social"
+	"github.com/JinsFoni/MyPorn/internal/speed"
 	"github.com/JinsFoni/MyPorn/internal/store"
 	"github.com/JinsFoni/MyPorn/internal/ytsub"
 )
@@ -287,13 +288,14 @@ type Ctl struct {
 	log    *slog.Logger
 	job    *model.Job
 
-	mu          sync.Mutex
-	progress    float64
-	lastMsg     string
-	lastPub     time.Time
-	lastBytes   int64
-	lastBytesAt time.Time
-	speed       float64
+	mu       sync.Mutex
+	progress float64
+	lastMsg  string
+	lastPub  time.Time
+	// meter 把「累计字节数」算成最近 3 秒的平均速度。三条下载链路（自研 HLS / ffmpeg 直拉 /
+	// yt-dlp）的字节数都是整块跳变的，用瞬时差算出来的速度会一会 MB/s 一会 KB/s
+	// （2026-11-03 用户报的就是这个，见 internal/speed 的包注释）。
+	meter *speed.Meter
 }
 
 // Check 轮询任务的取消/暂停标记，必要时中断 ctx。
@@ -329,25 +331,16 @@ func (c *Ctl) Progress(percent float64, msg string, speedBPS, bytesDone, bytesTo
 	if msg != "" {
 		c.lastMsg = msg
 	}
-	// ffmpeg 直连封装那条路不报速度，这里用体积差自己算（指数平滑，避免抖动）。
-	if speedBPS <= 0 && bytesDone > 0 {
-		now := time.Now()
-		if c.lastBytes > 0 && bytesDone > c.lastBytes {
-			if dt := now.Sub(c.lastBytesAt).Seconds(); dt > 0.2 {
-				inst := float64(bytesDone-c.lastBytes) / dt
-				if c.speed > 0 {
-					c.speed = c.speed*0.6 + inst*0.4
-				} else {
-					c.speed = inst
-				}
-				speedBPS = int64(c.speed)
-			}
+	// 速度一律自己按「最近 3 秒的字节增量」算：ffmpeg 直拉那条路根本不报速度，
+	// yt-dlp / 自研 HLS 报的那份口径也各不相同（yt-dlp 换轨还会让累计字节归零）。
+	// 调用方给的值只在还没有字节数时兜底。注意这里在**节流之前**算——
+	// 每次回调都是一个采样点，落库/广播是另一回事。
+	if bytesDone > 0 {
+		if c.meter == nil {
+			c.meter = speed.New(speed.DefaultWindow)
 		}
-		if bytesDone > c.lastBytes {
-			c.lastBytes = bytesDone
-			c.lastBytesAt = now
-		} else if speedBPS <= 0 && c.speed > 0 {
-			speedBPS = int64(c.speed)
+		if v := c.meter.Update(time.Now(), bytesDone); v > 0 {
+			speedBPS = v
 		}
 	}
 	throttled := time.Since(c.lastPub) < 800*time.Millisecond

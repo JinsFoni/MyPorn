@@ -322,6 +322,8 @@ type Video = {
 | DELETE | `/api/jobs/{id}` | 只删记录；`queued/running` 时返回 `409` |
 
 `Job` 增加字段：`targetId`（影片 id）、`bytesDone`、`bytesTotal`、`speedBps`；`status` 增加 `paused`。
+`speedBps` 是**后端算的最近 3 秒平均**（`internal/speed`），不是各下载器自己报的数：开始下载后的头 1.5 秒
+一律是 `0`（数据还不够，界面上就不显示速度，别拿半截窗口的数字骗人）；`0` 也可能表示刚好卡住。
 
 ### A4. 播放代理（M2 修正）
 

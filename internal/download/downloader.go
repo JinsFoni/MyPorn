@@ -3,7 +3,8 @@
 // 设计要点（对应 ARCHITECTURE.md 的内存预算）：
 //   - 每个分片直接流式写盘，绝不整段读进内存；
 //   - 已完成的分片留在工作目录，重试/恢复时自动跳过；
-//   - 进度按"已完成分片时长 / 总时长"计算，速度按字节增量计算。
+//   - 进度按"已完成分片 / 总片数"计算；速度由 internal/speed 按「最近 3 秒的字节增量」平均
+//     （字节边收边记，见 fetchFile 的 onBytes），不用瞬时差——那是「网速一会 MB/s 一会 KB/s」的来源。
 package download
 
 import (
@@ -22,6 +23,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/JinsFoni/MyPorn/internal/hls"
+	"github.com/JinsFoni/MyPorn/internal/speed"
 )
 
 // ErrUnsupported 表示清单形态超出内置下载器能力（加密、BYTERANGE 等），
@@ -110,7 +112,7 @@ func (d *Downloader) Run(ctx context.Context, pl *hls.MediaPlaylist, workDir, ou
 	// init 分段（fMP4）必须先下载并拼在最前。
 	initPath := filepath.Join(workDir, "init.bin")
 	if pl.InitURI != "" {
-		if err := d.fetchFile(ctx, pl.InitURI, initPath, limiter); err != nil {
+		if err := d.fetchFile(ctx, pl.InitURI, initPath, limiter, nil); err != nil {
 			return fmt.Errorf("下载初始化分段失败: %w", err)
 		}
 	}
@@ -118,29 +120,25 @@ func (d *Downloader) Run(ctx context.Context, pl *hls.MediaPlaylist, workDir, ou
 	total := len(pl.Segments)
 	var done int64
 	var bytesDone int64
-	start := time.Now()
-	lastBytes := int64(0)
-	lastAt := start
+	// 速度按最近 3 秒的字节增量平均（见 internal/speed）：分片是整块落地的，
+	// 用「两次快照之间的瞬时差」算出来会一会 MB/s 一会 KB/s。
+	meter := speed.New(speed.DefaultWindow)
 	var lastSpeed int64
-	var mu sync.Mutex // 保护 lastSpeed/lastBytes 快照
-	totalDur := pl.TotalDuration
+	var mu sync.Mutex // 保护 meter / lastSpeed（心跳与分片协程都会来算速度）
+	begin := time.Now()
 
 	report := func(force bool) {
 		dn := int(atomic.LoadInt64(&done))
 		bd := atomic.LoadInt64(&bytesDone)
 		mu.Lock()
-		now := time.Now()
-		elapsed := now.Sub(lastAt).Seconds()
-		if elapsed >= 0.4 {
-			lastSpeed = int64(float64(bd-lastBytes) / elapsed)
-			lastBytes = bd
-			lastAt = now
-		}
+		lastSpeed = meter.Update(time.Now(), bd)
 		mu.Unlock()
 		if onProgress == nil {
 			return
 		}
-		if !force && dn == 0 {
+		// 一个分片还没落地也要报：大分片一拉十几秒，中间不报的话界面既没有速度也没有进度，
+		// 看着像卡死（字节数已经能边收边算了，这时候报出来的是真数值）。
+		if !force && dn == 0 && bd == 0 {
 			return
 		}
 		p := Progress{DoneSegments: dn, TotalSegments: total, BytesDone: bd, SpeedBPS: lastSpeed}
@@ -156,9 +154,13 @@ func (d *Downloader) Run(ctx context.Context, pl *hls.MediaPlaylist, workDir, ou
 		}
 		if p.BytesTotal > bd && lastSpeed > 0 {
 			p.ETASeconds = int(float64(p.BytesTotal-bd) / float64(lastSpeed))
-		} else if totalDur > 0 && dn > 0 {
-			secPerSeg := totalDur / float64(total)
-			p.ETASeconds = int(secPerSeg * float64(total-dn))
+		} else if dn > 0 {
+			// 还没有速度（预热期）时按「已过的墙钟时间 / 已完成片数」外推。
+			// 原来这段是拿**播放时长**除以片数当每片耗时，实测报出「剩余 4 分 46 秒」而整部片
+			// 2 秒后下完（2026-11-03）；下载快慢和片子长短没关系，只有墙钟时间说了算。
+			if el := time.Since(begin).Seconds(); el > 0.5 {
+				p.ETASeconds = int(el / float64(dn) * float64(total-dn))
+			}
 		}
 		onProgress(p)
 	}
@@ -204,17 +206,20 @@ func (d *Downloader) Run(ctx context.Context, pl *hls.MediaPlaylist, workDir, ou
 			defer wg.Done()
 			defer func() { <-sem }()
 			path := filepath.Join(workDir, fmt.Sprintf("seg_%06d.bin", idx))
-			if ok := fileExists(path); !ok {
-				if err := d.fetchFile(ctx, uri, path, limiter); err != nil {
-					errOnce.Do(func() {
-						firstErr = fmt.Errorf("第 %d 个分片下载失败: %w", idx+1, err)
-						cancel()
-					})
-					return
+			if ok := fileExists(path); ok {
+				// 续传时这一片是老的，没有流可数，直接把体积记上
+				if st, err := os.Stat(path); err == nil {
+					atomic.AddInt64(&bytesDone, st.Size())
 				}
-			}
-			if st, err := os.Stat(path); err == nil {
-				atomic.AddInt64(&bytesDone, st.Size())
+			} else if err := d.fetchFile(ctx, uri, path, limiter, func(n int64) {
+				// 边收边记：字节数不再「一片一跳」，速度才有连续的分母
+				atomic.AddInt64(&bytesDone, n)
+			}); err != nil {
+				errOnce.Do(func() {
+					firstErr = fmt.Errorf("第 %d 个分片下载失败: %w", idx+1, err)
+					cancel()
+				})
+				return
 			}
 			atomic.AddInt64(&done, 1)
 		}(i, seg.URI)
@@ -330,7 +335,9 @@ func (d *Downloader) fetch(ctx context.Context, u string) (io.ReadCloser, error)
 }
 
 // fetchFile 下载到 path（先写 .tmp 再原子改名），支持全局限速。
-func (d *Downloader) fetchFile(ctx context.Context, u, path string, limiter *rate.Limiter) error {
+// onBytes 在每写一块之后被调用（可为 nil），进度与速度靠它做到「边收边算」。
+func (d *Downloader) fetchFile(ctx context.Context, u, path string, limiter *rate.Limiter,
+	onBytes func(int64)) error {
 	if fileExists(path) {
 		return nil
 	}
@@ -365,6 +372,9 @@ func (d *Downloader) fetchFile(ctx context.Context, u, path string, limiter *rat
 				f.Close()
 				_ = os.Remove(tmp)
 				return werr
+			}
+			if onBytes != nil {
+				onBytes(int64(n))
 			}
 		}
 		if rerr != nil {

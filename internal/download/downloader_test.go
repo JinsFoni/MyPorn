@@ -159,3 +159,53 @@ func TestRunHonorsContextCancel(t *testing.T) {
 		t.Fatal("取消后应返回错误")
 	}
 }
+
+// TestBytesCountedWhileSegmentStreams 字节数必须边收边记，不能等整片写完才加一次。
+//
+// 这一条是上一条的地基：台阶的来源就是「分片写完才 os.Stat 加一次」。
+// 服务端把一个 2MB 的分片拆 16 次、每次隔 150ms 吐出来，要求在**单个分片**下载过程中
+// 就能看到至少 4 个不同的 BytesDone 值。
+func TestBytesCountedWhileSegmentStreams(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/hls/high/index.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:4.0,\nseg-0.ts\n#EXT-X-ENDLIST\n")
+	})
+	chunk := make([]byte, 128<<10)
+	mux.HandleFunc("/hls/high/", func(w http.ResponseWriter, r *http.Request) {
+		// 2MB 分片拆 16 次吐、每次隔 150ms（总 2.4 秒）→ 心跳能响三次
+		for i := 0; i < 16; i++ {
+			_, _ = w.Write(chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+	})
+
+	d := New(srv.Client())
+	d.Concurrency = 1
+	pl, err := d.Resolve(context.Background(), srv.URL+"/hls/high/index.m3u8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	var seen []int64
+	err = d.Run(context.Background(), pl, dir, filepath.Join(dir, "out.mp4"), func(p Progress) {
+		if n := len(seen); n == 0 || seen[n-1] != p.BytesDone {
+			seen = append(seen, p.BytesDone)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("单个分片下载过程中看到的体积序列：%v", seen)
+	// 全片 1MB，只有落地那一下才加的话序列长度是 1（0 不进采样）
+	if len(seen) < 4 {
+		t.Errorf("字节数是台阶式的，只看到 %d 个中间值：%v", len(seen), seen)
+	}
+	if last := seen[len(seen)-1]; last != 2<<20 {
+		t.Errorf("最终体积应是 2MB，得到 %d", last)
+	}
+}
