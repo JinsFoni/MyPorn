@@ -5,6 +5,9 @@
    * + `CardDownloadButton` 右上角悬停动作）。要改卡片长相就改那几个组件，别在这里单独调。
    *
    * 这张卡和三条墙的差别只有「它代表的是磁盘上的一个文件」：
+   * - 圆头像和副行名字是**频道 / UP 主**（和三条墙同一位置放同一件事）：平台影片取第一位
+   *   艺人、YouTube 影片取频道（服务端已代理成 /api/img）；两样都没有才退回库名与首字母。
+   *   只有一个库时副行只写体积，多库时才在体积前带上库名。
    * - 封面优先用下载时落盘的 thumb.jpg（`localThumbUrl`），远端封面地址过期也照样有图；
    *   隐私模式下**必须**换回 /api/img 的小糊图——本地那张是按原尺寸发的，没有糊化那一层。
    * - 封面左上角是 `2160p`（落盘时 probe 的尺寸）：三条墙不知道分辨率所以没有这一格，
@@ -27,9 +30,11 @@
 
   interface Props {
     item: LibraryVideo;
+    /** 有多个库时才在副行写库名（只有一个库时那是噪声，和三条墙的副行形状也一样） */
+    showLibrary?: boolean;
   }
 
-  let { item }: Props = $props();
+  let { item, showLibrary = false }: Props = $props();
 
   /** 「2160p」：只写高度，和播放器画质菜单同一套叫法；尺寸未知就不画 */
   const quality = $derived(item.height > 0 ? `${String(item.height)}p` : '');
@@ -43,8 +48,23 @@
   );
 
   const back = $derived(`?back=${encodeURIComponent(`${router.path}${router.search}`)}`);
-  /** 副行左边的「名字」位在媒体库里放库名（这一页靠它区分是哪个库的文件） */
-  const avatarMonogram = $derived(item.libraryName.trim().charAt(0).toUpperCase());
+
+  /**
+   * 副行左边的名字 = 频道 / UP 主（和三条墙同一个位置放同一件事）；没有就退回库名。
+   * 头像同理走 `imageUrl`——隐私模式下它得换成小糊图，本地/远端一视同仁。
+   */
+  const whoName = $derived(item.channelName || item.libraryName);
+  const avatar = $derived(imageUrl(item.avatarUrl, 36));
+  const avatarMonogram = $derived(whoName.trim().charAt(0).toUpperCase());
+  /**
+   * 体积前面要不要带库名：只有「副行名字显示的是频道」时才有意义（多库时才知道这一行在哪个盘上）；
+   * 名字位本来就退化成库名的行再写一遍就成了「副库 副库 · 907 KB」。
+   */
+  const metaLine = $derived(
+    showLibrary && item.channelName
+      ? `${item.libraryName} · ${formatBytes(item.sizeBytes)}`
+      : formatBytes(item.sizeBytes),
+  );
 
   let copied = $state(false);
 
@@ -97,9 +117,10 @@
 
     <CardByline
       title={item.title}
-      name={item.libraryName}
+      name={whoName}
+      avatarUrl={avatar}
       monogram={avatarMonogram}
-      meta={formatBytes(item.sizeBytes)}
+      meta={metaLine}
       dateLabel={formatDate(item.downloadedAt)}
       dateTitle={relativeTime(item.downloadedAt)}
     />

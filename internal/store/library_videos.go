@@ -34,6 +34,11 @@ type LibraryVideo struct {
 	File        *model.LibraryFile
 	Video       *model.Video
 	LibraryName string
+	// ChannelAvatar / ChannelName 只有 YouTube 影片有：YouTube 的影片不落 performers
+	// （频道在 yt_channels 里），卡片左侧那颗圆头像要显示频道，就得靠这两个字段。
+	// 其它平台走 it.Video.Performers（B 站就是 UP 主）。
+	ChannelAvatar string
+	ChannelName   string
 	// sortKey 是这一行在**当前排序**下的键，下一页游标就取最后一行的它。
 	// created_at 原样保存（库里是 `YYYY-MM-DD HH:MM:SS`，定宽，字符串比较即时间比较）。
 	sortKey string
@@ -47,17 +52,29 @@ type LibraryVideoCounter struct {
 	SizeBytes int64
 }
 
-// 一行 = library_files 的全部列（16）+ 库名（1）+ videos 的展示列（14）。
+// 一行 = library_files 的全部列（16）+ 库名（1）+ videos 的展示列（14）+ YouTube 频道头像/名字（2）。
 // 列名和 scanLibraryVideo 的扫描顺序必须一一对应，改一处就得改另一处。
+//
+// 频道那两列是 LEFT JOIN 来的（见 ListLibraryVideos 的 `libraryVideoJoins`）：
+// 非 YouTube 的行这两列是 NULL，COALESCE 成空串。
 const libraryVideoSelect = `lf.id, lf.video_id, lf.library_id, lf.rel_dir, lf.video_name, lf.video_path,
 	lf.nfo_path, lf.poster_path, lf.thumb_path, lf.fanart_path, lf.strm_path,
-	lf.size_bytes, lf.width, lf.height, lf.duration_sec, lf.created_at, l.name, ` + videoColumns
+	lf.size_bytes, lf.width, lf.height, lf.duration_sec, lf.created_at, l.name, ` + videoColumns + `,
+	COALESCE(ytc.avatar_url, ''), COALESCE(ytc.title, '')`
+
+// libraryVideoJoins：把 YouTube 影片对到它的频道上，只为了取头像和频道名。
+// `yt_videos.video_id` 是 UNIQUE 的，且只在 platform='youtube' 时匹配，行数不会翻倍。
+const libraryVideoJoins = `
+		LEFT JOIN yt_videos ytv ON v.platform = 'youtube' AND ytv.video_id = v.platform_video_id
+		LEFT JOIN yt_channels ytc ON ytc.id = ytv.channel_id`
 
 func scanLibraryVideo(row rowScanner) (*LibraryVideo, error) {
 	var (
 		f       model.LibraryFile
 		created string
 		name    string
+		avatar  string
+		channel string
 		v       model.Video
 		pub     sql.NullString
 		vc      sql.NullInt64
@@ -68,12 +85,17 @@ func scanLibraryVideo(row rowScanner) (*LibraryVideo, error) {
 		&f.NFOPath, &f.PosterPath, &f.ThumbPath, &f.FanartPath, &f.StrmPath,
 		&f.SizeBytes, &f.Width, &f.Height, &f.DurationSec, &created, &name,
 		&v.ID, &v.Platform, &v.PlatformVideoID, &v.Title, &v.URL, &v.ThumbURL, &v.PreviewURL,
-		&v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew); err != nil {
+		&v.DurationSec, &pub, &vc, &rating, &tags, &v.Description, &v.IsNew,
+		&avatar, &channel); err != nil {
 		return nil, err
 	}
 	f.CreatedAt = parseSQLiteTime(created)
 	applyVideoScalars(&v, pub, vc, rating, tags)
-	return &LibraryVideo{File: &f, Video: &v, LibraryName: name, sortKey: created}, nil
+	return &LibraryVideo{
+		File: &f, Video: &v, LibraryName: name,
+		ChannelAvatar: avatar, ChannelName: channel,
+		sortKey: created,
+	}, nil
 }
 
 // libraryVideoFilter 把筛选条件翻成 WHERE 片段（lf = library_files，v = videos）。
@@ -138,7 +160,7 @@ func (s *Store) ListLibraryVideos(q LibraryVideoQuery) ([]*LibraryVideo, string,
 	sqlQ := `SELECT ` + libraryVideoSelect + `
 		FROM library_files lf
 		JOIN videos v ON v.id = lf.video_id
-		JOIN libraries l ON l.id = lf.library_id
+		JOIN libraries l ON l.id = lf.library_id` + libraryVideoJoins + `
 		WHERE ` + strings.Join(where, " AND ") + `
 		ORDER BY ` + orderBy + ` LIMIT ?`
 	rows, err := s.db.Query(sqlQ, append(args, q.Limit+1)...)

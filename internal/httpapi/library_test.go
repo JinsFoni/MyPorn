@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/JinsFoni/MyPorn/internal/config"
@@ -93,6 +94,8 @@ type libraryItem struct {
 	DurationSec   int      `json:"durationSec"`
 	Width         int      `json:"width"`
 	Height        int      `json:"height"`
+	ChannelName   string   `json:"channelName"`
+	AvatarURL     *string  `json:"avatarUrl"`
 	SizeBytes     int64    `json:"sizeBytes"`
 	DownloadedAt  *string  `json:"downloadedAt"`
 	ThumbURL      string   `json:"thumbUrl"`
@@ -161,6 +164,10 @@ func TestLibraryVideosListsLocalFiles(t *testing.T) {
 	if it.DownloadedAt == nil {
 		t.Error("downloadedAt 不该是 null（created_at 的 SQLite 时间格式要能解析）")
 	}
+	// 这条影片没有艺人也没有频道 → 头像/名字都空，前端退化成库名首字母，不该是破图地址
+	if it.AvatarURL != nil || it.ChannelName != "" {
+		t.Errorf("没有艺人/频道时不该给头像: avatar=%v name=%q", it.AvatarURL, it.ChannelName)
+	}
 	wantFileURL := "/api/videos/" + strconv.FormatInt(fx.videoID, 10) + "/file?libraryId=1"
 	if it.FileURL != wantFileURL {
 		t.Errorf("播放地址不对: %q，应为 %q", it.FileURL, wantFileURL)
@@ -170,6 +177,31 @@ func TestLibraryVideosListsLocalFiles(t *testing.T) {
 	}
 	if len(page.ByLibrary) != 1 || page.ByLibrary[0].FileCount != 1 || page.ByLibrary[0].SizeBytes != 4096 {
 		t.Errorf("按库计数不对: %+v", page.ByLibrary)
+	}
+}
+
+// TestLibraryVideosAvatarFallsBackToPerformer 卡片左上那颗圆头像：平台影片走第一位艺人
+// （B 站就是 UP 主），地址要过 /api/img 代理；没有艺人时为空、由前端退化。
+func TestLibraryVideosAvatarFallsBackToPerformer(t *testing.T) {
+	fx := newLibraryServer(t)
+	const avatar = "https://i2.hdslb.com/bfs/face/abc.jpg"
+	pid, err := fx.st.UpsertPerformer(&model.Performer{
+		Platform: "bilibili", PerformerID: "up1", Name: "dprprince", AvatarURL: avatar,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.st.LinkVideoPerformer(fx.videoID, pid); err != nil {
+		t.Fatal(err)
+	}
+
+	it := listLibrary(t, fx.srv, "").Items[0]
+	if it.ChannelName != "dprprince" {
+		t.Errorf("副行的名字应是艺人 / UP 主，得到 %q", it.ChannelName)
+	}
+	if it.AvatarURL == nil || !strings.Contains(*it.AvatarURL, "/api/img?") ||
+		!strings.Contains(*it.AvatarURL, "p=bilibili") {
+		t.Errorf("头像应是走过代理的地址，得到 %v", it.AvatarURL)
 	}
 }
 

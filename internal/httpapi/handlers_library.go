@@ -81,6 +81,26 @@ func libraryVideoDTO(it *store.LibraryVideo) map[string]any {
 		names = append(names, p.Name)
 	}
 
+	// 卡片左上那颗圆头像 + 副行左边那个名字：平台影片取第一位艺人（B 站就是 UP 主），
+	// YouTube 影片没有 performers，取频道（yt_channels）。
+	// 都没有就留空——前端退化成首字母，不会画一个破图。
+	// 代理按**头像所属的平台**走（艺人自己的 platform），不是影片的：图床认 Referer，
+	// 拿影片的 platform 去拉一张跨站的头像会被图床挡掉。
+	whoName, whoAvatar, whoPlatform := "", "", v.Platform
+	if len(v.Performers) > 0 {
+		whoName = v.Performers[0].Name
+		whoAvatar = v.Performers[0].AvatarURL
+		if v.Performers[0].Platform != "" {
+			whoPlatform = v.Performers[0].Platform
+		}
+	}
+	if whoAvatar == "" && it.ChannelAvatar != "" {
+		whoAvatar = it.ChannelAvatar
+		if whoName == "" {
+			whoName = it.ChannelName
+		}
+	}
+
 	// 本地封面只在这张图真的还在磁盘上时才给地址：前端拿到 404 只能退成占位图标，
 	// 而远端那张（videos.thumb_url）通常也还在，白丢一次兜底机会。
 	localThumb := ""
@@ -109,6 +129,8 @@ func libraryVideoDTO(it *store.LibraryVideo) map[string]any {
 		"fileName":      f.VideoName,
 		"platform":      v.Platform,
 		"performers":    names,
+		"channelName":   whoName,
+		"avatarUrl":     nullableString(imgProxy(whoPlatform, whoAvatar)),
 		"durationSec":   duration,
 		"width":         f.Width,
 		"height":        f.Height,

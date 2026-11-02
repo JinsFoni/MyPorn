@@ -1131,6 +1131,8 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
     "title": "4K 美女外拍｜克罗拉[04]｜Bikini Lookbook｜비키니 룩북 (2026)",
     "fileName": "4K 美女外拍｜克罗拉[04]｜….mp4",
     "platform": "youtube", "performers": [],
+    "channelName": "4kaamg",
+    "avatarUrl": "/api/img?p=youtube&u=https%3A%2F%2Fyt3.googleusercontent.com%2F…",
     "durationSec": 201, "width": 3840, "height": 2160, "sizeBytes": 410375125,
     "downloadedAt": "2026-11-02T17:51:58Z",
     "thumbUrl": "/api/img?p=youtube&u=https%3A%2F%2Fi2.ytimg.com%2F…",
@@ -1156,6 +1158,12 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
 - `missing=true` = 记录在、文件没了（被手动删/挪走）。卡片要压暗并写「文件已不在磁盘上」，
   点击不再跳播放页（跳过去只会 404）。
 - 同一部影片可以同时出现在两个库 → 返回**两行**，`keyOf` 用 `videoId-libraryId`，不要只用 `videoId`。
+- `channelName` / `avatarUrl` 是卡片副行左边那一格（和关注流 / B 站 / YouTube 卡同一个位置）：
+  平台影片取**第一位艺人**（B 站就是 UP 主），YouTube 影片的 `performers` 是空的，取它在
+  `yt_channels` 里的频道（服务端 LEFT JOIN 出来的）。两样都没有时 `avatarUrl` 为 null、前端退化成
+  名字首字母——别拿 `thumbUrl` 顶替，那是封面不是头像。
+  代理用的平台参数是**头像所属平台**（艺人的 `platform`），不是影片的：图床认 Referer，
+  拿影片的平台去拉一张跨站头像会被挡掉。
 - 播放直接复用 `GET /api/videos/{id}/file`（`handlePlayback` 里本地那一路本来就排第一）。
 
 ### E2. `GET /api/videos/{id}/art?libraryId=1&k=thumb` —— 本地海报 / 剧照

@@ -291,7 +291,7 @@
     {/snippet}
 
     {#snippet children(item: LibraryVideo)}
-      <LibraryCard {item} />
+      <LibraryCard {item} showLibrary={libs.length > 1} />
     {/snippet}
   </InfiniteList>
 </div>

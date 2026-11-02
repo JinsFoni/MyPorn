@@ -646,6 +646,13 @@ export interface LibraryVideo {
   platform: PlatformKey;
   /** 平台影片才有艺人名；YouTube / B 站这类是空的 */
   performers: string[];
+  /**
+   * 卡片副行左边那个名字：平台影片是第一位艺人（B 站 = UP 主），YouTube 是频道名，
+   * 都没有就是空串（卡片退回显示库名）。
+   */
+  channelName: string;
+  /** 上面那个名字的头像（已过 /api/img 代理）；空 = 没有，卡片退化到首字母 */
+  avatarUrl: string | null;
   /** 落盘时 probe 出来的时长，0 表示未知 */
   durationSec: number;
   width: number;

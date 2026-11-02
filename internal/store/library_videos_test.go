@@ -195,3 +195,44 @@ func TestListLibraryVideosSameVideoInTwoLibraries(t *testing.T) {
 		t.Fatalf("video_id 不对: %d", items[0].File.VideoID)
 	}
 }
+
+// TestListLibraryVideosYouTubeChannelAvatar YouTube 的影片不落 performers（频道在 yt_channels 里），
+// 卡片那颗圆头像要靠 LEFT JOIN 把频道带出来；非 YouTube 的行不能被它串味。
+func TestListLibraryVideosYouTubeChannelAvatar(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+	libA, _, videoIDs := seedLibraryVideos(t, st)
+
+	// 把第一部片改成 YouTube，并在 yt_channels / yt_videos 里补上它的频道
+	const channelAvatar = "https://yt3.googleusercontent.com/chan.jpg"
+	if _, err := st.db.Exec(`UPDATE videos SET platform = 'youtube', platform_video_id = 'yt-chan-1' WHERE id = ?`, videoIDs[0]); err != nil {
+		t.Fatal(err)
+	}
+	res, err := st.db.Exec(`INSERT INTO yt_channels (channel_id, title, avatar_url) VALUES ('UCchan1', '4kaamg', ?)`, channelAvatar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chanID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO yt_videos (channel_id, video_id, title) VALUES (?, 'yt-chan-1', 'T-alpha')`, chanID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, err := st.ListLibraryVideos(LibraryVideoQuery{LibraryID: libA, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]*LibraryVideo{}
+	for _, it := range got {
+		byName[it.File.VideoName] = it
+	}
+	if a := byName["alpha.mp4"]; a == nil || a.ChannelAvatar != channelAvatar || a.ChannelName != "4kaamg" {
+		t.Errorf("YouTube 那行应带出频道头像与频道名: %+v", a)
+	}
+	// pornhub 那几行没有频道，两列必须是空串（不是 NULL 扫不出来、也不能串到别的行）
+	if b := byName["bravo.mp4"]; b == nil || b.ChannelAvatar != "" || b.ChannelName != "" {
+		t.Errorf("非 YouTube 的行不该有频道信息: %+v", b)
+	}
+}
