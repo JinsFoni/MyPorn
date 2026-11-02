@@ -58,7 +58,9 @@
     empty,
     reloadKey = 0,
     maxLoadedPages = 4,
-    gridClass = 'grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5',
+    // 默认就是视频墙那一套（1/2/3/4）：关注流、B 站、YouTube、艺人页共用；
+    // 瞬间页是照片墙（间距更紧），自己传一个。
+    gridClass = WALL_GRID,
     onItems,
   }: Props = $props();
 

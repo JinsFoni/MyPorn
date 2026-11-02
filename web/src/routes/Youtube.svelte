@@ -15,7 +15,7 @@
    * 实测 200 条里没有一个时间戳。点开条目时再单独补那一条（4 秒），不批量拉。
    */
   import { onMount } from 'svelte';
-  import InfiniteList, { WALL_GRID } from '../components/InfiniteList.svelte';
+  import InfiniteList from '../components/InfiniteList.svelte';
   import TopBar from '../components/TopBar.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import YtCard from '../components/YtCard.svelte';
@@ -460,7 +460,6 @@
       keyOf={(video: YtVideo) => video.id}
       reloadKey={wallKey}
       maxLoadedPages={6}
-      gridClass={WALL_GRID}
       onItems={(items: YtVideo[]) => {
         // 列表一到位就把头几条的解析提前跑起来（重复调用会被 warming 挡掉）。
         // 错开 1.5 秒再发下一个：yt-dlp 解析是网络 + 一次 JS 解释，三个一起发会互相抢，
