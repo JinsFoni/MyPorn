@@ -29,7 +29,8 @@
   // 上游给的是 hq720（1280×720），i.ytimg 不认 w=，所以这里只是把尺寸意图写清楚。
   const thumb = $derived(imageUrl(video.thumbUrl, 640));
   // 观看数不再写成「679 次观看」：副行只有 12px，三个中文字占掉一格宽度、还把日期挤出去，
-  // 改成一个播放三角 + 数字（`▶ 679`）。读屏仍念「679 次观看」，见下面的 aria-label。
+  // 改成一个空心播放三角 + 数字（`▷ 679`，三角只描边不填色，和旁边 12px 的字一行重量）。
+  // 读屏仍念「679 次观看」，见下面的 aria-label。
   const views = $derived(video.views > 0 ? formatCount(video.views) : '');
 
   /**
@@ -155,7 +156,15 @@
             title={`${views} 次观看`}
             aria-label={`${views} 次观看`}
           >
-            <svg viewBox="0 0 24 24" class="h-3 w-3 shrink-0" fill="currentColor" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              class="h-3 w-3 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
               <path d="M7.5 4.2v15.6L20.4 12z" />
             </svg>
             <span class="tabular-nums">{views}</span>

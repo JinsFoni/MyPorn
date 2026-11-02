@@ -235,7 +235,7 @@ yt-dlp --no-playlist --newline --socket-timeout 20 --retries 3 --concurrent-frag
 | 文件 | 内容 |
 |---|---|
 | `web/src/routes/Youtube.svelte` | 频道头像条（`AvatarRail`，和关注页同款）+ 16:9 网格 + `InfiniteList` + 嵌播弹层 |
-| `web/src/components/YtCard.svelte` | 封面（`hq720` 铺满 / `maxresdefault` 大图，均带 `f=` 兜底）、时长角标、**单行标题**（`truncate`，并把末尾那串 `#标签` 削掉——实测 `/youtube` 首屏 36 张卡里 21 张带，最长一条 54 字削完只剩 12 字的片名；原始标题仍在 `title` 提示和详情页上）、**36px 圆头像**（和 B 站墙的 `VideoCard` 同尺寸、同 `mt-2.5 flex items-start gap-2.5` 行）、副行「频道 · ▶ 观看数 · 日期」（观看数是 12px 播放三角 + 数字，不再写「次观看」，省下的宽度留给频道名和日期；读屏走 `aria-label` 念「908 次观看」）、未看小圆点、未看状态下右上角下载按钮、直播标记 |
+| `web/src/components/YtCard.svelte` | 封面（`hq720` 铺满 / `maxresdefault` 大图，均带 `f=` 兜底）、时长角标、**单行标题**（`truncate`，并把末尾那串 `#标签` 削掉——实测 `/youtube` 首屏 36 张卡里 21 张带，最长一条 54 字削完只剩 12 字的片名；原始标题仍在 `title` 提示和详情页上）、**36px 圆头像**（和 B 站墙的 `VideoCard` 同尺寸、同 `mt-2.5 flex items-start gap-2.5` 行）、副行「频道 · ▶ 观看数 · 日期」（观看数是 12px **空心**播放三角 + 数字——`stroke` 描边不填色，不再写「次观看」，省下的宽度留给频道名和日期；读屏走 `aria-label` 念「908 次观看」）、未看小圆点、未看状态下右上角下载按钮、直播标记 |
 | `web/src/routes/Manage.svelte` | 新 tab `youtube`（结构照抄 moments 那块）+ 顶部四格总览 |
 | `web/src/routes/Moments.svelte` | 页顶加「动态 / YouTube」切换 |
 | `web/src/components/AppShell.svelte` | `NAV` 加一项 + `navIcon` 加 `youtube` + 未看角标 + `JOB_LABEL` 加 `yt_sync` / `yt_download` |
