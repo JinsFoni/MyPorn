@@ -237,9 +237,19 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
     `update()` 再把值写回去。⚠️ 皮肤自己不用这个组件，**没有注册它**——不 `import '@videojs/html/ui/menu-checkbox-item'`
     的话标签就是个空壳（2026-11-01 实测：`customElements.get('media-menu-checkbox-item')` 为 `undefined`，
     没 `role`、点不动、也不发事件）。
-  - **清晰度**：一个显示当前档的按钮（`1080p ⌄`）+ 皮肤自己的 `<media-menu>` 弹层（挂在按钮上方、右对齐，靠 `commandfor` 绑定，
+  - **清晰度**：一个**圆按钮**（和左右两边同尺寸 36px，里面只放当前档的数字：`1080` / `4K` / `本地`）
+    + 皮肤自己的 `<media-menu>` 弹层（挂在按钮上方、右对齐，靠 `commandfor` 绑定，
     所以 `aria-expanded`、Esc、点外面关闭、打开时锁住控件不隐藏都由皮肤负责）。列表项用 `<media-menu-item class="media-menu-radio-item">`，
     每行两行文案（`1080p` / `4.0 Mbps · 最高`）+ 当前档的对勾；点一项 → `select` 事件 → 交回页面换片源。
+    2026-11-02 之前它是个 `1080p ⌄` 的药丸（`width:auto` + 左右内边距 + 箭头，实测 56×36 夹在一排 36×36 的圆里），
+    用户直接报「不是圆形」；圆里放不下 `1080p`（实测 28.5px vs 弦长 36px）和箭头，所以字省成纯数字（`1080` 22.8px），箭头去掉
+    （菜单开着本来就有 `[aria-expanded='true']` 的强调色实底）。完整档位名仍在 `aria-label` / `title` 和菜单里。
+  - **指针点过的按钮不留键盘焦点**（`dropPointerFocus()`）：皮肤把 `:focus-visible` 也画成强调色实底，而菜单关掉后
+    它会把焦点还给触发按钮（`@videojs/core` 的 `restoreFocus()`），下一次按键时浏览器把模态切回键盘、
+    `:focus-visible` 当场变真——「切清晰度 → 按方向键跳进度」时那颗按钮就白底黑字、像被选中，而且一直亮到焦点移走
+    （2026-11-02 实测：选完 720p 后 `bg=transparent` / `focus-visible=false`，按一次 `ArrowRight` 后
+    `bg=rgb(245,250,255)` / `focus-visible=true`）。现在首次按键若发现焦点还停在指针点过的 `.media-button` 上就 blur 掉
+    （快捷键监听在文档上，实测焦点在 body 上箭头照样跳 5 秒、空格照样暂停，所以不影响任何快捷键；Tab 不拦，键盘用户焦点环照常）。
   - **氛围模式**：太阳图标，`aria-pressed` 表示开关，亮/暗用图标透明度表达（不用皮肤那套 `[aria-expanded]` 白底，避免和菜单状态混淆）。
   - 位置：桌面上排在设置齿轮右边、画中画/全屏左边；手机（`< 32rem`）皮肤把这组按钮整体收进右上角的浮动药丸，这两个跟着一起过去，
     底部那行才留得下进度条。

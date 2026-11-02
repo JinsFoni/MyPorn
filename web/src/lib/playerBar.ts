@@ -52,24 +52,30 @@ export interface PlayerBar {
 /** 皮肤的样式表进不了我们的节点，所以自带一小段；只放在这个 shadow root 里 */
 const BAR_CSS = `
 .myporn-bar { display: contents; }
+/*
+ * 清晰度按钮：和左右两边一样是个圆。尺寸不自己写——皮肤 .media-button 的
+ * width/height: var(--media-control-size) 就是 36px，实测和上一个/下一个/氛围/齿轮
+ * 逐像素一致（同一次量：36 / 36 / 36 / 36；控制条出场动画中间态会一起变成 34.2）。
+ * 以前那句 width: auto 才是把它撑成药丸的元凶：加上左右内边距和箭头是 56×36，
+ * 夹在一排 36px 的圆里格外扎眼。
+ *
+ * 里面只放当前档位的数字。箭头删了：圆里放不下，而且「菜单开着」本来就有皮肤的
+ * 强调色实底（[aria-expanded='true']）负责，不靠箭头提示。
+ * 字号 0.8em = 10.4px：实测「4K」12.1px、「1080」22.8px、「本地」20.4px，
+ * 在 36px 的圆里两边各剩 6~12px；「1080p」要 28.5px（两边只剩 3.8px，贴着圆边），
+ * 所以圆里省掉结尾的 p，完整档位名在 aria-label / title 和菜单里都有。
+ */
 .myporn-bar-quality.media-button {
-  display: flex;
-  align-items: center;
-  gap: 0.25em;
-  width: auto;
-  padding-inline: 0.5em;
-  font-size: 0.92em;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-size: 0.8em;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  letter-spacing: -0.02em;
+  line-height: 1;
 }
-.myporn-bar-chevron {
-  width: 0.9em;
-  height: 0.9em;
-  flex-shrink: 0;
-  opacity: 0.65;
-  transition: rotate 0.15s ease;
-}
-.myporn-bar-quality[aria-expanded='true'] .myporn-bar-chevron { rotate: 180deg; }
+.myporn-bar-quality-label { display: block; pointer-events: none; }
 .myporn-bar-icon {
   width: var(--media-icon-size, 18px);
   height: var(--media-icon-size, 18px);
@@ -96,8 +102,6 @@ const BAR_CSS = `
 .myporn-bar-check { opacity: 0; }
 `;
 
-const CHEVRON_SVG = `<svg viewBox="0 0 24 24" class="myporn-bar-chevron" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>`;
-
 /** 氛围模式的太阳：亮着 = 开，暗下去 = 关（和药丸里的强调色不是一套，用透明度表达更省事） */
 const AMBIENT_SVG = `<svg viewBox="0 0 24 24" class="myporn-bar-icon" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M12 3v2M12 19v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M3 12h2M19 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/><circle cx="12" cy="12" r="3.6"/></svg>`;
 
@@ -112,6 +116,65 @@ const MENU_POPUP_CLASS = 'media-popup media-popup-surface media-menu-popup media
 
 /** 同页多个播放器时 id 不能撞；实际只会有一个，保险 */
 let sequence = 0;
+
+/**
+ * 圆按钮里那行字：「1080p」→「1080」。
+ *
+ * 36px 的圆最大弦长 36px，10.4px 字号下「1080」约 23.6px（两边各 6px），
+ * 「1080p」要 29.6px（两边各 3px，贴着圆边），所以结尾的 p 只在圆里省掉。
+ * 4K / 本地 这种两三个字符的标签原样显示。完整档位名一直在 aria-label 和 title 上。
+ */
+function badgeLabel(label: string): string {
+  return /^\d+p$/.test(label) ? label.slice(0, -1) : label;
+}
+
+/**
+ * 指针点过的按钮不该留着键盘焦点。
+ *
+ * 皮肤把 `:focus-visible` / `[aria-expanded='true']` / `[data-highlighted]` 一律画成强调色实底
+ * （`skin.css` 里 `.media-button:where(:focus-visible, …)`，实测就是 `--media-accent` = #f5faff）。
+ * 菜单关掉后皮肤会把焦点还给触发它的那个按钮（`@videojs/core` 的 `restoreFocus()`，
+ * 只在 imperative-action / group-open / blur / outside-click 四种关闭原因下跳过），
+ * 此时它是「指针焦点」，本身不发亮；但浏览器在**下一次按键**时把模态切回键盘，
+ * `:focus-visible` 当场变真 —— 于是「点清晰度 → 选 720p → 按方向键跳进度」时，
+ * 那颗按钮变成白底黑字、看起来像被选中，而且一直亮到焦点被移走为止
+ * （实测：选完 720p 后 bg=rgba(0,0,0,0)、focus-visible=false；按一次 ArrowRight 后
+ * bg=rgb(245,250,255)、focus-visible=true，之后一直保持）。
+ *
+ * 皮肤的快捷键监听在文档上（实测焦点在 body 上箭头照样跳 5 秒、空格照样暂停），
+ * 所以把焦点交还给文档不影响任何快捷键，只是别让一个「刚被鼠标点过的按钮」装成键盘焦点。
+ * 键盘用户（Tab 过去 + Enter）不走这条路：那次按键之前没有 pointerdown，`pointerFocused` 是 false，
+ * 焦点环照常留在按钮上。
+ */
+function dropPointerFocus(skin: HTMLElement): () => void {
+  const root = skin.shadowRoot;
+  const controller = new AbortController();
+  const { signal } = controller;
+  let pointerFocused = false;
+  document.addEventListener(
+    'pointerdown',
+    () => {
+      pointerFocused = true;
+    },
+    { capture: true, signal },
+  );
+  document.addEventListener(
+    'keydown',
+    (event) => {
+      const wasPointer = pointerFocused;
+      pointerFocused = false;
+      // Tab 是焦点导航，正好要用这颗焦点，别抢
+      if (!wasPointer || event.key === 'Tab') return;
+      // 只管自己这个播放器（同页可能有第二个）
+      if (!event.composedPath().includes(skin)) return;
+      const active = root?.activeElement;
+      // 菜单项（media-menu-item）不算：那是皮肤刚给菜单设的焦点，键盘导航还要用
+      if (active instanceof HTMLElement && active.matches('.media-button')) active.blur();
+    },
+    { capture: true, signal },
+  );
+  return () => controller.abort();
+}
 
 /**
  * 找设置（齿轮）菜单的顶层内容块。
@@ -147,6 +210,9 @@ export function mountPlayerBar(skin: HTMLElement, handlers: PlayerBarHandlers): 
   style.textContent = BAR_CSS;
   root.append(style);
 
+  // 指针点出来的按钮焦点，在用户下一次按键时交还（见函数注释：否则像「被选中」）
+  const stopDroppingPointerFocus = dropPointerFocus(skin);
+
   // ---------- 上一个 / 下一个 ----------
   const stepBtn = (label: string, svg: string, command: () => void): HTMLButtonElement => {
     const btn = document.createElement('button');
@@ -174,7 +240,8 @@ export function mountPlayerBar(skin: HTMLElement, handlers: PlayerBarHandlers): 
   qualityBtn.setAttribute('commandfor', `${uid}-menu`);
   qualityBtn.setAttribute('aria-label', '清晰度');
   qualityBtn.title = '清晰度';
-  qualityBtn.innerHTML = `<span class="myporn-bar-quality-label"></span>${CHEVRON_SVG}`;
+  // 圆里只有这一行数字，没有箭头（见 BAR_CSS 里那段说明）
+  qualityBtn.innerHTML = `<span class="myporn-bar-quality-label"></span>`;
   const labelSpan = qualityBtn.querySelector('.myporn-bar-quality-label');
   if (!(labelSpan instanceof HTMLElement)) {
     style.remove();
@@ -296,13 +363,16 @@ export function mountPlayerBar(skin: HTMLElement, handlers: PlayerBarHandlers): 
       rebuildItems(state.qualities);
     }
 
-    // 只有一条清晰度时没什么可选的，藏起来（display 要手写，`.media-button` 的 display 会盖掉 [hidden]）
-    const showQuality = state.qualities.length > 1;
+    const current = state.qualities.find((q) => q.id === state.selected) ?? null;
+
+    // 只有一条清晰度时没什么可选的，藏起来（display 要手写，`.media-button` 的 display 会盖掉 [hidden]）。
+    // 还没选出档位时也藏：圆里没有位置放「清晰度」三个字，留个空格子比留个空圆更干净
+    const showQuality = state.qualities.length > 1 && current !== null;
     qualityBtn.style.display = showQuality ? '' : 'none';
 
-    const current = state.qualities.find((q) => q.id === state.selected) ?? null;
-    qualityLabel.textContent = current?.label ?? '清晰度';
+    qualityLabel.textContent = current === null ? '' : badgeLabel(current.label);
     qualityBtn.setAttribute('aria-label', current === null ? '清晰度' : `清晰度：${current.label}`);
+    qualityBtn.title = current === null ? '清晰度' : `清晰度：${current.label}`;
     for (const [id, check] of checks) check.style.opacity = id === state.selected ? '1' : '0';
 
     const ambientLabel = state.ambient ? '关闭氛围模式' : '开启氛围模式';
@@ -352,6 +422,7 @@ export function mountPlayerBar(skin: HTMLElement, handlers: PlayerBarHandlers): 
       autoSeparator?.remove();
       style.remove();
       menuStyle.remove();
+      stopDroppingPointerFocus();
       checks.clear();
     },
   };
