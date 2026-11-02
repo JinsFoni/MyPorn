@@ -45,6 +45,23 @@
   function timeLabel(v: YtVideo): string {
     return v.publishedAt ? formatDate(v.publishedAt) : '时间未知';
   }
+
+  /**
+   * 卡片标题去掉末尾那串 `#标签`。
+   *
+   * YouTube 的标题习惯把 hashtag 堆在最后（实测 `/youtube` 首屏 36 张卡里 21 张带，
+   * 且全部在末尾）：「新丝路泳装秀25号沈梦颖#catwalktour #model #show #beauty #catwalk」
+   * 54 个字，削完只剩 12 个字的片名——不削的话一行标题里大半是标签，看不出这条是什么。
+   * 只削**末尾连续的一段**：标题中间的 `#`（比如 `C# 教程 第一课`）原样留着，
+   * 整条标题都是标签（削完为空，比如只有 `#shorts`）时也不动它。
+   * 原始标题仍在 `title`（悬停提示）、`aria-label` 和详情页上，一个字符都没丢。
+   */
+  function stripHashTags(title: string): string {
+    const stripped = title.replace(/(?:\s*#[\p{L}\p{N}_-]+)+\s*$/u, '').trim();
+    return stripped === '' ? title : stripped;
+  }
+
+  const headline = $derived(stripHashTags(video.title));
 </script>
 
 <article class="group">
@@ -104,27 +121,31 @@
     </button>
   {/if}
 
-  <div class="mt-2 flex gap-2">
+  <!-- 头像 / 标题 / 副行的比例照 B 站墙的 VideoCard 来：36px 圆头像（`h-9 w-9`，
+       imageUrl 也按 36 取，不糊）、标题一行截断、副行小字。
+       原来是 24px 头像 + 两行标题——两行标题挤得整张卡比 B 站那面墙高一截，
+       而标题的第二行大半是 #标签（见 stripHashTags）。 -->
+  <div class="mt-2.5 flex items-start gap-2.5">
     {#if video.channel.avatarUrl}
       <img
         src={imageUrl(video.channel.avatarUrl, 36) ?? ''}
         alt=""
         loading="lazy"
-        class="mt-0.5 h-6 w-6 shrink-0 rounded-full object-cover"
+        class="h-9 w-9 shrink-0 rounded-full object-cover"
       />
     {:else}
-      <span class="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-panel text-[0.625rem] text-dim">
+      <span class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-panel text-meta text-dim">
         {video.channel.title.charAt(0).toUpperCase()}
       </span>
     {/if}
     <div class="min-w-0 flex-1">
       <button
         type="button"
-        class="line-clamp-2 text-left text-ui font-medium leading-snug text-fg hover:underline"
+        class="block w-full truncate text-left text-ui font-medium leading-snug text-fg hover:underline"
         title={video.title}
         onclick={() => onOpen?.(video)}
       >
-        {video.title}
+        {headline}
       </button>
       <p class="mt-1 truncate text-meta text-dim">
         {video.channel.title}{#if meta}<span class="mx-1 opacity-60">·</span>{meta}{/if}
