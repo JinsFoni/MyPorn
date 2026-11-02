@@ -338,6 +338,51 @@ func (s *Store) UpsertYtVideos(channelRowID int64, vids []YtVideoInput) ([]int64
 	return fresh, nil
 }
 
+// DeleteYtVideosByVideoIDs 按 YouTube 的 11 位 id 删行，返回真正删掉的条数。
+//
+// 只给「这条不该在库里」用：目前唯一调用方是会员抢先看（`availability=subscriber_only`，
+// 见 ytsub.Video.MembersOnly）。**删而不是藏**是有意的——频道会员视频「会员先看 30 天、
+// 之后转公开」（频道 4kaamg 的原话：「会员优先观看的视频，计划在30天后转为公开」），
+// 藏起来的话那条记录永远不会再被检查，30 天后也出不来；删掉的话下一轮同步
+// （RSS 或深度回填）看见它就是公开的了，自然重新入库。
+func (s *Store) DeleteYtVideosByVideoIDs(videoIDs []string) (int, error) {
+	if len(videoIDs) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	channels := map[int64]struct{}{}
+	deleted := 0
+	for _, id := range videoIDs {
+		var channelRowID int64
+		err := tx.QueryRow(`SELECT channel_id FROM yt_videos WHERE video_id = ?`, id).Scan(&channelRowID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM yt_videos WHERE video_id = ?`, id); err != nil {
+			return 0, err
+		}
+		channels[channelRowID] = struct{}{}
+		deleted++
+	}
+	for channelRowID := range channels {
+		if err := refreshYtChannelCounts(tx, channelRowID); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 func refreshYtChannelCounts(tx *sql.Tx, channelRowID int64) error {
 	_, err := tx.Exec(`UPDATE yt_channels SET
 			video_count  = (SELECT COUNT(*) FROM yt_videos v WHERE v.channel_id = yt_channels.id AND v.hidden = 0),

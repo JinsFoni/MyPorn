@@ -68,3 +68,53 @@ func TestParseWatchMetaDurationOnly(t *testing.T) {
 		t.Fatalf("没有时间就该是零值，实际 = %v", got.PublishedAt)
 	}
 }
+
+// 会员抢先看（availability=subscriber_only）：观看页的徽章要认出来，
+// 但时间 / 时长照样收——这条信息是用来决定「别入库」的，不是用来判「解析失败」的。
+//
+// 页面片段照 2026-11-02 抓到的真实页面剪的（2gtrgAKIH88，1.26MB）：
+// 徽章里 iconType=SPONSORSHIP_STAR、style=BADGE_STYLE_TYPE_MEMBERS_ONLY、label=会员抢先观看；
+// playabilityStatus.status=UNPLAYABLE 且 errorScreen 带 offerId=sponsors_only_video。
+func TestParseWatchMetaMembersOnly(t *testing.T) {
+	page := `<html><head><title>会员片 - YouTube</title></head><body>
+		"publishDate":"2026-11-02T06:13:08-08:00","lengthSeconds":"205",
+		"badges":[{"metadataBadgeRenderer":{"icon":{"iconType":"SPONSORSHIP_STAR"},
+			"style":"BADGE_STYLE_TYPE_MEMBERS_ONLY","label":"会员抢先观看"}}]
+	</body></html>`
+	got, err := parseWatchMeta(page)
+	if err != nil {
+		t.Fatalf("会员抢先看的页面也该解析出元信息: %v", err)
+	}
+	if !got.MembersOnly {
+		t.Fatal("徽章 BADGE_STYLE_TYPE_MEMBERS_ONLY 在，却没认出会员抢先看")
+	}
+	if got.DurationSec != 205 {
+		t.Errorf("时长 = %d，期望 205", got.DurationSec)
+	}
+	if got.PublishedAt.IsZero() {
+		t.Error("发布时间应当解析出来")
+	}
+
+	// 只有拒播理由、徽章被折叠掉时也要认得（offerId=sponsors_only_video）。
+	onlyOffer := `<html><body>"publishDate":"2026-11-02T06:13:08-08:00","playabilityStatus":
+		{"status":"UNPLAYABLE","reason":"成为此频道的会员即可观看会员专享的内容",
+		 "errorScreen":{"playerLegacyDesktopYpcOfferRenderer":{"offerId":"sponsors_only_video"}}}</body></html>`
+	got2, err := parseWatchMeta(onlyOffer)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if !got2.MembersOnly {
+		t.Error("offerId=sponsors_only_video 也应该认出会员抢先看")
+	}
+
+	// 普通公开视频不能误判：同一个页面里没有这两个胎记。
+	plain := `<html><body>"publishDate":"2026-11-02T06:13:08-08:00","lengthSeconds":"120",
+		"badges":[{"metadataBadgeRenderer":{"style":"BADGE_STYLE_TYPE_VERIFIED"}}]</body></html>`
+	got3, err := parseWatchMeta(plain)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if got3.MembersOnly {
+		t.Error("普通视频被误判成会员抢先看")
+	}
+}

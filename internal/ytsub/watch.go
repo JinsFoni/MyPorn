@@ -28,6 +28,23 @@ var (
 	watchItemDateRe = regexp.MustCompile(`itemprop="datePublished" content="([^"]+)"`)
 )
 
+// 会员抢先看（`availability=subscriber_only`）在观看页上的两个语言无关的胎记。
+//
+// 实测 2gtrgAKIH88（2026-11-02，1.26MB 的观看页）：
+//
+//	"badges":[{"metadataBadgeRenderer":{"icon":{"iconType":"SPONSORSHIP_STAR"},
+//	  "style":"BADGE_STYLE_TYPE_MEMBERS_ONLY","label":"会员抢先观看", …}}]
+//	"playabilityStatus":{"status":"UNPLAYABLE","reason":"成为此频道的会员即可观看…",
+//	  "errorScreen":{… "offerId":"sponsors_only_video"}}
+//
+// 认徽章是因为它才是这件事本身（会员抢先看），`offerId` 只是播放器的拒播理由
+// （顺手也认它，防止某天徽章被折叠掉）。两个都是英文枚举值，不受 `hl` 影响——
+// 上面那句 reason 现在是中文，全因为请求带了 `Accept-Language: zh-CN`，不能拿它当判据。
+var (
+	watchMembersBadgeRe = regexp.MustCompile(`BADGE_STYLE_TYPE_MEMBERS_ONLY`)
+	watchMembersOfferRe = regexp.MustCompile(`"offerId":"sponsors_only_video"`)
+)
+
 func WatchMeta(ctx context.Context, client *http.Client, th *social.Throttle, videoID string) (Video, error) {
 	body, err := getPage(ctx, client, th, BaseURL+"/watch?v="+videoID+"&hl=en")
 	if err != nil {
@@ -74,6 +91,7 @@ func parseWatchMeta(page string) (Video, error) {
 	if strings.Contains(page, `"isLiveContent":true`) {
 		v.IsLive = true
 	}
+	v.MembersOnly = watchMembersBadgeRe.MatchString(page) || watchMembersOfferRe.MatchString(page)
 	v.Title = watchTitle(page)
 	return v, nil
 }

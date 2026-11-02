@@ -131,6 +131,7 @@ INSERT OR IGNORE INTO platforms (key, name) VALUES ('youtube', 'YouTube');
 | 覆盖 | 最近 15 条 | `--playlist-end {yt_backfill_limit}`，默认 200 |
 | 耗时 | 1 次请求，< 1s | 实测 200 条 5.8s |
 | 给到 | 标题、绝对时间、播放量、封面、简介 | 标题、**时长**、播放量、封面（**没有时间**） |
+| 会员抢先看 | feed 里没有这类视频 | `availability=subscriber_only` → 丢掉不入库（§5.6） |
 | 依赖 | 无（只用标准库 XML） | 外部二进制 yt-dlp |
 
 两条通道写同一张表，按 `video_id` upsert，**空值不覆盖已有值**（RSS 补时间，flat 补时长，两边都在补同一行）。
@@ -165,11 +166,59 @@ flat 模式 200 条里 **0 条**带时间戳（§11-3）。逐条完整解析要
 | 「Sign in to confirm you're not a bot」/ 人机校验页 / 403 | `blocked`（**不设冷却**） | 「换出口 IP / 换代理」+ 设置直达 |
 | yt-dlp 报 `Unable to extract` / `player response` 解析失败 | `stale_parser` **+ 明确写「yt-dlp 可能过期」** | 「去升级 yt-dlp」，附当前版本号 |
 | 频道 404 / 0 条 | `not_found` | 「这个频道没有内容或已注销」 |
+| `Join this channel to get access to members-only content` | `not_found` | 「这条是「会员抢先观看」…本站不抓取这类视频」（这类视频本来就不入库，见 §5.6） |
 
 ### 5.5 代理
 
 `proxy_youtube` → `global_proxy` → 环境变量 `PLATFORM_PROXY_YOUTUBE` → `GLOBAL_PROXY`，**保存即生效**（`internal/proxying` 已经写好）。
 yt-dlp 侧用 `--proxy <url>`，与站内客户端同一个取值点——否则「界面上配了代理但下载还是直连」这种割裂一定会在某天咬人。
+
+### 5.6 会员抢先看（`availability=subscriber_only`）不抓（2026-11-02）
+
+**起因**：`/youtube/2gtrgAKIH88`（频道 4kaamg）点开就是解析失败。它不是坏链接，是
+「会员抢先观看」——`yt-dlp` 的原话：
+
+```
+ERROR: [youtube] 2gtrgAKIH88: Join this channel to get access to members-only content like this video,
+and other exclusive perks.
+```
+
+这类视频要加入该频道会员才能看，抓进来只有一个后果：墙上多一张永远点不开的卡。用户要求不抓。
+
+**三处胎记，都能当场量出来**（`internal/ytsub` 分别认这三处）：
+
+| 通道 | 判据 | 实测 |
+|---|---|---|
+| yt-dlp flat 列频道 | `availability == "subscriber_only"` | 频道 4kaamg 前 40 条里 **21 条**是它，其余 19 条该字段是 `null` |
+| 观看页（`yt_meta` 补元信息） | `"style":"BADGE_STYLE_TYPE_MEMBERS_ONLY"`（`iconType: SPONSORSHIP_STAR`） | 就是界面上那个「会员抢先观看」徽章 |
+| 观看页（兜底） | `"offerId":"sponsors_only_video"`（在 `playabilityStatus.errorScreen` 里） | 徽章被折叠掉时仍能认出来 |
+| RSS | **认不出——也不需要认** | 这类视频压根不进 feed：2gtrgAKIH88 发布于 14:13，比 feed 里最新几条都新，却不在那 15 条里 |
+
+**注意**：`playabilityStatus` 的 `reason` 是**中文**（「成为此频道的会员即可观看…」），
+那只是因为请求带了 `Accept-Language: zh-CN`，不能拿它当判据；上面两个英文枚举值才稳。
+
+**做法**：`ytsub` 只**报告**事实（`Video.MembersOnly`），入库策略放在 jobs 里：
+
+- `ytBackfill`（深度）：flat 列表里 `MembersOnly` 的条目**直接丢掉不入库**，库里同 `video_id` 的旧行
+  一并删掉（日志 `跳过会员抢先看的视频 … listed=N removed=M`）；
+- `runYtMetaJob`（补元信息，观看页）：认到徽章也删行（进度里写「删掉 N 条会员抢先看的」）；
+- 播放/单条 refresh：`mapError` 把它翻成
+  「这条是「会员抢先观看」：加入该频道会员才能播放，本站不抓取这类视频」，不再吐 yt-dlp 的英文原话。
+
+**为什么是删不是藏**：频道公告的原话是「会员优先观看的视频，计划在 30 天后转为公开」。
+藏起来的话那条记录永远不会再被检查，30 天后也出不来；**删掉**的话下一轮同步（RSS 或深度回填）
+看见它已经是公开的了，会正常入库——这才是这类视频本来的生命周期。
+
+**本机实测（2026-11-02，7 个频道全员深度同步一次）**：
+
+```
+127.0.0.1 - yt_sync done   跳过会员抢先看的视频 channel=4kaamg listed=12 removed=12
+127.0.0.1 - yt_sync done   跳过会员抢先看的视频 channel=8K摄影大玩家A7loveyou listed=7 removed=5
+```
+
+`yt_videos` 184 → 167 行（其余 5 个频道 flat 列表里一条都没有）；4kaamg 的 27 条里 12 条是会员抢先看，
+删完剩 15 条是公开的。再验一遍第二处胎记：手工塞一条缺时间缺时长的 2gtrgAKIH88，
+点「补齐」→ 任务文案「补完 0 条，删掉 1 条会员抢先看的」，行没了。
 
 ## 6. 下载（yt-dlp → 入库）
 

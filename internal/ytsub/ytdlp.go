@@ -196,12 +196,13 @@ func parseVersionDate(ver string) (time.Time, bool) {
 // ---- 列频道（深度回填）----
 
 type flatItem struct {
-	ID         string   `json:"id"`
-	Title      string   `json:"title"`
-	Duration   *float64 `json:"duration"`
-	ViewCount  *int64   `json:"view_count"`
-	Timestamp  *float64 `json:"timestamp"`
-	LiveStatus string   `json:"live_status"`
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	Duration     *float64 `json:"duration"`
+	ViewCount    *int64   `json:"view_count"`
+	Timestamp    *float64 `json:"timestamp"`
+	LiveStatus   string   `json:"live_status"`
+	Availability string   `json:"availability"`
 }
 
 type flatOut struct {
@@ -247,6 +248,11 @@ func (y *YtDlp) ListChannel(ctx context.Context, channelID string, limit int) ([
 			VideoID:      e.ID,
 			Title:        e.Title,
 			ThumbnailURL: ThumbURL(e.ID, "mqdefault"),
+			// 会员抢先看：flat 列表把它标成 subscriber_only。实测频道 4kaamg 的前 40 条里
+			// **21 条**是它、19 条该字段为 null——不是偶发个例，一个频道可能大半都是。
+			// 这里只**报告**事实，要不要入库由调用方决定（jobs 的 ytBackfill 会丢掉它，
+			// 见那里的注释）。
+			MembersOnly: e.Availability == "subscriber_only",
 		}
 		if strings.HasPrefix(e.LiveStatus, "is_live") || e.LiveStatus == "post_live" {
 			v.IsLive = true
@@ -618,6 +624,11 @@ func (y *YtDlp) mapError(err error, stderr string) error {
 		return social.Blocked("YouTube 拒绝下载（403）：多半是 yt-dlp 过期或出口 IP 被限，先升级 yt-dlp 再试")
 	case strings.Contains(msg, "http error 429") || strings.Contains(msg, "too many requests"):
 		return social.RateLimited("YouTube 限流了，等一会儿再试", time.Now().Add(15*time.Minute))
+	case strings.Contains(msg, "members-only") || strings.Contains(msg, "join this channel"):
+		// 实测原话：`Join this channel to get access to members-only content like this video,
+		// and other exclusive perks.` 这类视频我们根本不该入库（ytBackfill 会丢），
+		// 除非它是「先会员、30 天后转公开」的那段时间里被人硬打开的。
+		return social.NotFound("这条是「会员抢先观看」：加入该频道会员才能播放，本站不抓取这类视频")
 	case strings.Contains(msg, "video unavailable") || strings.Contains(msg, "private video") ||
 		strings.Contains(msg, "removed by the uploader"):
 		return social.NotFound("这条视频已不可用（私有 / 已删除 / 分区限制）")

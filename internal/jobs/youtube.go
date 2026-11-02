@@ -200,12 +200,32 @@ func (r *Runner) ytIncrement(ctx context.Context, c *Ctl, ch *store.YtChannel) e
 }
 
 // ytBackfill 走 yt-dlp：一次列 N 条，补上 RSS 给不了的时长。
+//
+// 会员抢先看（`availability=subscriber_only`）在这里被丢掉，库里已有的同 id 行一并删掉：
+// 这类视频要加入频道会员才能看，抓进来的卡片点开必然「解析失败」，用户 2026-11-02 要求不要。
+// 30 天后它们转公开，下一轮同步看见 availability 不再是 subscriber_only，就会正常入库。
 func (r *Runner) ytBackfill(ctx context.Context, c *Ctl, ch *store.YtChannel) error {
 	limit := r.settingInt("yt_backfill_limit", ytBackfillDefault)
 	c.Progress(c.percent(), fmt.Sprintf("用 yt-dlp 列 %s 的前 %d 条", ch.Title, limit), 0, 0, 0)
-	videos, err := r.ytDlp.ListChannel(ctx, ch.ChannelID, limit)
+	listed, err := r.ytDlp.ListChannel(ctx, ch.ChannelID, limit)
 	if err != nil {
 		return err
+	}
+	videos := make([]ytsub.Video, 0, len(listed))
+	members := make([]string, 0, 4)
+	for _, v := range listed {
+		if v.MembersOnly {
+			members = append(members, v.VideoID)
+			continue
+		}
+		videos = append(videos, v)
+	}
+	if len(members) > 0 {
+		pruned, derr := r.st.DeleteYtVideosByVideoIDs(members)
+		if derr != nil {
+			r.log.Warn("删掉会员抢先看的视频失败", "channel", ch.Title, "err", derr)
+		}
+		r.log.Info("跳过会员抢先看的视频", "channel", ch.Title, "listed", len(members), "removed", pruned)
 	}
 	fresh, err := r.st.UpsertYtVideos(ch.ID, toYtInputs(videos))
 	if err != nil {
@@ -551,7 +571,7 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 	}
 
 	client := r.httpClient("youtube")
-	filled, failed := 0, 0
+	filled, failed, pruned := 0, 0, 0
 	for i, row := range rows {
 		if err := c.Check(); err != nil {
 			return err
@@ -569,6 +589,16 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 			}
 			continue
 		}
+		if info.MembersOnly {
+			// 这条是会员抢先看：库里不该有它（观看页的徽章是权威判据，flat 列表那次可能
+			// 还没带上 availability）。删掉，下一轮同步它转公开了再进来。
+			if _, derr := r.st.DeleteYtVideosByVideoIDs([]string{row.VideoID}); derr != nil {
+				r.log.Warn("删掉会员抢先看的视频失败", "ytVideo", row.ID, "err", derr)
+			} else {
+				pruned++
+			}
+			continue
+		}
 		var published *time.Time
 		if !info.PublishedAt.IsZero() {
 			published = &info.PublishedAt
@@ -581,11 +611,14 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 		filled++
 	}
 	msg := fmt.Sprintf("补完 %d 条", filled)
+	if pruned > 0 {
+		msg += fmt.Sprintf("，删掉 %d 条会员抢先看的", pruned)
+	}
 	if failed > 0 {
 		// 实测这 3 条重跑一次就补上了（首次连接偶发失败），所以别把话说死成「已删除」。
 		msg += fmt.Sprintf("，%d 条这次没拿到（可能已删除，也可能只是这次请求失败，可以再点一次）", failed)
 	}
 	c.Progress(100, msg, 0, 0, 0)
-	r.log.Info("补元信息完成", "filled", filled, "failed", failed)
+	r.log.Info("补元信息完成", "filled", filled, "failed", failed, "membersOnly", pruned)
 	return nil
 }

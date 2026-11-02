@@ -201,3 +201,37 @@ func TestFillYtVideoMeta(t *testing.T) {
 		t.Errorf("时长/播放量没写进去: %+v", row)
 	}
 }
+
+// 删掉会员抢先看的那条：行没了、频道计数跟着降，30 天后转公开时下一轮同步能重新入库。
+func TestDeleteYtVideosByVideoIDs(t *testing.T) {
+	st := newTestStore(t)
+	chID, _, err := st.UpsertYtChannel(ytTestChannel("UCcccccccccccccccccccccc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertYtVideos(chID, []YtVideoInput{
+		{VideoID: "keep01", Title: "公开"},
+		{VideoID: "member01", Title: "会员抢先看"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 库里没有的 id 不该算进删除数（flat 列表里大部分会员视频我们从来没存过）。
+	n, err := st.DeleteYtVideosByVideoIDs([]string{"member01", "never-seen"})
+	if err != nil {
+		t.Fatalf("删除失败: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("应只删掉 1 条，得到 %d", n)
+	}
+	ch, err := st.GetYtChannel(chID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch.VideoCount != 1 || ch.UnseenCount != 1 {
+		t.Errorf("计数没跟着降: videos=%d unseen=%d", ch.VideoCount, ch.UnseenCount)
+	}
+	// 空列表是常态（flat 列表里一条都不带 availability），不能报错也不能白扫一遍。
+	if n, err := st.DeleteYtVideosByVideoIDs(nil); err != nil || n != 0 {
+		t.Fatalf("空列表应得 0, nil，得到 %d, %v", n, err)
+	}
+}

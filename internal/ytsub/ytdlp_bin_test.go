@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -89,3 +90,65 @@ func TestBinResolvesBareCommandNameFromPath(t *testing.T) {
 		t.Fatalf("Version() = %+v，想要 found=false + 错误文案", info)
 	}
 }
+
+// flat 列表里的 `availability`：subscriber_only = 会员抢先看，要如实报出来
+// （jobs 的 ytBackfill 据此丢掉不入库）。
+//
+// 这份 JSON 的形状照 2026-11-02 真跑 `yt-dlp -J --flat-playlist` 的输出剪的：
+// 40 条里只有一条 availability="subscriber_only"（2gtrgAKIH88），其余是 null。
+func TestListChannelFlagsMembersOnly(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "yt-dlp")
+	script := `#!/bin/sh
+cat <<'JSON'
+{"entries":[
+ {"id":"2gtrgAKIH88","title":"会员抢先看的那条","duration":205,"view_count":null,
+  "timestamp":null,"availability":"subscriber_only","live_status":null},
+ {"id":"iEZ_quzVcOE","title":"公开的那条","duration":601,"view_count":139,
+  "timestamp":null,"availability":null,"live_status":null}
+]}
+JSON
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	y := NewYtDlp(func() string { return bin }, func() string { return "" }, func() string { return "" },
+		func() string { return "" }, nil)
+	videos, err := y.ListChannel(context.Background(), "UC7h5bqq_rzVxqhLyKtA7JRw", 10)
+	if err != nil {
+		t.Fatalf("列频道失败: %v", err)
+	}
+	if len(videos) != 2 {
+		t.Fatalf("应拿到 2 条，得到 %d", len(videos))
+	}
+	if !videos[0].MembersOnly {
+		t.Error("availability=subscriber_only 的那条没被标成会员抢先看")
+	}
+	if videos[0].DurationSec != 205 {
+		t.Errorf("会员抢先看的时长也该照收（用户可能想留证据），得到 %d", videos[0].DurationSec)
+	}
+	if videos[1].MembersOnly {
+		t.Error("公开视频被误标成会员抢先看")
+	}
+}
+
+// 会员抢先看的 yt-dlp 原话要翻成一句人话，别把 stderr 原样丢给用户。
+// 实测（2026-11-02，2gtrgAKIH88）：
+// `ERROR: [youtube] 2gtrgAKIH88: Join this channel to get access to members-only content
+//  like this video, and other exclusive perks.`
+func TestMapErrorMembersOnly(t *testing.T) {
+	y := NewYtDlp(func() string { return "" }, nil, nil, nil, nil)
+	stderr := "ERROR: [youtube] 2gtrgAKIH88: Join this channel to get access to members-only content like this video, and other exclusive perks."
+	err := y.mapError(errStub{}, stderr)
+	msg := err.Error()
+	if !strings.Contains(msg, "会员抢先观看") {
+		t.Fatalf("错误信息没说是会员抢先看: %q", msg)
+	}
+	if strings.Contains(msg, "Join this channel") {
+		t.Fatalf("把 yt-dlp 的英文原话丢给用户了: %q", msg)
+	}
+}
+
+type errStub struct{}
+
+func (errStub) Error() string { return "exit status 1" }

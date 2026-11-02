@@ -55,6 +55,12 @@ type Video struct {
 	Views        int64
 	DurationSec  int
 	IsLive       bool
+	// MembersOnly = 会员抢先看（`availability=subscriber_only`）：加入该频道会员才能看，
+	// 我们抓不到也不抓（用户 2026-11-02 的要求）。两条通道都能认出来：
+	// flat 列表给 `availability`，观看页给 `BADGE_STYLE_TYPE_MEMBERS_ONLY` 徽章
+	// 或 `"offerId":"sponsors_only_video"`（见 watch.go）。RSS 认不出——它压根不列这类视频
+	// （实测 2gtrgAKIH88 发布于 14:13、比 feed 里最新几条都新，却不在那 15 条里）。
+	MembersOnly bool
 }
 
 // ThumbURL 拼封面地址。YouTube 的封面是纯 URL 规则、不看接口返回：
