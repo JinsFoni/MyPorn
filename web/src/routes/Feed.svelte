@@ -216,30 +216,9 @@
 <PerformerRail selected={performerFilter} onSelect={setPerformer} onLoad={(items) => (railItems = items)} />
 
 <!-- 筛选胶囊的样式对齐 YouTube 页的「全部频道」：无底色、选中才吃 bg-raise，未看数走一个小角标。
-     按艺人筛的时候，最前面多一颗带 ✕ 的名字胶囊——头像条上的白环是「选中」，
-     但这颗胶囊才是「怎么退出去」的那句明话（头像条一横屏可能已经滚出视野）。 -->
+     第一颗胶囊**永远是「全部」**（用户要求）：按艺人筛的时候不再在前面插一颗带 ✕ 的名字胶囊。
+     取消筛选＝再点一次那颗头像（白环亮着的那颗），页面右侧那行「只看 X 的片」是说明、不是按钮。 -->
 <div class="mb-3 flex items-center gap-1.5 overflow-x-auto pb-1 lg:mb-5">
-  {#if performerFilter !== null}
-    <button
-      type="button"
-      class="flex shrink-0 items-center gap-1.5 rounded-full bg-raise py-1.5 pl-3 pr-2.5 text-meta text-fg"
-      title="取消艺人筛选"
-      onclick={() => setPerformer(null)}
-    >
-      <span class="max-w-[9rem] truncate">{picked?.name ?? '这位艺人'}</span>
-      <svg
-        viewBox="0 0 16 16"
-        class="h-3 w-3 shrink-0 text-dim"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.8"
-        stroke-linecap="round"
-        aria-hidden="true"
-      >
-        <path d="m4 4 8 8M12 4l-8 8" />
-      </svg>
-    </button>
-  {/if}
   <button
     type="button"
     class="shrink-0 rounded-full px-3 py-1.5 text-meta transition-colors {newOnly

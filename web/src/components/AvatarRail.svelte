@@ -5,9 +5,10 @@
   /**
    * 头像条：横向滚动的圆头像＝**过滤器**（关注页 / B 站页 / YouTube 页共用一套）。
    *
-   * 口径来自关注页（2026-11-02）：72px 圆头像（`h-18 w-18`）+ 96px 宽的姓名
-   * （`text-meta`，单行截断），**不显示任何计数**；点头像＝把 `id` 交回去，由页面写地址栏；
-   * 选中态是头像外 2px 白环 + 姓名 `font-medium`，再点同一个取消。
+   * 尺寸（2026-11-02 按用户要求「头像改小一点」从 72px 缩到 56px）：**56px 圆头像**
+   * （`h-14 w-14`）+ 80px 宽的姓名（`w-20`，`text-meta` 12px，单行截断），**不显示任何计数**；
+   * 点头像＝把 `id` 交回去，由页面写地址栏；选中态是头像外 2px 白环 + 姓名 `font-medium`，
+   * 再点同一个取消（这是**唯一**的取消入口：下面那行筛选行不再有带 ✕ 的名字胶囊）。
    *
    * 容器 `flex gap-3 overflow-x-auto no-scrollbar`，用「负外边距 + 等量内边距」做贴边滚动：
    * 首列头像永远与内容左边缘（桌面 296 / 移动 12px）对齐，滚动盒自己往两侧多伸出去同样多。
@@ -78,25 +79,25 @@
             onclick={() => pick(item.id)}
             data-rail-id={item.id}
             aria-pressed={selected === item.id}
-            class="group flex w-24 flex-col items-start gap-1.5 text-left"
+            class="group flex w-20 flex-col items-start gap-1 text-left"
             title={selected === item.id
               ? `${item.title ?? item.name}（再点一次看全部）`
               : (item.title ?? item.name)}
           >
             <span class="relative block">
               <span
-                class="block h-18 w-18 overflow-hidden rounded-full bg-panel {selected === item.id
+                class="block h-14 w-14 overflow-hidden rounded-full bg-panel {selected === item.id
                   ? 'ring-2 ring-fg ring-offset-2 ring-offset-ink'
                   : ''}"
               >
                 {#if item.avatarUrl && !failed[item.id]}
                   <img
                     data-media
-                    src={imageUrl(item.avatarUrl, 180) ?? ''}
+                    src={imageUrl(item.avatarUrl, 128) ?? ''}
                     onerror={() => (failed = { ...failed, [item.id]: true })}
                     alt=""
-                    width="180"
-                    height="180"
+                    width="128"
+                    height="128"
                     loading="lazy"
                     decoding="async"
                     class="h-full w-full object-cover transition duration-300 {item.dimmed
@@ -131,9 +132,18 @@
     </ul>
   </nav>
 {:else if loading}
-  <div class="mb-4 flex gap-3 lg:mb-5" aria-hidden="true">
-    {#each Array.from({ length: 6 }, (_, i) => i) as i (i)}
-      <div class="h-18 w-18 shrink-0 rounded-full bg-panel"></div>
-    {/each}
+  <!-- 占位行跟真身用同一套外框（等量负边距 + 内边距 + 横向滚动）：6 颗 56px 圆
+       在 390 宽的手机上装不下（6×56 + 5×12 = 396 > 366 可用），不加滚动会把整页顶出横向滚动条。 -->
+  <div class="mb-4 lg:mb-5" aria-hidden="true">
+    <div
+      class="no-scrollbar -mx-3 -mt-1.5 flex gap-3 overflow-x-auto px-3 pb-1 pt-1.5 sm:-mx-4 sm:px-4 lg:-mx-1.5 lg:px-1.5"
+    >
+      {#each Array.from({ length: 6 }, (_, i) => i) as i (i)}
+        <div class="flex w-20 shrink-0 flex-col items-start gap-1">
+          <div class="h-14 w-14 rounded-full bg-panel"></div>
+          <div class="h-3 w-12 rounded-full bg-panel"></div>
+        </div>
+      {/each}
+    </div>
   </div>
 {/if}

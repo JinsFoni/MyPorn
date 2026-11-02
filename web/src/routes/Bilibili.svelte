@@ -105,9 +105,6 @@
     })),
   );
 
-  /** 头像条里选中的那位（用来在筛选行上写「点谁筛谁」那句话） */
-  const picked = $derived(channels.find((c) => c.id === filterChannel) ?? null);
-
   async function loadChannels(): Promise<void> {
     channelsError = '';
     try {
@@ -380,31 +377,11 @@
   {/if}
 
   {#if channelsLoaded && channels.length > 0}
-    <!-- 筛选行：左边是「点了谁」（带 ✕ 的名字胶囊）+ 全部/未看，右边是页内动作。
-         谁可以筛、筛成什么样都在上面那条头像条里，这一行不再列一遍 UP 主。 -->
+    <!-- 筛选行：左边只有「全部/未看」，右边是页内动作。
+         谁可以筛、筛成什么样都在上面那条头像条里，这一行不再列一遍 UP 主；
+         按 UP 主筛的时候**不在「全部」前面挂带 ✕ 的名字胶囊**（用户要求），
+         取消筛选＝再点一次那颗亮着白环的头像。 -->
     <div class="flex flex-wrap items-center gap-2">
-      {#if filterChannel !== null}
-        <button
-          type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-full bg-raise py-1.5 pl-3 pr-2.5 text-meta text-fg"
-          title="取消 UP 主筛选"
-          onclick={() => setChannel(null)}
-        >
-          <span class="max-w-[9rem] truncate">{picked?.name ?? '这位 UP 主'}</span>
-          <svg
-            viewBox="0 0 16 16"
-            class="h-3 w-3 shrink-0 text-dim"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            aria-hidden="true"
-          >
-            <path d="m4 4 8 8M12 4l-8 8" />
-          </svg>
-        </button>
-      {/if}
-
       <div class="flex shrink-0 items-center gap-0.5 rounded-full bg-panel p-0.5 text-meta">
         {#each MODES as item (item[0])}
           <button

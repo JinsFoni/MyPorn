@@ -98,9 +98,6 @@
     })),
   );
 
-  /** 头像条里选中的那个频道（筛选行上要写名字） */
-  const picked = $derived(channels.find((c) => c.id === filterChannel) ?? null);
-
   async function loadChannels(): Promise<void> {
     channelsError = '';
     try {
@@ -384,31 +381,11 @@
   {/if}
 
   {#if channelsLoaded && channels.length > 0}
-    <!-- 筛选行：左边是「点了谁」（带 ✕ 的名字胶囊）+ 全部/未看/收藏，右边是页内动作。
-         频道列表不在这里再列一遍——上面那条头像条就是筛选器。 -->
+    <!-- 筛选行：左边只有「全部/未看/收藏」，右边是页内动作。
+         频道列表不在这里再列一遍——上面那条头像条就是筛选器；
+         按频道筛的时候**不在「全部」前面挂带 ✕ 的名字胶囊**（用户要求），
+         取消筛选＝再点一次那颗亮着白环的头像。 -->
     <div class="flex flex-wrap items-center gap-2">
-      {#if filterChannel !== null}
-        <button
-          type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-full bg-raise py-1.5 pl-3 pr-2.5 text-meta text-fg"
-          title="取消频道筛选"
-          onclick={() => setChannel(null)}
-        >
-          <span class="max-w-[9rem] truncate">{picked?.title ?? '这个频道'}</span>
-          <svg
-            viewBox="0 0 16 16"
-            class="h-3 w-3 shrink-0 text-dim"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            aria-hidden="true"
-          >
-            <path d="m4 4 8 8M12 4l-8 8" />
-          </svg>
-        </button>
-      {/if}
-
       <div class="flex shrink-0 items-center gap-0.5 rounded-full bg-panel p-0.5 text-meta">
         {#each MODES as item (item[0])}
           <button
