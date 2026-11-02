@@ -246,6 +246,7 @@ func (s *Server) Routes() http.Handler {
 			pr.Post("/yt/videos/seen", s.handleYtSeen)
 			pr.Post("/yt/videos/{id}/save", s.handleYtSave)
 			pr.Post("/yt/videos/{id}/refresh", s.handleYtRefresh)
+			pr.Post("/yt/videos/{id}/rotate", s.handleYtRotate)
 			pr.Post("/yt/videos/{id}/download", s.handleYtDownload)
 			// 站内在线播放：清单（改写成会话地址）+ 画质清单 + 会话取物口。
 			pr.Get("/yt/videos/{id}/stream", s.handleYtStreamInfo)

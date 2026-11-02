@@ -1048,3 +1048,62 @@ shadow 里的属性。所以 `VideoPlayer.svelte` 加了 `watchControls()`：一
 | 鼠标再动一下 | 有 | true | 1 |
 
 暂停态单独量过：暂停 8 秒后 `data-visible=true`、关闭键 `opacity=1`（皮肤暂停时不收控制条），此时点关闭键弹窗正常关闭。
+
+### 14.16 「有些竖屏视频是横着播放的」：认不出来，改成手动转 + 记住（2026-11-03）
+
+**起因**：用户拿 `/youtube/iEZ_quzVcOE` 问「有些竖屏视频是横着播放的，能识别出来吗」。结论是**认不出来**，
+而且不是我们的问题——下面是量出来的东西。
+
+**这个文件本身躺着**（三层都量过，都没有旋转信息）：
+
+| 量什么 | 结果 |
+|---|---|
+| `yt-dlp -J` | `width: 3840, height: 2160`，41 个 format 的 `rotation` 全是 `null`、`side_data_list` 全是 `null` |
+| 下 144p（format 394，av01）再 `ffprobe` | `256x144`，`tags: {}`，没有 `rotate` tag、没有 side_data |
+| `/api/yt/videos/4062/stream` 的 `qualities[]` | 只有 `height` / `label` / `bandwidth` / `codecs` / `dash`，**没有 width，也没有 rotation 字段** |
+| `maxresdefault.jpg` | 1280×720，画面**本身就是转过的**（人横着、头在左边）；抽第 5 秒那一帧也是同样的横法 |
+
+最后一条是关键：YouTube 自己按视频帧生成的封面都是躺着的，说明**像素就是躺着的**，
+YouTube 自己的播放器也只能躺着放。要「识别」只剩看画面内容（人脸朝向之类）这条路——那是个概率判断，
+猜错就把好片子转歪了，跟「不静默变形」冲突。所以给定成：**用户点一次，程序记住**。
+
+**做法**
+
+- 迁移 `0012_yt_video_rotate.sql`：`yt_videos.rotate_deg INTEGER NOT NULL DEFAULT 0`（0/90/180/270，顺时针）；
+- `POST /api/yt/videos/{id}/rotate {"deg":90}`（`handleYtRotate` → `store.SetYtVideoRotate`），
+  非法角度回 400、不存在的 id 回 404，DTO 里带 `rotateDeg`；
+- 播放页标题行第 5 颗 `icon-act` 键：点一下 0 → 90 → 180 → 270 → 0，先改本地画面（立刻转）、再写库，
+  写失败退回去并报一句；转过角度的片子图标提亮（`[data-rotated]`）；
+- 播放器只在**真正在播的那个 `<video>`** 上套 transform（套外壳会把进度条、按钮一起转歪），
+  90/270 再乘缩放系数，见 `VideoPlayer.svelte` 的 `applyRotate` / `rotateScale`。
+
+**缩放系数必须看画面尺寸，不能写死 0.5625**（1440×900 实测，播放器盒 1112×626）：
+
+| 片源 | 90° 后的系数 | 转完画面 | 用错系数会怎样 |
+|---|---|---|---|
+| 3840×2160（躺着拍的那种） | 0.5625 | 352×626 | —— |
+| 2160×3840（真竖屏，`G7nLsgxggrE`） | **1.7778** | 1112×626 | 写死 0.5625 只剩中间一小条 352×198 |
+
+公式：先按 `object-fit: contain` 算出画面在盒子里实际占 `cw×ch`，转完是 `ch×cw`，取 `min(盒宽/ch, 盒高/cw)`。
+metadata 还没到的那几十毫秒按「铺满盒子」退化，`loadedmetadata` 再算一遍。
+
+**氛围光那层要跟着改**：黑边宽度原来是拿 `getBoundingClientRect` 量的，而它带 transform——
+转过 90° 之后量到的是**转过之后的包围盒**，实测 1112×626 的盒子被算成「上下各 214px 黑边」，
+氛围光糊在画面上下两条、真正该亮的左右两边黑着。改成量布局盒（`offsetWidth/offsetHeight`）
+并把 `videoWidth/videoHeight` 对调，同一例算出**左右各 380px**（就是画面 352 宽剩下的那一半）。
+
+**实测（1440×900，`iEZ_quzVcOE`，静音）**
+
+| 操作 | `<video>` 内联 transform | 视觉包围盒 | 氛围光黑边 |
+|---|---|---|---|
+| 90°（库里存的） | `rotate(90deg) scale(0.5625)` | 352×626 | `axis=x` / 380px |
+| 点一下 → 180° | `rotate(180deg) scale(1)` | 1112×626 | `axis=none` / 0px |
+| 再点 → 270° | `rotate(270deg) scale(0.5625)` | 352×626 | `axis=x` / 380px |
+| 再点 → 0° | 空（属性移除） | 1112×626 | `axis=none` / 0px |
+| 再点 → 90°，刷新页面 | `rotate(90deg) scale(0.5625)` | 352×626 | `axis=x` / 380px（`loadedmetadata` 后自动补上） |
+
+竖屏正片（`G7nLsgxggrE`，rotate_deg=0）没有 transform、黑边仍是 `axis=x` / 380px——没被这次改动碰到。
+
+**记在视频层，不记在频道层**：同一个频道横竖混着传。4kaamg 最新 10 张 `hq720` 封面拼成一张对照图看，
+6 张是躺着的（iEZ_quzVcOE / 8BVuTd9HzQ8 / Qa82_MK18gA / 745Sh3wIPHk / M34TIq4UBA0 / 3BaMT8c93lA），
+4 张正常（0ppSePkOJ58 / 2C8E1lfu-h8 / TeLVgIzTjcc / uXrLB42XCMc 这张只是模特歪着坐）。

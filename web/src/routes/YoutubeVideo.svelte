@@ -72,8 +72,18 @@
   // ---- 同频道（上一个 / 下一个 + 底部那排卡片）----
   let siblings = $state<YtVideo[]>([]);
 
-  // ---- 标题行那四颗键 / 资料列的动作状态 ----
+  // ---- 标题行那几颗键 / 资料列的动作状态 ----
   let saving = $state(false);
+  /**
+   * 画面顺时针转多少度（0/90/180/270），存在 `yt_videos.rotate_deg` 上。
+   *
+   * 有些频道传的文件**像素本身就是横的**，而且没有任何 rotation 元数据可以依据
+   *（实测 iEZ_quzVcOE：ffprobe 256×144、无 rotate tag、无 side_data；yt-dlp 41 个 format 的
+   * `rotation` 全 null；连 YouTube 自己生成的 maxresdefault 封面都是躺着的）——也就是说
+   * YouTube 自己的播放器也一样躺着放，这不是我们解码的问题，靠元数据认不出来。
+   * 所以给定一颗键：点一下转 90°，转到正就停在那儿，下次进来还是这个角度。
+   */
+  let rotateDeg = $state(0);
   let downloading = $state(false);
   let refreshingDate = $state(false);
 
@@ -177,6 +187,7 @@
     siblings = [];
     saving = false;
     refreshingDate = false;
+    rotateDeg = 0;
   }
 
   async function open(): Promise<void> {
@@ -194,6 +205,7 @@
     loadingVideo = false;
     if (found === null) return;
     video = found;
+    rotateDeg = found.rotateDeg ?? 0;
     setPageTitle(found.title);
     void loadSiblings(found, token);
     void loadStream(found, token);
@@ -314,6 +326,26 @@
     }
   }
 
+  /**
+   * 点一下转 90°：0 → 90 → 180 → 270 → 0。
+   *
+   * 先改本地（画面立刻转，不用等一个来回），再把角度写回库；写失败就退回去并报一句，
+   * 免得下次进来发现「我刚才明明转正了」。
+   */
+  async function rotate(): Promise<void> {
+    if (video === null) return;
+    const prev = rotateDeg;
+    const next = (rotateDeg + 90) % 360;
+    rotateDeg = next;
+    try {
+      await api.ytRotate(video.id, next);
+      video = { ...video, rotateDeg: next };
+    } catch (err) {
+      rotateDeg = prev;
+      live.toast(messageFor(err), 'error');
+    }
+  }
+
   async function copyLink(): Promise<void> {
     const url = `${window.location.origin}/youtube/${encodeURIComponent(videoId)}`;
     try {
@@ -405,6 +437,7 @@
           src={playbackSrc}
           type={playbackType}
           engine="hls"
+          {rotateDeg}
           startAt={lastPos}
           onTime={(t) => (lastPos = t)}
           poster={poster}
@@ -522,6 +555,21 @@
               <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
                 <path d="M10.2 13.4a4.5 4.5 0 0 0 6.7.4l1.9-1.9a4.5 4.5 0 0 0-6.4-6.4l-1.1 1.1" />
                 <path d="M13.8 10.6a4.5 4.5 0 0 0-6.7-.4l-1.9 1.9a4.5 4.5 0 0 0 6.4 6.4l1.1-1.1" />
+              </svg>
+            </button>
+
+            <!-- 躺着拍的片子只能手动转：点一下转 90°，角度记在库里（见 rotate() 的注释） -->
+            <button
+              type="button"
+              class="icon-act"
+              data-rotated={rotateDeg === 0 ? undefined : ''}
+              title={rotateDeg === 0 ? '旋转画面 90°（横着拍的片子用）' : `画面已转 ${rotateDeg}°，再点转 90°`}
+              aria-label={rotateDeg === 0 ? '旋转画面 90°' : `画面已转 ${rotateDeg} 度，再点转 90 度`}
+              onclick={() => void rotate()}
+            >
+              <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" />
+                <path d="M20.6 3.6v5.2h-5.2" />
               </svg>
             </button>
 

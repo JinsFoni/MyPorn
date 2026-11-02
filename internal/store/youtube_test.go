@@ -235,3 +235,54 @@ func TestDeleteYtVideosByVideoIDs(t *testing.T) {
 		t.Fatalf("空列表应得 0, nil，得到 %d, %v", n, err)
 	}
 }
+
+// 「躺着拍」的视频要能被记住转了没转（yt_videos.rotate_deg）。
+//
+// 这条跑的是完整一圈：默认 0 → 写 90 → 读回来还是 90 → 写 0 能清掉；
+// 顺带钉住两件容易写错的事：
+//
+//	· 非法角度（45）必须被拒，否则前端手滑就能写进一个 CSS 转不正的值；
+//	· 不存在的 id 返回 0 行而不是报错，调用方据此回 404。
+func TestSetYtVideoRotate(t *testing.T) {
+	st := newTestStore(t)
+	chID, _, err := st.UpsertYtChannel(ytTestChannel("UCrotrotrotrotrotrotrotr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertYtVideos(chID, []YtVideoInput{
+		{VideoID: "rotate00001", Title: "躺着拍的"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := st.GetYtVideoByVideoID("rotate00001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.RotateDeg != 0 {
+		t.Fatalf("新入库应为 0 度，得到 %d", v.RotateDeg)
+	}
+
+	for _, deg := range []int{90, 180, 270, 0} {
+		n, err := st.SetYtVideoRotate(v.ID, deg)
+		if err != nil {
+			t.Fatalf("写 %d 度失败: %v", deg, err)
+		}
+		if n != 1 {
+			t.Fatalf("写 %d 度应改动 1 行，得到 %d", deg, n)
+		}
+		got, err := st.GetYtVideo(v.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.RotateDeg != deg {
+			t.Fatalf("读回来的角度不对：想要 %d，得到 %d", deg, got.RotateDeg)
+		}
+	}
+
+	if _, err := st.SetYtVideoRotate(v.ID, 45); err == nil {
+		t.Fatal("45 度应被拒绝")
+	}
+	if n, err := st.SetYtVideoRotate(v.ID+99999, 90); err != nil || n != 0 {
+		t.Fatalf("不存在的 id 应得 0, nil，得到 %d, %v", n, err)
+	}
+}

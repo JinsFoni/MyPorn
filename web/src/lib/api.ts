@@ -579,6 +579,13 @@ export const api = {
       body: { saved },
     });
   },
+  /** 记住这条视频要顺时针转多少度显示（0/90/180/270） */
+  ytRotate(videoId: number | string, deg: number): Promise<{ ok: boolean; rotateDeg: number }> {
+    return request<{ ok: boolean; rotateDeg: number }>(`/api/yt/videos/${id(videoId)}/rotate`, {
+      method: 'POST',
+      body: { deg },
+    });
+  },
   /** 按 YouTube 视频 id 单取一条（深链接 /youtube?v=… 用：墙上那一页未必包含这条） */
   ytVideoLookup(videoId: string): Promise<YtVideo> {
     return request<YtVideo>(`/api/yt/videos/lookup?videoId=${encodeURIComponent(videoId)}`);

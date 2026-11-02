@@ -850,6 +850,8 @@ export interface YtVideo {
   isLive: boolean;
   seen: boolean;
   saved: boolean;
+  /** 显示时顺时针转多少度（0/90/180/270）：给「躺着拍」的上传用，见 `/api/yt/videos/{id}/rotate` */
+  rotateDeg: number;
   downloaded: boolean;
   description: string;
   channel: YtChannelBrief;

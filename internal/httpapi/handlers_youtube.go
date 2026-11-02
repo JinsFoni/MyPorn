@@ -48,20 +48,23 @@ type ytChannelDTO struct {
 }
 
 type ytVideoDTO struct {
-	ID          int64             `json:"id"`
-	VideoID     string            `json:"videoId"`
-	Title       string            `json:"title"`
-	URL         string            `json:"url"`
-	ThumbURL    string            `json:"thumbUrl"`
-	PosterURL   string            `json:"posterUrl"`
-	EmbedURL    string            `json:"embedUrl"`
-	DurationSec int               `json:"durationSec"`
-	Views       int64             `json:"views"`
-	PublishedAt any               `json:"publishedAt"`
-	DateKnown   bool              `json:"dateKnown"`
-	IsLive      bool              `json:"isLive"`
-	Seen        bool              `json:"seen"`
-	Saved       bool              `json:"saved"`
+	ID          int64  `json:"id"`
+	VideoID     string `json:"videoId"`
+	Title       string `json:"title"`
+	URL         string `json:"url"`
+	ThumbURL    string `json:"thumbUrl"`
+	PosterURL   string `json:"posterUrl"`
+	EmbedURL    string `json:"embedUrl"`
+	DurationSec int    `json:"durationSec"`
+	Views       int64  `json:"views"`
+	PublishedAt any    `json:"publishedAt"`
+	DateKnown   bool   `json:"dateKnown"`
+	IsLive      bool   `json:"isLive"`
+	Seen        bool   `json:"seen"`
+	Saved       bool   `json:"saved"`
+	// RotateDeg = 播放页要顺时针转多少度（0/90/180/270）。0 是绝大多数；少数「躺着拍」的上传
+	// （像素本身横着、容器里没有 rotation 元数据）由用户点一次「旋转」写进来，之后一直照这个角度放。
+	RotateDeg   int               `json:"rotateDeg"`
 	Downloaded  bool              `json:"downloaded"`
 	Description string            `json:"description"`
 	Channel     ytChannelBriefDTO `json:"channel"`
@@ -94,6 +97,7 @@ func (s *Server) ytVideoDTO(v *store.YtVideoRow) ytVideoDTO {
 		EmbedURL:    "https://www.youtube-nocookie.com/embed/" + v.VideoID,
 		DurationSec: v.DurationSec, Views: v.Views, PublishedAt: rfc3339(v.PublishedAt),
 		DateKnown: v.PublishedAt != nil, IsLive: v.IsLive, Seen: v.Seen, Saved: v.Saved,
+		RotateDeg:  v.RotateDeg,
 		Downloaded: v.Downloaded > 0, Description: v.Description,
 		Channel: ytChannelBriefDTO{
 			ID: v.Channel.ID, ChannelID: v.Channel.ChannelID, Handle: v.Channel.Handle,
@@ -386,6 +390,39 @@ func (s *Server) handleYtSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "saved": in.Saved})
+}
+
+// handleYtRotate 记住这条视频显示时要不要转 90°/180°/270°。
+//
+// 为什么需要它：少数上传文件的**像素本身就是横的**，而且容器里没有任何 rotation 元数据
+// （实测 iEZ_quzVcOE：ffprobe 256×144、无 rotate tag、无 side_data；yt-dlp 41 个 format 的
+// `rotation` 全是 null；连 YouTube 自己生成的 maxresdefault 封面也是躺着的）。
+// 这种片子任何播放器都只能照横的放，服务端也没法「修」——不重新编码就动不了像素，
+// 而 4K AV1 重编码是不划算的。所以：让用户点一次，然后把角度记在这条视频上。
+func (s *Server) handleYtRotate(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "视频 id 不对")
+		return
+	}
+	var in struct {
+		Deg int `json:"deg"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "请求格式不对")
+		return
+	}
+	n, err := s.st.SetYtVideoRotate(id, in.Deg)
+	if err != nil {
+		// 角度不在 0/90/180/270 里是调用方写错了，别报成 500
+		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if n == 0 {
+		writeErr(w, http.StatusNotFound, "not_found", "视频不存在")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "rotateDeg": in.Deg})
 }
 
 // handleYtDownload 把一条视频排进下载队列（yt-dlp → 本地库）。

@@ -14,6 +14,8 @@
    *   3. **音量记忆**（`localStorage`，等媒体就绪才套用，否则会被播放器默认的满音量盖掉）；
    *   4. **加载态**（见 VideoLoading.svelte）：封面（还没出过帧）或刚才那一帧（缓冲中）垫底 + 中间转环，
    *      出画面就淡出。两种底图的糊/暗程度不同——起播要等好几秒，封面必须一眼认得出。
+   *   5. **旋转**（`rotateDeg`，0/90/180/270）：给「躺着拍」的上传用——像素本身横着、
+   *      容器里又没有 rotation 元数据，任何播放器都只能照横的放（见 `applyRotate`）。
    *
    * 片源策略（见 lib/player.ts）：每个清晰度是**一条独立的清单/直链**，由后端解析后交给这里，
    * 所以播放器一次只放一条，切档＝换 source 并保留进度；不用 hls.js 的自适应 ABR。
@@ -91,6 +93,15 @@
     qualities?: QualityOption[];
     selectedQuality?: string | null;
     onSelectQuality?: (id: string) => void;
+    /**
+     * 显示时顺时针转多少度：0 / 90 / 180 / 270。
+     *
+     * 少数上传的文件像素本身就是横的，容器里也没有 rotation 元数据（实测 iEZ_quzVcOE：
+     * ffprobe 256×144、无 rotate tag 无 side_data；yt-dlp 41 个 format 的 `rotation` 全 null；
+     * 连 YouTube 自己生成的 maxresdefault 封面也是躺着的），所以这不是「解码姿势」的问题，
+     * 是文件本身就躺着——只能由用户点一次、把角度记在 `yt_videos.rotate_deg` 上。
+     */
+    rotateDeg?: number;
     /** 首次真正开始播放（用来上报「已看」） */
     onStarted?: () => void;
     /** 播放失败（含 hls.js 的不可恢复错误），交给页面自己的错误浮层处理 */
@@ -143,6 +154,7 @@
     onNext,
     onEnded,
     startAt = 0,
+    rotateDeg = 0,
     overlay,
   }: Props = $props();
 
@@ -1063,6 +1075,10 @@
     if (!video || video === boundVideo) return;
     unbindMediaLoad();
     boundVideo = video;
+    // 换档 / 重建会把 <video> 换成新的一个，旋转得跟着套到新元素上
+    applyRotate();
+    // 转 90/270 的缩放系数要用画面尺寸算，而它要等 metadata 才有
+    video.addEventListener('loadedmetadata', applyRotate);
     // 能放 / 正在放 / 有画面了 → 收掉；等数据 / 被清空 → 盖回来
     video.addEventListener('canplay', mediaReady);
     video.addEventListener('playing', mediaReady);
@@ -1239,6 +1255,74 @@
     scheduleKick();
   }
 
+  // ---------- 旋转（躺着拍的上传） ----------
+
+  /**
+   * 转 90/270 时画面要缩到刚好塞进盒子，缩多少**得看画面自己在盒子里占多大**：
+   *
+   *   盒子 1112×626（16:9）里放 3840×2160 的横素材（「躺着拍」的那种）→ contain 之后
+   *   画面本来就铺满盒子，转 90° 包围盒变成 626×1112，得乘 626/1112 = 0.5625 才塞得下；
+   *   盒子里放 2160×3840 的竖素材 → contain 之后画面只有 352×626，转 90° 变成 626×352，
+   *   这时候该**放大** 1112/626 = 1.78 倍才铺满，用 0.5625 会把画面缩成中间一小条。
+   *
+   * 所以先按 contain 把画面的实际尺寸算出来（cw×ch），转完是 ch×cw，
+   * 取 `min(盒宽/ch, 盒高/cw)`。拿不到 metadata（起播前几十毫秒）就退化成「铺满盒子」，
+   * 量到尺寸后 `loadedmetadata` 会再算一遍（见 bindMediaLoad）。
+   */
+  function rotateScale(deg: number): number {
+    if (deg % 180 === 0) return 1;
+    const box = (skinEl ?? playerEl)?.getBoundingClientRect();
+    if (!box || !box.width || !box.height) return 1;
+    const video = innerVideo();
+    const W = box.width;
+    const H = box.height;
+    let cw = W;
+    let ch = H;
+    const vw = video?.videoWidth ?? 0;
+    const vh = video?.videoHeight ?? 0;
+    if (vw > 0 && vh > 0) {
+      const k = Math.min(W / vw, H / vh);
+      cw = vw * k;
+      ch = vh * k;
+    }
+    return Math.min(W / ch, H / cw);
+  }
+
+  /**
+   * 把旋转套在**真正在播的那个 `<video>`** 上，不套外壳：外壳一转，皮肤（进度条、按钮、
+   * 设置菜单）跟着一起歪。
+   */
+  function applyRotate(): void {
+    const video = innerVideo();
+    if (!video) return;
+    const deg = ((rotateDeg % 360) + 360) % 360;
+    if (deg === 0) {
+      video.style.removeProperty('transform');
+      video.style.removeProperty('transform-origin');
+      measureBars();
+      return;
+    }
+    video.style.transformOrigin = 'center center';
+    video.style.transform = `rotate(${deg}deg) scale(${rotateScale(deg)})`;
+    // 黑边宽度跟着角度变（转过 90° 就从上下黑边变成左右黑边），氛围光那一层要重新量
+    measureBars();
+  }
+
+  // 角度变了 / 媒体元素刚挂上（换档会重建 <video>）/ 盒子尺寸变了（缩放窗口、进全屏）都要重算
+  $effect(() => {
+    void rotateDeg;
+    void mediaEl;
+    applyRotate();
+  });
+
+  $effect(() => {
+    const el = skinEl;
+    if (!el || typeof ResizeObserver !== 'function') return;
+    const ro = new ResizeObserver(() => applyRotate());
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
   // ---------- 氛围模式 ----------
 
   /**
@@ -1290,25 +1374,35 @@
    * 把「黑边有多宽」量出来交给 CSS：`object-fit: contain` 下画面按 `min(盒宽/视频宽, 盒高/视频高)`
    * 缩放，两条黑边的宽度就是剩下的那一半。竖屏片子走 x、宽银幕走 y，两个都不会有。
    * 量不到（还没 metadata / 不是 contain）就标成 none，这一层直接不显示，宁可不画也别糊住画面。
+   *
+   * 量的是**布局盒**（`offsetWidth/offsetHeight`），不是 `getBoundingClientRect`：
+   * 后者带 transform，转过 90° 之后拿到的是「转过之后的包围盒」，算出来的黑边跟着错
+   * （实测 iEZ_quzVcOE 转 90° 后 rect 是 352×626，被算成上下各 214px 的黑边，
+   * 于是氛围光糊在画面上方和下方两条，而真正该亮的左右两边是黑的）。
+   * 转 90/270 时画面等于是「宽高互换之后再 contain 进盒子」，所以把 vw/vh 对调再算就够了。
    */
   function measureBars(): void {
     const box = barsEl;
     const video = innerVideo();
     if (!box || !video) return;
-    const rect = video.getBoundingClientRect();
-    const { videoWidth: vw, videoHeight: vh } = video;
+    const deg = ((rotateDeg % 360) + 360) % 360;
+    const swap = deg === 90 || deg === 270;
+    const boxW = video.offsetWidth;
+    const boxH = video.offsetHeight;
+    const vw = swap ? video.videoHeight : video.videoWidth;
+    const vh = swap ? video.videoWidth : video.videoHeight;
     let axis: 'x' | 'y' | 'none' = 'none';
     let bar = 0;
     if (
       getComputedStyle(video).objectFit === 'contain' &&
       vw > 0 &&
       vh > 0 &&
-      rect.width > 0 &&
-      rect.height > 0
+      boxW > 0 &&
+      boxH > 0
     ) {
-      const scale = Math.min(rect.width / vw, rect.height / vh);
-      const barX = Math.round((rect.width - vw * scale) / 2);
-      const barY = Math.round((rect.height - vh * scale) / 2);
+      const scale = Math.min(boxW / vw, boxH / vh);
+      const barX = Math.round((boxW - vw * scale) / 2);
+      const barY = Math.round((boxH - vh * scale) / 2);
       if (barX >= 2) {
         axis = 'x';
         bar = barX;

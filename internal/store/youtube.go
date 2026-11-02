@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -79,8 +80,12 @@ type YtVideoRow struct {
 	Seen         bool
 	Saved        bool
 	CreatedAt    time.Time
-	Channel      YtChannelBrief
-	Downloaded   int // 已落进几个本地库
+	// RotateDeg = 显示时顺时针转多少度（0/90/180/270）。给「躺着拍」的上传用：
+	// 那些文件像素本身是横的、容器里也没有 rotation 元数据，播放器无从判断，
+	// 只能让用户点一次「旋转」然后记住（见 migrations/0012）。
+	RotateDeg  int
+	Channel    YtChannelBrief
+	Downloaded int // 已落进几个本地库
 }
 
 // YtVideosQuery 是视频墙的查询条件。
@@ -419,7 +424,7 @@ func (s *Store) ListYtVideos(q YtVideosQuery) ([]*YtVideoRow, string, error) {
 	}
 	sqlQ := `SELECT v.id, v.channel_id, v.video_id, v.title, v.description, v.thumbnail_url,
 			v.published_at, v.date_source, v.views, v.duration_sec, v.is_live,
-			v.seen, v.saved, v.created_at,
+			v.seen, v.saved, v.created_at, v.rotate_deg,
 			c.id, c.channel_id, c.handle, c.title, c.avatar_url,
 			(SELECT COUNT(*) FROM library_files lf
 				JOIN videos vid ON vid.id = lf.video_id
@@ -441,7 +446,7 @@ func (s *Store) ListYtVideos(q YtVideosQuery) ([]*YtVideoRow, string, error) {
 		var published, created sql.NullString
 		if err := rows.Scan(&r.ID, &r.ChannelRowID, &r.VideoID, &r.Title, &r.Description, &r.ThumbnailURL,
 			&published, &r.DateSource, &r.Views, &r.DurationSec, &r.IsLive,
-			&r.Seen, &r.Saved, &created,
+			&r.Seen, &r.Saved, &created, &r.RotateDeg,
 			&r.Channel.ID, &r.Channel.ChannelID, &r.Channel.Handle, &r.Channel.Title, &r.Channel.AvatarURL,
 			&r.Downloaded); err != nil {
 			return nil, "", err
@@ -476,7 +481,7 @@ func (s *Store) ListUnseenYtVideos(channelRowID int64, limit int) ([]*YtVideoRow
 	}
 	rows, err := s.db.Query(`SELECT v.id, v.channel_id, v.video_id, v.title, v.description, v.thumbnail_url,
 			v.published_at, v.date_source, v.views, v.duration_sec, v.is_live,
-			v.seen, v.saved, v.created_at,
+			v.seen, v.saved, v.created_at, v.rotate_deg,
 			c.id, c.channel_id, c.handle, c.title, c.avatar_url,
 			(SELECT COUNT(*) FROM library_files lf
 				JOIN videos vid ON vid.id = lf.video_id
@@ -496,7 +501,7 @@ func (s *Store) ListUnseenYtVideos(channelRowID int64, limit int) ([]*YtVideoRow
 		var published, created sql.NullString
 		if err := rows.Scan(&r.ID, &r.ChannelRowID, &r.VideoID, &r.Title, &r.Description, &r.ThumbnailURL,
 			&published, &r.DateSource, &r.Views, &r.DurationSec, &r.IsLive,
-			&r.Seen, &r.Saved, &created,
+			&r.Seen, &r.Saved, &created, &r.RotateDeg,
 			&r.Channel.ID, &r.Channel.ChannelID, &r.Channel.Handle, &r.Channel.Title, &r.Channel.AvatarURL,
 			&r.Downloaded); err != nil {
 			return nil, err
@@ -514,7 +519,7 @@ func (s *Store) ListUnseenYtVideos(channelRowID int64, limit int) ([]*YtVideoRow
 func (s *Store) GetYtVideo(id int64) (*YtVideoRow, error) {
 	row := s.db.QueryRow(`SELECT v.id, v.channel_id, v.video_id, v.title, v.description, v.thumbnail_url,
 			v.published_at, v.date_source, v.views, v.duration_sec, v.is_live,
-			v.seen, v.saved, v.created_at,
+			v.seen, v.saved, v.created_at, v.rotate_deg,
 			c.id, c.channel_id, c.handle, c.title, c.avatar_url,
 			(SELECT COUNT(*) FROM library_files lf
 				JOIN videos vid ON vid.id = lf.video_id
@@ -526,7 +531,7 @@ func (s *Store) GetYtVideo(id int64) (*YtVideoRow, error) {
 	var published, created sql.NullString
 	if err := row.Scan(&r.ID, &r.ChannelRowID, &r.VideoID, &r.Title, &r.Description, &r.ThumbnailURL,
 		&published, &r.DateSource, &r.Views, &r.DurationSec, &r.IsLive,
-		&r.Seen, &r.Saved, &created,
+		&r.Seen, &r.Saved, &created, &r.RotateDeg,
 		&r.Channel.ID, &r.Channel.ChannelID, &r.Channel.Handle, &r.Channel.Title, &r.Channel.AvatarURL,
 		&r.Downloaded); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -555,6 +560,28 @@ func (s *Store) GetYtVideoByVideoID(videoID string) (*YtVideoRow, error) {
 		return nil, err
 	}
 	return s.GetYtVideo(rowID)
+}
+
+// SetYtVideoRotate 记住这条视频要顺时针转多少度显示，返回真正改动了几行。
+//
+// 只接受 0/90/180/270（调用方校验过）：这是「躺着拍的上传」唯一能被修正的地方——
+// 文件本身没有 rotation 元数据，任何播放器都只能照横的放（见 migrations/0012）。
+// 不改 `updated_at` 之类的字段：这条不是抓取侧的事实，只是显示偏好。
+func (s *Store) SetYtVideoRotate(id int64, deg int) (int, error) {
+	switch deg {
+	case 0, 90, 180, 270:
+	default:
+		return 0, fmt.Errorf("旋转角度只能是 0/90/180/270，收到 %d", deg)
+	}
+	res, err := s.db.Exec(`UPDATE yt_videos SET rotate_deg = ? WHERE id = ?`, deg, id)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 // MarkYtVideosSeen 把若干视频标为已看，并重算这些频道的未看数。
