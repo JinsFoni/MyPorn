@@ -28,11 +28,9 @@
   // 640：墙在 2xl 断点是 4 列（每张 ~316px CSS），DPR2 要 632px 才不糊。
   // 上游给的是 hq720（1280×720），i.ytimg 不认 w=，所以这里只是把尺寸意图写清楚。
   const thumb = $derived(imageUrl(video.thumbUrl, 640));
-  const meta = $derived(
-    [video.views > 0 ? `${formatCount(video.views)} 次观看` : '', timeLabel(video)]
-      .filter((part) => part !== '')
-      .join(' · '),
-  );
+  // 观看数不再写成「679 次观看」：副行只有 12px，三个中文字占掉一格宽度、还把日期挤出去，
+  // 改成一个播放三角 + 数字（`▶ 679`）。读屏仍念「679 次观看」，见下面的 aria-label。
+  const views = $derived(video.views > 0 ? formatCount(video.views) : '');
 
   /**
    * 卡片上的发布时间用绝对日期（2026-10-31），不用「1个月前」。
@@ -147,8 +145,24 @@
       >
         {headline}
       </button>
-      <p class="mt-1 truncate text-meta text-dim">
-        {video.channel.title}{#if meta}<span class="mx-1 opacity-60">·</span>{meta}{/if}
+      <!-- 副行的排法照 B 站卡：频道名吃掉剩下的宽度并截断，观看数和日期 `shrink-0` 不被挤掉
+           （以前整行一个 `truncate`，先被截掉的是日期） -->
+      <p class="mt-1 flex items-center gap-1.5 text-meta text-dim">
+        <span class="truncate">{video.channel.title}</span>
+        {#if views}
+          <span
+            class="flex shrink-0 items-center gap-1"
+            title={`${views} 次观看`}
+            aria-label={`${views} 次观看`}
+          >
+            <svg viewBox="0 0 24 24" class="h-3 w-3 shrink-0" fill="currentColor" aria-hidden="true">
+              <path d="M7.5 4.2v15.6L20.4 12z" />
+            </svg>
+            <span class="tabular-nums">{views}</span>
+          </span>
+          <span class="shrink-0" aria-hidden="true">·</span>
+        {/if}
+        <span class="shrink-0">{timeLabel(video)}</span>
       </p>
     </div>
     {#if video.saved}
