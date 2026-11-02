@@ -29,16 +29,20 @@ func (s *Server) handleListLibraryVideos(w http.ResponseWriter, r *http.Request)
 		LibraryID: int64(queryInt(r, "libraryId", 0)),
 		Platform:  strings.TrimSpace(q.Get("platform")),
 		Query:     strings.TrimSpace(q.Get("q")),
-		Sort:      strings.TrimSpace(q.Get("sort")),
-		Cursor:    q.Get("cursor"),
-		Limit:     queryInt(r, "limit", 24),
+		// 顶部头像条点的是这两个：平台影片按艺人（?performer=38）、YouTube 影片按频道（?channel=9）。
+		// 一个页面只可能有一条来源轴生效，两个都传时按「艺人」算——前端也只会写一个。
+		PerformerID: int64(queryInt(r, "performer", 0)),
+		ChannelID:   int64(queryInt(r, "channel", 0)),
+		Sort:        strings.TrimSpace(q.Get("sort")),
+		Cursor:      q.Get("cursor"),
+		Limit:       queryInt(r, "limit", 24),
 	}
 	items, next, err := s.st.ListLibraryVideos(filter)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
-	total, totalBytes, counters, err := s.st.LibraryVideoSummary(filter)
+	total, totalBytes, counters, sources, err := s.st.LibraryVideoSummary(filter)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return
@@ -57,12 +61,25 @@ func (s *Server) handleListLibraryVideos(w http.ResponseWriter, r *http.Request)
 			"sizeBytes": c.SizeBytes,
 		})
 	}
+	// 顶部头像条：来源（艺人 / 频道）+ 头像 + 各有几部。头像走代理，按头像自己的平台取
+	// （图床认 Referer，拿影片的 platform 去拉跨站的图会被挡）。
+	src := make([]map[string]any, 0, len(sources))
+	for _, it := range sources {
+		src = append(src, map[string]any{
+			"kind":      it.Kind,
+			"id":        it.ID,
+			"name":      it.Name,
+			"avatarUrl": nullableString(imgProxy(it.Platform, it.AvatarURL)),
+			"fileCount": it.FileCount,
+		})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":          out,
 		"nextCursor":     nullableString(next),
 		"total":          total,
 		"totalSizeBytes": totalBytes,
 		"byLibrary":      byLib,
+		"sources":        src,
 	})
 }
 

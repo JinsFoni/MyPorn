@@ -8,12 +8,13 @@
    * 数据来自 `/api/library/videos`（见 internal/store/library_videos.go）。
    *
    * 三个要点：
-   * - 筛选/排序/搜索都写在地址栏上（`?lib=&sort=&q=`），刷新、后退、贴链接都能还原；
+   * - 筛选/排序/搜索都写在地址栏上（`?lib=&sort=&q=&performer=&channel=`），刷新、后退、贴链接都能还原；
    * - 卡片封面优先用下载时落盘的 thumb.jpg（`/api/videos/{id}/art`），平台封面地址过期也不影响；
    * - 点开就是 `/video/{id}`——播放器本来就优先播本地文件（handlePlayback 里 local 排第一），
    *   所以这里不需要另起一套播放器。
    */
   import { onMount } from 'svelte';
+  import AvatarRail from '../components/AvatarRail.svelte';
   import InfiniteList from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import LibraryCard from '../components/LibraryCard.svelte';
@@ -23,6 +24,7 @@
   import { patchQuery, router } from '../lib/router.svelte';
   import { ui } from '../lib/ui.svelte';
   import type { LibrarySort, LibraryVideo, LibraryVideosPage } from '../lib/types';
+  import type { RailItem } from '../lib/rail';
 
   const PAGE_SIZE = 24;
 
@@ -37,11 +39,16 @@
     lib: number | null;
     sort: LibrarySort;
     q: string;
+    /** 顶部头像条选中的「来源」：平台影片的艺人 / YouTube 影片的频道，二者互斥 */
+    performer: number | null;
+    channel: number | null;
   }
 
   function readQuery(): Filters {
     const q = router.query;
     const lib = Number.parseInt(q.get('lib') ?? '', 10);
+    const performer = Number.parseInt(q.get('performer') ?? '', 10);
+    const channel = Number.parseInt(q.get('channel') ?? '', 10);
     const sort = q.get('sort');
     return {
       lib: Number.isFinite(lib) && lib > 0 ? lib : null,
@@ -50,6 +57,8 @@
           ? (sort as LibrarySort)
           : ('recent' as LibrarySort),
       q: (q.get('q') ?? '').trim(),
+      performer: Number.isFinite(performer) && performer > 0 ? performer : null,
+      channel: Number.isFinite(channel) && channel > 0 ? channel : null,
     };
   }
 
@@ -57,6 +66,8 @@
   let lib = $state<number | null>(initial.lib);
   let sort = $state<LibrarySort>(initial.sort);
   let q = $state(initial.q);
+  let performer = $state<number | null>(initial.performer);
+  let channel = $state<number | null>(initial.channel);
   let searchInput = $state(initial.q);
   /** 换筛选条件时 +1，让 InfiniteList 重头拉 */
   let wallKey = $state(0);
@@ -64,7 +75,7 @@
   /** 每页响应都带汇总（总数 / 总占用 / 各库计数），只认「当前筛选条件」那份的回包 */
   let summary = $state<LibraryVideosPage | null>(null);
 
-  const signature = $derived(`${String(lib)}|${sort}|${q}`);
+  const signature = $derived(`${String(lib)}|${sort}|${q}|${String(performer)}|${String(channel)}`);
 
   async function loadPage(cursor: string | null): Promise<{ items: LibraryVideo[]; nextCursor: string | null }> {
     const sig = signature;
@@ -73,6 +84,8 @@
       libraryId: lib,
       q: q === '' ? null : q,
       sort,
+      performer,
+      channel,
       limit: PAGE_SIZE,
     });
     // 回包可能比筛选变化慢（快速连点排序）：只让「还是当前条件」的那份覆盖汇总
@@ -82,6 +95,41 @@
 
   function refresh(): void {
     wallKey += 1;
+  }
+
+  /**
+   * 顶部头像条的 id 空间：**艺人用正数**（就是 performers.id），**频道用负数**（-yt_channels.id）。
+   *
+   * 为什么要有这一层：这一页的来源有两种（平台影片的艺人 / YouTube 影片的频道），而
+   * `AvatarRail` 只认一个数字 id（三条墙各自的来源都只有一种，所以它们不用操心）。
+   * 负数段位是空的，不会和艺人 id 撞；地址栏里仍然是两个说人话的参数（`?performer=38` /
+   * `?channel=9`），railId 只是这页内部把「一颗头像」翻译成「哪个参数」的那一步。
+   */
+  function railIdOf(kind: 'performer' | 'channel', id: number): number {
+    return kind === 'channel' ? -id : id;
+  }
+
+  const railItems = $derived<RailItem[]>(
+    (summary?.sources ?? []).map((src) => ({
+      id: railIdOf(src.kind, src.id),
+      name: src.name,
+      avatarUrl: src.avatarUrl,
+      title: `${src.name} · 本地库 ${String(src.fileCount)} 部`,
+    })),
+  );
+
+  const railSelected = $derived(
+    performer !== null ? performer : channel !== null ? -channel : null,
+  );
+
+  function setSource(railId: number | null): void {
+    if (railId === null) {
+      patchQuery({ performer: null, channel: null });
+      return;
+    }
+    // 一次只留一个来源：选频道就把艺人参数摘掉，反之亦然
+    if (railId < 0) patchQuery({ channel: String(-railId), performer: null });
+    else patchQuery({ performer: String(railId), channel: null });
   }
 
   function setLib(id: number | null): void {
@@ -105,10 +153,19 @@
   // 地址栏变了（后退/前进、贴链接）→ 状态跟上并重拉；相等就跳过，不会和 patchQuery 打转
   $effect(() => {
     const next = readQuery();
-    if (next.lib === lib && next.sort === sort && next.q === q) return;
+    if (
+      next.lib === lib &&
+      next.sort === sort &&
+      next.q === q &&
+      next.performer === performer &&
+      next.channel === channel
+    )
+      return;
     lib = next.lib;
     sort = next.sort;
     q = next.q;
+    performer = next.performer;
+    channel = next.channel;
     if (searchInput.trim() !== next.q) searchInput = next.q;
     wallKey += 1;
   });
@@ -147,8 +204,19 @@
   const chips = $derived(libs.map((l) => ({ id: l.id, name: l.name, count: counts.get(l.id) ?? 0 })));
   const total = $derived(summary?.total ?? 0);
   const totalBytes = $derived(summary?.totalSizeBytes ?? 0);
-  const filtered = $derived(lib !== null || q !== '');
+  const filtered = $derived(lib !== null || q !== '' || performer !== null || channel !== null);
 </script>
+
+<!-- 页面顶部**不画标题**（2026-11-03 用户要求）：和关注 / B 站 / YouTube 三条墙一样，
+     顶部直接是头像条——点谁只看谁的下载。页面叫什么由侧边栏高亮和浏览器标题负责。
+     来源有两种（艺人 / 频道），railIdOf 里那套负数段位负责把它们塞进同一个 id 空间。 -->
+<AvatarRail
+  items={railItems}
+  label="按来源筛选"
+  selected={railSelected}
+  onSelect={setSource}
+  loading={summary === null}
+/>
 
 <div class="flex flex-col gap-4">
   <!-- 汇总行：一共多少部、占多大，右边是「有了新片要刷新 / 去管库」两个出口 -->
@@ -265,7 +333,7 @@
               <button
                 type="button"
                 class="rounded-full bg-raise px-4 py-2 text-ui font-medium text-fg"
-                onclick={() => patchQuery({ lib: null, q: null })}
+                onclick={() => patchQuery({ lib: null, q: null, performer: null, channel: null })}
               >
                 清空筛选
               </button>

@@ -156,7 +156,7 @@ func TestListLibraryVideosFiltersAndSummary(t *testing.T) {
 	}
 
 	// 汇总：总数/总占用按库筛选算，分组计数不跟库筛选（那是筛选胶囊上的数字）
-	total, bytes, counters, err := st.LibraryVideoSummary(LibraryVideoQuery{LibraryID: libA})
+	total, bytes, counters, _, err := st.LibraryVideoSummary(LibraryVideoQuery{LibraryID: libA})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,5 +234,86 @@ func TestListLibraryVideosYouTubeChannelAvatar(t *testing.T) {
 	// pornhub 那几行没有频道，两列必须是空串（不是 NULL 扫不出来、也不能串到别的行）
 	if b := byName["bravo.mp4"]; b == nil || b.ChannelAvatar != "" || b.ChannelName != "" {
 		t.Errorf("非 YouTube 的行不该有频道信息: %+v", b)
+	}
+}
+
+// 媒体库顶部头像条：平台影片按**艺人**筛、YouTube 影片按**频道**筛，两份计数各自
+// 不跟「自己那条轴」（分面导航的数字必须是「点下去会看到多少」）。
+func TestLibraryVideoSourcesAndFilter(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+	libA, _, _ := seedLibraryVideos(t, st)
+
+	// 平台影片：pornhub，挂一位艺人
+	pid, err := st.UpsertPerformer(&model.Performer{Platform: "pornhub", PerformerID: "p1", Name: "Hot Pearl",
+		URL: "u", AvatarURL: "https://x/avatar.jpg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vid, _, err := st.UpsertVideo(&model.Video{Platform: "pornhub", PlatformVideoID: "with-perf", Title: "带艺人的片", URL: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkVideoPerformer(vid, pid); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveLibraryFile(&model.LibraryFile{VideoID: vid, LibraryID: libA, RelDir: "r", VideoName: "a.mp4",
+		VideoPath: "/media/a.mp4", SizeBytes: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// YouTube 影片：videos 行 + yt_videos 行 + yt_channels 行（YouTube 的片不落 performers）
+	chID, _, err := st.UpsertYtChannel(ytTestChannel("UCsource"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ytVid = "ytVid00001"
+	if _, err := st.UpsertYtVideos(chID, []YtVideoInput{{VideoID: ytVid, Title: "频道的片"}}); err != nil {
+		t.Fatal(err)
+	}
+	ytRow, _, err := st.UpsertVideo(&model.Video{Platform: "youtube", PlatformVideoID: ytVid, Title: "频道的片", URL: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveLibraryFile(&model.LibraryFile{VideoID: ytRow, LibraryID: libA, RelDir: "r", VideoName: "b.mp4",
+		VideoPath: "/media/b.mp4", SizeBytes: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 按艺人筛：只剩那一条
+	items, _, err := st.ListLibraryVideos(LibraryVideoQuery{PerformerID: pid, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].File.VideoID != vid {
+		t.Fatalf("按艺人筛不对: %d 行", len(items))
+	}
+	// 按频道筛：只剩 YouTube 那条
+	items, _, err = st.ListLibraryVideos(LibraryVideoQuery{ChannelID: chID, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].File.VideoID != ytRow {
+		t.Fatalf("按频道筛不对: %d 行", len(items))
+	}
+
+	// 头像条的数据：两种来源都在，各带计数与头像
+	_, _, _, sources, err := st.LibraryVideoSummary(LibraryVideoQuery{PerformerID: pid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKind := map[string]LibrarySource{}
+	for _, s := range sources {
+		byKind[s.Kind] = s
+	}
+	if got, ok := byKind["performer"]; !ok || got.ID != pid || got.FileCount != 1 || got.AvatarURL == "" {
+		t.Fatalf("艺人那颗不对: %+v", sources)
+	}
+	if got, ok := byKind["channel"]; !ok || got.ID != chID || got.FileCount != 1 || got.Platform != "youtube" {
+		t.Fatalf("频道那颗不对: %+v", sources)
+	}
+	// 筛了艺人之后，头像条自己不跟着塌成一颗（否则点了就再也点不回去）
+	if len(sources) != 2 {
+		t.Fatalf("头像条不该跟自己的筛选轴: %d 颗", len(sources))
 	}
 }

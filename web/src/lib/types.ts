@@ -688,6 +688,19 @@ export interface LibraryVideosPage {
   totalSizeBytes: number;
   /** 每个库有多少部（筛选胶囊上的数字；不跟随库筛选，跟随搜索词） */
   byLibrary: { libraryId: number; name: string; fileCount: number; sizeBytes: number }[];
+  /**
+   * 顶部头像条的来源：平台影片的**艺人**（kind=performer）与 YouTube 影片的**频道**（kind=channel）。
+   * 同样不跟随自己那条筛选轴（筛了艺人，头像条照样列出全部来源）。按「有几部」从多到少。
+   */
+  sources: LibrarySource[];
+}
+
+export interface LibrarySource {
+  kind: 'performer' | 'channel';
+  id: number;
+  name: string;
+  avatarUrl: string | null;
+  fileCount: number;
 }
 
 export interface Health {

@@ -395,6 +395,10 @@ export const api = {
       platform?: string | null;
       q?: string | null;
       sort?: string | null;
+      /** 只看某位艺人（顶部头像条点的）；和 channel 二者只写一个 */
+      performer?: number | null;
+      /** 只看某个 YouTube 频道（顶部头像条点的） */
+      channel?: number | null;
       limit?: number;
     } = {},
   ): Promise<LibraryVideosPage> {
@@ -405,6 +409,8 @@ export const api = {
         platform: params.platform,
         q: params.q,
         sort: params.sort,
+        performer: params.performer,
+        channel: params.channel,
         limit: params.limit,
       })}`,
     );

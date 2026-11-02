@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -24,9 +25,14 @@ type LibraryVideoQuery struct {
 	LibraryID int64  // 0 = 全部库
 	Platform  string // 空 = 不限平台
 	Query     string // 标题 / 文件名模糊匹配
-	Sort      string
-	Cursor    string
-	Limit     int
+	// PerformerID / ChannelID 是「来源」那一条轴：平台影片按艺人筛，YouTube 影片按频道筛
+	// （YouTube 的片不落 performers，来源是 yt_channels，见 libraryVideoJoins 的注释）。
+	// 媒体库顶部的头像条点的就是这两个参数——和关注页点头像筛艺人同一件事。
+	PerformerID int64
+	ChannelID   int64
+	Sort        string
+	Cursor      string
+	Limit       int
 }
 
 // LibraryVideo 是「本地库里的一行影片」：落盘记录 + 影片展示信息 + 库名。
@@ -115,6 +121,17 @@ func libraryVideoFilter(q LibraryVideoQuery) ([]string, []any) {
 		where = append(where, "(v.title LIKE ? OR lf.video_name LIKE ?)")
 		pattern := "%" + q.Query + "%"
 		args = append(args, pattern, pattern)
+	}
+	if q.PerformerID > 0 {
+		where = append(where, "EXISTS (SELECT 1 FROM video_performers vp WHERE vp.video_id = v.id AND vp.performer_id = ?)")
+		args = append(args, q.PerformerID)
+	}
+	if q.ChannelID > 0 {
+		// 频道这边用独立子查询，不借 libraryVideoSelect 里那个 LEFT JOIN：汇总查询没有那个 JOIN，
+		// 复用 join 别名会让两处 SQL 必须保持一样的形状，改一处就崩一处。
+		where = append(where, `EXISTS (SELECT 1 FROM yt_videos yv2
+			WHERE yv2.channel_id = ? AND v.platform = 'youtube' AND yv2.video_id = v.platform_video_id)`)
+		args = append(args, q.ChannelID)
 	}
 	return where, args
 }
@@ -215,15 +232,32 @@ func (s *Store) ListLibraryVideos(q LibraryVideoQuery) ([]*LibraryVideo, string,
 	return out, next, nil
 }
 
-// LibraryVideoSummary 返回当前筛选下的总条数与总占用，外加**按库分组**的计数。
+// LibrarySource 是媒体库顶部那排头像里的一颗：平台影片的**艺人**，或 YouTube 影片的**频道**。
 //
-// 分组计数只跟随 Query / Platform，不跟 LibraryID：它画的是筛选胶囊上的数字，
-// 得先看得见「每个库各有多少」才点得下去。
-func (s *Store) LibraryVideoSummary(q LibraryVideoQuery) (total, bytes int64, counters []LibraryVideoCounter, err error) {
+// 两种来源存在两张表里（performers / yt_channels），id 各自从 1 数起，所以必须带 Kind；
+// 头像代理要按头像自己的平台走（`Platform`），不能拿影片的 platform 去拉一张跨站的图。
+type LibrarySource struct {
+	Kind      string // "performer" | "channel"
+	ID        int64
+	Name      string
+	AvatarURL string
+	Platform  string
+	FileCount int64
+}
+
+// LibraryVideoSummary 返回当前筛选下的总条数与总占用，外加**按库**和**按来源**分组的两份计数。
+//
+// 两份计数都是「分面导航」的数字，口径一致：**各自那条轴不做过滤、其它条件照跟**——
+// 按库分组不跟 LibraryID，按来源分组不跟 PerformerID/ChannelID。
+//   - 筛了艺人之后，库胶囊上的数字跟着艺人走（主库里有几位艺人的片就说几部）；
+//   - 筛了某个库之后，头像条照样列出全部来源（否则点了就再也点不回去）。
+// 数字必须是「点下去会看到多少」，否则用户点之前根本不知道自己会不会点进一个空页。
+func (s *Store) LibraryVideoSummary(q LibraryVideoQuery) (total, bytes int64, counters []LibraryVideoCounter,
+	sources []LibrarySource, err error) {
 	if err = s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(lf.size_bytes),0)
 		FROM library_files lf JOIN videos v ON v.id = lf.video_id
 		WHERE `+strings.Join(mustFilter(q), " AND "), mustArgs(q)...).Scan(&total, &bytes); err != nil {
-		return 0, 0, nil, err
+		return 0, 0, nil, nil, err
 	}
 
 	byLib := q
@@ -235,18 +269,91 @@ func (s *Store) LibraryVideoSummary(q LibraryVideoQuery) (total, bytes int64, co
 		WHERE `+strings.Join(mustFilter(byLib), " AND ")+`
 		GROUP BY lf.library_id, l.name ORDER BY l.is_default DESC, l.id`, mustArgs(byLib)...)
 	if err != nil {
-		return 0, 0, nil, err
+		return 0, 0, nil, nil, err
 	}
 	defer rows.Close()
 	counters = []LibraryVideoCounter{}
 	for rows.Next() {
 		var c LibraryVideoCounter
 		if err := rows.Scan(&c.LibraryID, &c.Name, &c.FileCount, &c.SizeBytes); err != nil {
-			return 0, 0, nil, err
+			return 0, 0, nil, nil, err
 		}
 		counters = append(counters, c)
 	}
-	return total, bytes, counters, rows.Err()
+	if err := rows.Err(); err != nil {
+		return 0, 0, nil, nil, err
+	}
+
+	if sources, err = s.librarySources(q); err != nil {
+		return 0, 0, nil, nil, err
+	}
+	return total, bytes, counters, sources, nil
+}
+
+// librarySources 汇总「当前筛选下每个来源有几部」，艺人段和频道段各查一次再合并。
+//
+// 同一条片挂了两位艺人时两边各算一部——这是分面计数该有的样子（点哪位艺人都能看到它）。
+func (s *Store) librarySources(q LibraryVideoQuery) ([]LibrarySource, error) {
+	bySrc := q
+	bySrc.PerformerID, bySrc.ChannelID = 0, 0
+	where := strings.Join(mustFilter(bySrc), " AND ")
+	args := mustArgs(bySrc)
+
+	out := []LibrarySource{}
+	rows, err := s.db.Query(`SELECT 'performer', p.id, p.name, COALESCE(p.avatar_url,''),
+			COALESCE(p.platform,''), COUNT(*)
+		FROM library_files lf
+		JOIN videos v ON v.id = lf.video_id
+		JOIN video_performers vp ON vp.video_id = v.id
+		JOIN performers p ON p.id = vp.performer_id
+		WHERE `+where+`
+		GROUP BY p.id, p.name, p.avatar_url, p.platform`, args...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var src LibrarySource
+		if err := rows.Scan(&src.Kind, &src.ID, &src.Name, &src.AvatarURL, &src.Platform, &src.FileCount); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, src)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	rows, err = s.db.Query(`SELECT 'channel', ytc.id, ytc.title, COALESCE(ytc.avatar_url,''), 'youtube', COUNT(*)
+		FROM library_files lf
+		JOIN videos v ON v.id = lf.video_id
+		JOIN yt_videos ytv ON v.platform = 'youtube' AND ytv.video_id = v.platform_video_id
+		JOIN yt_channels ytc ON ytc.id = ytv.channel_id
+		WHERE `+where+`
+		GROUP BY ytc.id, ytc.title, ytc.avatar_url`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var src LibrarySource
+		if err := rows.Scan(&src.Kind, &src.ID, &src.Name, &src.AvatarURL, &src.Platform, &src.FileCount); err != nil {
+			return nil, err
+		}
+		out = append(out, src)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 头像条上只有一排位置：按「这个来源有几部」从多到少排，同数按名字，别让顺序随 SQL 走。
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].FileCount != out[j].FileCount {
+			return out[i].FileCount > out[j].FileCount
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
 }
 
 func mustFilter(q LibraryVideoQuery) []string {

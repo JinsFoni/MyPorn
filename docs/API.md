@@ -1126,8 +1126,13 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
 |---|---|
 | `libraryId` | 只看某个库；缺省 = 全部库 |
 | `q` | 标题 **或** 文件名模糊匹配（`videos.title LIKE ? OR library_files.video_name LIKE ?`——下载会按命名模板改名，两边不一定一样） |
+| `performer` | 只看这位**艺人**（平台影片的 `video_performers`）；顶部头像条点的就是它 |
+| `channel` | 只看这个 **YouTube 频道**（`yt_videos → yt_channels`；YouTube 的片不落 `performers`，来源只有频道） |
 | `sort` | `recent`（默认，按 `library_files.created_at` 倒序） / `size`（体积） / `duration`（时长） / `title`（文件名升序） |
 | `cursor` / `limit` | keyset 分页，默认 24，上限 100 |
+
+`performer` 和 `channel` 是**同一条「来源」轴**的两种写法（页面顶部那排头像，2026-11-03 加）：
+平台影片按艺人筛、YouTube 影片按频道筛，一次只该传一个。两个都传时按艺人算。
 
 ```
 → 200 {
@@ -1149,15 +1154,26 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
   }],
   "nextCursor": "…" | null,
   "total": 8, "totalSizeBytes": 1296960839,
-  "byLibrary": [{ "libraryId": 1, "name": "主库", "fileCount": 8, "sizeBytes": 1296960839 }]
+  "byLibrary": [{ "libraryId": 1, "name": "主库", "fileCount": 8, "sizeBytes": 1296960839 }],
+  "sources": [
+    { "kind": "channel", "id": 12, "name": "4kaamg",
+      "avatarUrl": "/api/img?p=youtube&u=https%3A%2F%2Fyt3.googleusercontent.com%2F…", "fileCount": 3 },
+    { "kind": "performer", "id": 38, "name": "Hot Pearl",
+      "avatarUrl": "/api/img?p=xhamster&u=https%3A%2F%2F…", "fileCount": 1 }
+  ]
 }
 ```
 
 几个口径，改之前先看：
 
 - **排序键是落盘时间，不是发布时间**：这一页回答的是「我什么时候下回来的」，不是「平台什么时候发的」。
-- `total` / `totalSizeBytes` 跟随**全部筛选**；`byLibrary` 只跟随 `q`（不跟 `libraryId`）——
-  它画的是筛选胶囊上的数字，得先看得见「每个库各有几部」才点得下去。
+- `total` / `totalSizeBytes` 跟随**全部筛选**。`byLibrary` / `sources` 是分面导航的计数，
+  **各自那条轴不做过滤、其它条件照跟**：`byLibrary` 不跟 `libraryId`（画的是筛选胶囊上的数字，
+  得先看得见「每个库各有几部」才点得下去），`sources` 不跟 `performer` / `channel`
+  （否则点了头像之后头像条会塌成一颗，点回去就没路了）。数字口径都是「点下去会看到多少」。
+- `sources[].kind` 只有 `performer` / `channel` 两种，两者 id 各自从 1 数起，**必须带 kind 才唯一**
+  （媒体库页面前端把频道映射成负数塞进同一排头像的 id 空间，见 `Library.svelte` 的 `railIdOf`）。
+  `avatarUrl` 走 `/api/img` 时用的平台参数是**头像自己的平台**（`performers.platform` / `youtube`）。
 - `localThumbUrl` 只在**那张图真的还在磁盘上**时才给（服务端 `os.Stat` 过）；为 null 时前端退回
   `thumbUrl`（远端代理）。这样封面不会出现「404 破图」。
 - `missing=true` = 记录在、文件没了（被手动删/挪走）。卡片要压暗并写「文件已不在磁盘上」，
