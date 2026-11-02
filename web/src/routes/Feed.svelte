@@ -165,7 +165,8 @@
       if (newOnly) {
         return await api.newVideos({ cursor, limit: LIMIT, performerId: performerFilter });
       }
-      return await api.videos({ cursor, limit: LIMIT, performerId: performerFilter });
+      // 已经下到本地库的片不在这一流里重复出现（媒体库那一页才是它们的去处）
+      return await api.videos({ cursor, limit: LIMIT, performerId: performerFilter, hideDownloaded: true });
     } catch (err) {
       if (import.meta.env.DEV && cursor === null) {
         mockNote = messageFor(err);

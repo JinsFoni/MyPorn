@@ -564,7 +564,8 @@
     }
     if (url.pathname === '/' && url.searchParams.has('performer')) {
       const pid = Number.parseInt(url.searchParams.get('performer') ?? '', 10);
-      if (Number.isFinite(pid) && pid > 0) return { performerId: pid, excludePlatform: 'bilibili' };
+      if (Number.isFinite(pid) && pid > 0)
+        return { performerId: pid, excludePlatform: 'bilibili', hideDownloaded: true };
     }
     if (url.pathname === '/bilibili') {
       const up = Number.parseInt(url.searchParams.get('up') ?? '', 10);
@@ -576,7 +577,8 @@
       };
     }
     if (video?.platform === 'bilibili') return { platform: 'bilibili', subscribedOnly: true };
-    return { excludePlatform: 'bilibili' };
+    // 从「关注」流点进来的：上一条/下一条也按关注流的过滤条件算（已下载的片那一流里不出现）
+    return { excludePlatform: 'bilibili', hideDownloaded: true };
   });
 
   async function loadNeighbors(): Promise<void> {

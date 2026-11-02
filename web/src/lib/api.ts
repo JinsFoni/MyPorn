@@ -60,6 +60,8 @@ export interface AdjacentScope {
   onlyNew?: boolean;
   q?: string;
   subscribedOnly?: boolean;
+  /** 关注流藏了已下载的片时，上一条/下一条也得跟着藏（和列表同口径） */
+  hideDownloaded?: boolean;
 }
 
 export class ApiError extends Error {
@@ -205,6 +207,8 @@ export interface VideoQuery {
   cursor?: string | null;
   limit?: number;
   q?: string;
+  /** 只要还没落到本地库的片（「关注」流用：下回来的在媒体库那一页） */
+  hideDownloaded?: boolean;
 }
 
 export const api = {
@@ -284,6 +288,7 @@ export const api = {
         cursor: params.cursor,
         limit: params.limit,
         q: params.q,
+        hideDownloaded: params.hideDownloaded === true ? 1 : undefined,
       })}`,
     );
   },
@@ -324,6 +329,7 @@ export const api = {
         onlyNew: scope.onlyNew === true ? 1 : undefined,
         q: scope.q,
         subscribedOnly: scope.subscribedOnly === true ? 1 : undefined,
+        hideDownloaded: scope.hideDownloaded === true ? 1 : undefined,
       })}`,
     );
   },

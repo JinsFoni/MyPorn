@@ -119,10 +119,10 @@ type Video = {
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/videos?performerId=&cursor=&limit=30&q=` | 影片流，播放时间倒序，**keyset 游标**分页 → `{"items":Video[],"nextCursor":"..."\|null}` |
+| GET | `/api/videos?performerId=&cursor=&limit=30&q=&hideDownloaded=1` | 影片流，播放时间倒序，**keyset 游标**分页 → `{"items":Video[],"nextCursor":"..."\|null}`。`hideDownloaded=1` = 只出还没落到本地库的片（关注流用，判据是 `library_files` 里有没有这一行，删掉库文件后这条片会自己回来） |
 | GET | `/api/videos/new?performerId=&since=` | 新片（`isNew`）列表，同结构，首页角标用；`performerId` 只数这一位 |
 | GET | `/api/videos/{id}` | `Video` + `{"description":"...","related":Video[]}` |
-| GET | `/api/videos/{id}/adjacent` | 同一份列表里的上下家 → `{"prev":Video\|null,"next":Video\|null}`（见 A4·补·2） |
+| GET | `/api/videos/{id}/adjacent` | 同一份列表里的上下家 → `{"prev":Video\|null,"next":Video\|null}`（见 A4·补·2）。参数与 `/api/videos` 同口径（`performerId` / `platform` / `excludePlatform` / `onlyNew` / `q` / `subscribedOnly` / `hideDownloaded`），**调用方要传跟原列表一样的值**，否则「下一个」会跳到原列表里根本没有的片上 |
 | POST | `/api/videos/{id}/seen` | `204`，清除 isNew |
 | POST | `/api/videos/{id}/rotate` | `{"deg":90}` → `{"ok":true,"rotateDeg":90}`，角度记在 `videos.rotate_deg`（见 E3） |
 

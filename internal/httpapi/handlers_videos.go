@@ -30,6 +30,8 @@ func (s *Server) handleListVideos(w http.ResponseWriter, r *http.Request) {
 		Limit:           queryInt(r, "limit", 30),
 		Query:           q.Get("q"),
 		ExcludePlatform: platformBilibili,
+		// 「关注」流要的：已经下到本地库的片子不再出现（媒体库那一页才是它们的去处）
+		HideDownloaded: q.Get("hideDownloaded") == "1",
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
@@ -120,6 +122,9 @@ func (s *Server) handleVideoAdjacent(w http.ResponseWriter, r *http.Request) {
 		OnlyNew:         q.Get("onlyNew") == "1",
 		Query:           q.Get("q"),
 		SubscribedOnly:  q.Get("subscribedOnly") == "1",
+		// 上一条/下一条必须和「刚才那份列表」同口径：关注流藏了已下载的片，这里也得藏，
+		// 否则「下一个」会跳到一张自己刚刚划走了的卡上。
+		HideDownloaded: q.Get("hideDownloaded") == "1",
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())

@@ -193,6 +193,10 @@ type FeedQuery struct {
 	ExcludePlatform string
 	// SubscribedOnly 只出「所属艺人还在订阅里」的片，B 站墙用（见 liveSubFilter）。
 	SubscribedOnly bool
+	// HideDownloaded 把已经落到本地库里的片整个摘掉，「关注」流用（2026-11-03 用户要求：
+	// 下回来的片子在这一流里再出现一次没有意义——它们已经在媒体库那一页了）。
+	// 判据是 library_files 表里有没有这一行，跟 videoDTO.localLibraryIds 同一个事实来源。
+	HideDownloaded bool
 }
 
 // liveSubFilter 生成「这条片所属的艺人里，至少还有一位在订阅里」这个条件；idExpr 是影片 id 的列（如 "v.id"）。
@@ -235,6 +239,11 @@ func feedFilter(q FeedQuery) ([]string, []any) {
 	}
 	if q.SubscribedOnly {
 		where = append(where, liveSubFilter("v.id"))
+	}
+	if q.HideDownloaded {
+		// 走 library_files 的存在性判断（不是 videos 上的某个标记位）：媒体库里删掉文件之后，
+		// 那一行跟着消失，这条片就该重新回到关注流里。
+		where = append(where, "NOT EXISTS (SELECT 1 FROM library_files lf WHERE lf.video_id = v.id)")
 	}
 	return where, args
 }

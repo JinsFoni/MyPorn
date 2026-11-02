@@ -2,7 +2,9 @@ package store
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/JinsFoni/MyPorn/internal/model"
 )
@@ -182,5 +184,85 @@ func TestJobControls(t *testing.T) {
 	// 活跃任务不允许删除
 	if err := st.DeleteJob(job.ID); err != nil {
 		t.Fatal(err) // 已删除，第二次执行也没错
+	}
+}
+
+// 「关注」流不该再出现已经下到本地库的片（2026-11-03 用户要求）。
+// 判据必须跟着 library_files 走：媒体库里把文件删掉之后，这条片要重新回到流里，
+// 所以这里连「删了就回来」一起测。
+func TestListFeedHideDownloaded(t *testing.T) {
+	st := newTestStore(t)
+	defer st.Close()
+
+	libID, err := st.CreateLibrary(&model.Library{Name: "L", RootPath: t.TempDir(), Enabled: true, IsDefault: true, UploadPolicy: model.PolicyLocal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	ids := make([]int64, 3)
+	for i := 0; i < 3; i++ {
+		pub := base.Add(time.Duration(i) * time.Hour)
+		ids[i], _, err = st.UpsertVideo(&model.Video{
+			Platform: "pornhub", PlatformVideoID: "h" + strconv.Itoa(i),
+			Title: "片" + strconv.Itoa(i), URL: "u", PublishedAt: &pub,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 中间那条已经下到本地
+	if err := st.SaveLibraryFile(&model.LibraryFile{
+		VideoID: ids[1], LibraryID: libID, RelDir: "x", VideoName: "片1.mp4",
+		VideoPath: "/tmp/片1.mp4", SizeBytes: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	withLocal, _, err := st.ListFeed(FeedQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withLocal) != 3 {
+		t.Fatalf("不过滤时应仍能列出 3 条，得到 %d", len(withLocal))
+	}
+
+	hidden, _, err := st.ListFeed(FeedQuery{Limit: 10, HideDownloaded: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hidden) != 2 {
+		t.Fatalf("应只剩 2 条，得到 %d", len(hidden))
+	}
+	for _, v := range hidden {
+		if v.ID == ids[1] {
+			t.Fatal("已下载的那条不该出现在关注流里")
+		}
+	}
+	// 用「发布时间倒序 + id 倒序」的游标翻页时，被滤掉的那条不能把分页卡住
+	page, next, err := st.ListFeed(FeedQuery{Limit: 1, HideDownloaded: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 1 || next == "" {
+		t.Fatalf("第一页应有 1 条并给游标：%d / %q", len(page), next)
+	}
+	rest, _, err := st.ListFeed(FeedQuery{Limit: 10, Cursor: next, HideDownloaded: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rest) != 1 || rest[0].ID == ids[1] {
+		t.Fatalf("第二页应有 1 条且不是被滤掉那条：%+v", rest)
+	}
+
+	// 媒体库里删掉文件 → 这条片重新回到关注流
+	if err := st.DeleteLibraryFile(ids[1], libID); err != nil {
+		t.Fatal(err)
+	}
+	back, _, err := st.ListFeed(FeedQuery{Limit: 10, HideDownloaded: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(back) != 3 {
+		t.Fatalf("删掉本地文件后应回到 3 条，得到 %d", len(back))
 	}
 }
