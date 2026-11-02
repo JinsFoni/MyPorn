@@ -330,6 +330,23 @@
   );
 
   /**
+   * 一个分辨率只留一条（`variants` 已按 sortVariantsDesc 排好：分辨率优先、
+   * 同分辨率内 AV1 > HEVC > VP9 > H.264、解不了的编码排最后，所以每组的第一条就是该用的那条）。
+   *
+   * 为什么菜单只按分辨率列：B 站一条片子上来就有 1080p 的 AV1 / HEVC / H.264 三版，
+   * 加上普通版和高码率版能到 13 条——菜单被挤成需要滚动不说，里面还有两条 ID 相同的
+   * 「1080p AV1」（点第二条等于点第一条，看着像点了没反应）。用户要选的是「多清楚」，
+   * 编码是同一清晰度内部的事，写在副文案里就够了。
+   */
+  const qualityByHeight = $derived.by(() => {
+    const map = new Map<number, PlaybackVariant>();
+    for (const variant of variants) {
+      if (!map.has(variant.height)) map.set(variant.height, variant);
+    }
+    return map;
+  });
+
+  /**
    * 播放器左上角清晰度菜单的条目（顺序即 sortVariantsDesc 的顺序，最高在最上）。
    *
    * 「上次选的」标在记忆那一档上——但只在它确实比最高档低时才标：
@@ -337,7 +354,7 @@
    * 而不是让人以为片源只有 1080p。
    */
   const qualities = $derived<QualityOption[]>(
-    variants.map((variant) => ({
+    [...qualityByHeight.values()].map((variant) => ({
       id: variant.id,
       label: variantLabel(variant),
       hint: [
@@ -350,6 +367,14 @@
         .filter((part) => part !== null && part !== '')
         .join(' · '),
     })),
+  );
+
+  /**
+   * 菜单里该打勾的那一条：按**分辨率**对应，不是按 id。
+   * 选中项可能是 1080p 的 HEVC 而菜单这一行代表的是 1080p 的 AV1，按 id 比对就打不上勾了。
+   */
+  const selectedQualityId = $derived<string | null>(
+    selectedVariant === null ? null : (qualityByHeight.get(selectedVariant.height)?.id ?? null),
   );
 
   const specs = $derived.by((): { label: string; value: string }[] => {
@@ -510,7 +535,7 @@
           title={video.title}
           videoKey={videoId}
           {qualities}
-          selectedQuality={selectedVariantId}
+          selectedQuality={selectedQualityId}
           onSelectQuality={applyVariant}
           prevTitle={neighbors.prev?.title ?? null}
           nextTitle={neighbors.next?.title ?? null}

@@ -209,6 +209,21 @@ export function mountPlayerBar(skin: HTMLElement, handlers: PlayerBarHandlers): 
   content.className = 'media-menu-content';
   menu.append(content);
 
+  // 弹层自己带一块实底。皮肤那层是「10% 白 + 背景模糊」的磨砂玻璃——菜单只有两三行、
+  // 又压在控制条那条深色带上时还看得清，清晰度菜单有四五档、往上顶到视频画面上，
+  // 白字就糊进亮画面里了（实测 2207 那条橙色海报：除选中项外其余档位几乎读不出来）。
+  // 顺手把高度上限从皮肤的 224px 放开：五档（4K 片）是 5×46=230px，差一点就要滚动。
+  const menuStyle = document.createElement('style');
+  menuStyle.textContent = `
+#${uid}-menu {
+  background: rgb(12 14 18 / 0.94);
+  border: 1px solid rgb(255 255 255 / 0.12);
+  max-height: min(70vh, 22rem);
+}
+#${uid}-menu > .media-menu-content { max-height: inherit; }
+`;
+  root.append(menuStyle);
+
   /** 每项后面的对勾：不用皮肤 `[aria-checked]` 那套（我们的项是普通 media-menu-item），自己控透明度 */
   const checks = new Map<string, HTMLElement>();
   let itemsSignature = '';
@@ -336,6 +351,7 @@ export function mountPlayerBar(skin: HTMLElement, handlers: PlayerBarHandlers): 
       autoItem?.remove();
       autoSeparator?.remove();
       style.remove();
+      menuStyle.remove();
       checks.clear();
     },
   };

@@ -223,6 +223,39 @@ func SortVariantsDesc(vs []Variant) {
 	})
 }
 
+// DedupeVariants 把 ID() 撞车的档位合成一条，保留码率最高的那条，顺序不变。
+//
+// 为什么需要：B 站的 playurl 有时会把同一分辨率的「普通」和「高码率」两版一起返回
+// （画质 id 80 与 112），三种编码各两条 → 同一条片子 13 条档位、其中 3 对 ID 完全一样
+// （BV1NTp26eEkn 实测：1080p AV1 1.20 Mbps 和 0.70 Mbps 都叫 1080p.av1）。
+// 前端清晰度菜单是按 id 选中/打勾的，于是：
+//   - 菜单里出现两条一模一样的 1080p，点第二条等于点第一条，看着像「点了没反应」；
+//   - 副文案里的码率可能是另一条流的，选中项和菜单上的数字对不上。
+//
+// 保留码率高的那条：ID 相同意味着编码和分辨率都一样，高码率的就是这条片的「最好那一版」。
+//
+// 输入按 SortVariantsDesc 排过（同分辨率内编码偏好 + 码率降序），先出现的本来就对；
+// 这里仍按码率取最大，调用方万一没排也不会把低码率留下。
+func DedupeVariants(vs []Variant) []Variant {
+	if len(vs) < 2 {
+		return vs
+	}
+	seen := make(map[string]int, len(vs))
+	out := make([]Variant, 0, len(vs))
+	for _, v := range vs {
+		id := v.ID()
+		if i, ok := seen[id]; ok {
+			if v.Bandwidth > out[i].Bandwidth {
+				out[i] = v
+			}
+			continue
+		}
+		seen[id] = len(out)
+		out = append(out, v)
+	}
+	return out
+}
+
 type Job struct {
 	ID       int64   `json:"id"`
 	Type     string  `json:"type"`

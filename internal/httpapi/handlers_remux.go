@@ -148,6 +148,7 @@ func (s *Server) remuxProducer(v *model.Video, variantID string) func(context.Co
 				return muxcache.Source{}, rerr
 			}
 			model.SortVariantsDesc(fresh)
+			fresh = model.DedupeVariants(fresh)
 			if serr := s.st.SaveVariants(v.ID, fresh); serr != nil {
 				s.log.Warn("保存清晰度列表失败", "video", v.ID, "err", serr)
 			}

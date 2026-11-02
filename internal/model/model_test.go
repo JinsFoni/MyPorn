@@ -62,6 +62,32 @@ func TestSortVariantsDesc(t *testing.T) {
 	}
 }
 
+// TestDedupeVariants 验「ID 撞车的档位合成一条、留码率高的」：
+// B 站会把同一分辨率的普通版和高码率版都返回，两条的 ID() 一模一样。
+func TestDedupeVariants(t *testing.T) {
+	vs := []Variant{
+		{Height: 1080, Width: 1920, Bandwidth: 1198322, Codec: "av01.0.08M.08", URL: "av1-hi"},
+		{Height: 1080, Width: 1920, Bandwidth: 702429, Codec: "av01.0.08M.08", URL: "av1-lo"},
+		{Height: 1080, Width: 1920, Bandwidth: 2010247, Codec: "avc1.640033", URL: "avc"},
+		{Height: 720, Width: 1280, Bandwidth: 675806, Codec: "avc", URL: "720"},
+	}
+	got := DedupeVariants(vs)
+	want := []string{"av1-hi", "avc", "720"}
+	if len(got) != len(want) {
+		t.Fatalf("应合成 %d 条，得到 %d 条：%+v", len(want), len(got), urls(got))
+	}
+	for i, w := range want {
+		if got[i].URL != w {
+			t.Fatalf("第 %d 位应是 %s，实际 %+v", i, w, urls(got))
+		}
+	}
+	// 顺序反过来也得留码率高的那条（调用方没排序时的兜底）
+	rev := DedupeVariants([]Variant{vs[1], vs[0]})
+	if len(rev) != 1 || rev[0].URL != "av1-hi" {
+		t.Fatalf("乱序输入也应留下高码率那条，实际 %+v", urls(rev))
+	}
+}
+
 func urls(vs []Variant) []string {
 	out := make([]string, len(vs))
 	for i, v := range vs {

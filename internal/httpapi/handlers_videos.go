@@ -152,6 +152,7 @@ func (s *Server) ensureVariants(r *http.Request, v *model.Video, needBandwidth b
 	// 库里只按 (height, bandwidth) 存，编码偏好在这里补上：
 	// 缓存命中时也要重排一次，否则「播放用 AV1、下载拿 H.264」两边会对不上。
 	model.SortVariantsDesc(variants)
+	variants = model.DedupeVariants(variants)
 	if err == nil && len(variants) > 0 && time.Since(fetchedAt) < variantCacheTTL {
 		if !needBandwidth || hasBandwidth(variants) {
 			return variants, nil, nil
@@ -183,6 +184,7 @@ func (s *Server) ensureVariants(r *http.Request, v *model.Video, needBandwidth b
 		return nil, nil, rerr
 	}
 	model.SortVariantsDesc(fresh)
+	fresh = model.DedupeVariants(fresh)
 	if serr := s.st.SaveVariants(v.ID, fresh); serr != nil {
 		s.log.Warn("保存清晰度列表失败", "video", v.ID, "err", serr)
 	}
