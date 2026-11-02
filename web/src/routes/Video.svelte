@@ -1,6 +1,7 @@
 <script lang="ts">
   import DownloadDialog from '../components/DownloadDialog.svelte';
   import VideoCard from '../components/VideoCard.svelte';
+  import VideoByline from '../components/VideoByline.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import Skeleton from '../components/Skeleton.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
@@ -118,6 +119,13 @@
   /** 换影片/换口径时 +1，让还在路上的那次请求自己作废（连点两下切歌时很常见） */
   let neighborToken = 0;
 
+  /**
+   * 作者行那颗 40px 头像：取第一个带头像的艺人（B 站就是 UP 主本人；xHamster 之类常常没有，
+   * 那就干脆不画，不留一个空圆）。
+   */
+  const performers = $derived(video?.performers ?? []);
+  const publishedAt = $derived(video?.publishedAt ?? null);
+  const authorAvatar = $derived(imageUrl(performers.find((p) => p.avatarUrl)?.avatarUrl ?? null, 80));
   const variants = $derived(playback ? sortVariantsDesc(playback.variants) : []);
   const selectedVariant = $derived(variants.find((v) => v.id === selectedVariantId) ?? null);
   /**
@@ -652,12 +660,13 @@
              原来是侧栏两颗整宽按钮 + 窄屏标题下再来一颗「下载到本地库」：同一个动作在
              两个位置各写一遍，窄屏那颗还把标题和标签之间撑出一行。现在收成标题行右端两颗。 -->
         <div class="flex items-start gap-3">
-          <h2 class="min-w-0 flex-1 text-film-title font-normal tracking-[-0.01em] text-fg lg:text-film-title-lg">
+          <h2 class="min-w-0 flex-1 text-film-title font-bold text-fg lg:text-film-title-lg">
             {video.title}
           </h2>
 
-          <!-- 这一行的高度钉成标题首行的行高（18×1.333 / 25×1.36），36px 的按钮从上下各溢出几像素，
-               圆心正好压在首行中线上；不钉的话 items-start 会把 36px 的方框顶对齐到行框上，看着偏低。 -->
+          <!-- 这一行的高度钉成标题首行的行高（18/26 与 20/28，见 app.css 的 --text-film-title），
+               36px 的按钮从上下各溢出几像素，圆心正好压在首行中线上；
+               不钉的话 items-start 会把 36px 的方框顶对齐到行框上，看着偏低。 -->
           <div class="flex h-[var(--text-film-title--line-height)] shrink-0 items-center gap-1 lg:h-[var(--text-film-title-lg--line-height)]">
             <button
               type="button"
@@ -699,26 +708,34 @@
           </div>
         </div>
 
-        <p class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-ui text-muted">
-          {#each video.performers as person, index (person.name + String(index))}
-            {#if person.id !== null}
-              <a
-                data-link
-                href={`/performer/${String(person.id)}`}
-                class="text-fg/85 underline-offset-4 transition-colors hover:text-hi hover:underline"
-              >
-                {person.name}
-              </a>
-            {:else}
-              <span class="text-fg/85">{person.name}</span>
+        <!-- 作者行：样式与 `/youtube/:videoId` 同一套（40px 头像 + 名字 16px/500 + 下面一行时间），
+             见 components/VideoByline.svelte。 -->
+        <VideoByline avatarUrl={authorAvatar}>
+          {#snippet primary()}
+            {#each performers as person, index (person.name + String(index))}
+              {#if person.id !== null}
+                <a
+                  data-link
+                  href={`/performer/${String(person.id)}`}
+                  class="underline-offset-4 transition-colors hover:text-hi hover:underline"
+                >
+                  {person.name}
+                </a>
+              {:else}
+                <span>{person.name}</span>
+              {/if}
+              {#if index < performers.length - 1}
+                <span class="text-dim" aria-hidden="true">/</span>
+              {/if}
+            {/each}
+            {#if performers.length === 0}
+              <span class="text-muted">未知艺人</span>
             {/if}
-            {#if index < video.performers.length - 1}
-              <span class="text-dim" aria-hidden="true">/</span>
-            {/if}
-          {/each}
-          <span class="text-dim" aria-hidden="true">·</span>
-          <span class="text-meta text-dim">{relativeTime(video.publishedAt)}</span>
-        </p>
+          {/snippet}
+          {#snippet secondary()}
+            <span>{relativeTime(publishedAt)}</span>
+          {/snippet}
+        </VideoByline>
 
         {#if video.tags.length > 0}
           <ul class="mt-3 flex flex-wrap items-center gap-1.5" aria-label="标签">
@@ -746,7 +763,9 @@
       </div>
 
       <aside>
-        <dl class="mt-4 divide-y divide-line lg:mt-0">
+        <!-- `lg:-mt-1`：标题行高从 34 收到 28（照 YouTube 量出来的 20px/28px）之后，
+             资料首行的文字中线比标题首行中线低了 4.5px（实测 794 vs 789.5），往回提 4px 补平。 -->
+        <dl class="mt-4 divide-y divide-line lg:-mt-1">
           {#each specs as spec (spec.label)}
             <div class="flex items-baseline justify-between gap-3 py-2">
               <dt class="text-meta text-dim">{spec.label}</dt>

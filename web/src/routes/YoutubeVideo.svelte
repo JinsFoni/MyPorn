@@ -21,6 +21,7 @@
   import Skeleton from '../components/Skeleton.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import VideoLoading from '../components/VideoLoading.svelte';
+  import VideoByline from '../components/VideoByline.svelte';
   import YtCard from '../components/YtCard.svelte';
   import { api, messageFor } from '../lib/api';
   import {
@@ -462,11 +463,11 @@
     <div class="mt-5 grid gap-6 lg:grid-cols-[minmax(0,1fr)_14rem]">
       <div class="min-w-0">
         <div class="flex items-start gap-3">
-          <h2 class="min-w-0 flex-1 text-film-title font-normal tracking-[-0.01em] text-fg lg:text-film-title-lg">
+          <h2 class="min-w-0 flex-1 text-film-title font-bold text-fg lg:text-film-title-lg">
             {v.title}
           </h2>
 
-          <!-- 高度钉成标题首行的行高，36px 的按钮圆心正好压在首行中线上（同 Video.svelte） -->
+          <!-- 高度钉成标题首行的行高（18/26 与 20/28），36px 的按钮圆心正好压在首行中线上（同 Video.svelte） -->
           <div class="flex h-[var(--text-film-title--line-height)] shrink-0 items-center gap-1 lg:h-[var(--text-film-title-lg--line-height)]">
             <button
               type="button"
@@ -541,39 +542,36 @@
           </div>
         </div>
 
-        <!-- 频道 + 时间，位置与 `/video/:id` 的艺人行一致。
+        <!-- 频道 + 时间：样式与 `/video/:id` 的艺人行同一套（40px 头像 + 名字 16px/500 + 下面一行时间），
+             见 components/VideoByline.svelte。
              频道名链回视频墙的那个频道视角（`/youtube?channel=<行 id>`）：
              筛选写在地址栏里，所以这一跳过去墙就是「这个频道」的样子。 -->
-        <p class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-ui text-muted">
-          {#if v.channel.avatarUrl}
-            <img
-              src={imageUrl(v.channel.avatarUrl, 36) ?? ''}
-              alt=""
-              class="h-5 w-5 rounded-full object-cover"
-            />
-          {/if}
-          <a
-            data-link
-            href={`/youtube?channel=${String(v.channel.id)}`}
-            class="text-fg/85 underline-offset-4 transition-colors hover:text-hi hover:underline"
-          >
-            {v.channel.title}
-          </a>
-          <span class="text-dim" aria-hidden="true">·</span>
-          {#if v.publishedAt === null}
-            <span class="text-meta text-dim">时间未知</span>
-            <button
-              type="button"
-              class="rounded-full bg-raise px-2 py-0.5 text-meta text-fg transition-opacity hover:opacity-90 disabled:opacity-50"
-              onclick={() => void fillDate(v)}
-              disabled={refreshingDate}
+        <VideoByline avatarUrl={imageUrl(v.channel.avatarUrl, 80)}>
+          {#snippet primary()}
+            <a
+              data-link
+              href={`/youtube?channel=${String(v.channel.id)}`}
+              class="underline-offset-4 transition-colors hover:text-hi hover:underline"
             >
-              {refreshingDate ? '查询中…' : '查一下发布时间'}
-            </button>
-          {:else}
-            <span class="text-meta text-dim">{relativeTime(v.publishedAt)}</span>
-          {/if}
-        </p>
+              {v.channel.title}
+            </a>
+          {/snippet}
+          {#snippet secondary()}
+            {#if v.publishedAt === null}
+              <span>时间未知</span>
+              <button
+                type="button"
+                class="rounded-full bg-raise px-2 py-0.5 text-meta text-fg transition-opacity hover:opacity-90 disabled:opacity-50"
+                onclick={() => void fillDate(v)}
+                disabled={refreshingDate}
+              >
+                {refreshingDate ? '查询中…' : '查一下发布时间'}
+              </button>
+            {:else}
+              <span>{relativeTime(v.publishedAt)}</span>
+            {/if}
+          {/snippet}
+        </VideoByline>
 
         {#if v.description}
           <!-- 折叠到 10 行：YouTube 的简介能到几千字，整段摊开会把那排同频道卡片推到两屏之外；
@@ -585,7 +583,9 @@
       </div>
 
       <aside>
-        <dl class="mt-4 divide-y divide-line lg:mt-0">
+        <!-- `lg:-mt-1`：标题行高从 34 收到 28（照 YouTube 量出来的 20px/28px）之后，
+             资料首行的文字中线比标题首行中线低了 4.5px（实测 794 vs 789.5），往回提 4px 补平。 -->
+        <dl class="mt-4 divide-y divide-line lg:-mt-1">
           {#each specs as spec (spec.label)}
             <div class="flex items-baseline justify-between gap-3 py-2">
               <dt class="text-meta text-dim">{spec.label}</dt>
