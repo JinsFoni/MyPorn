@@ -428,6 +428,13 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
     + `Manager.Drop(sess.ID)`（剩下的分片立刻 410），hls.js 当场致命退出 → 弹「站内播放失败」→ 用户点重试重新解析，
     这一步才会把真正的原因（签名过期 / `LOGIN_REQUIRED` 人机验证）报出来。`proxyMedia` 同时把上游的 4xx 正文捞一句进日志
     （`上游拒绝取流  platform=youtube status=403 host=… body=…`），不再只留一个状态码。
+  - **cookies 在三条解析路径上都要带**（2026-11-03 修）：只有下载那条路带过 cookie，`ResolveStream` /
+    `ListChannel` / `VideoInfo` 都漏了——用户在设置里填好 cookies、播放照样被要求人机验证，因为那条
+    `yt-dlp -j` 命令行里根本没有 `--cookies`。现在统一走 `YtDlp.addCookies`（临时文件 0600、用完即删），
+    解析的 debug 行还会打 `cookies=true/false`。另外**解析那条路不再加 `--no-warnings`**：yt-dlp 关于
+    「这份 cookie 已在浏览器里被轮换」的提示是 WARNING，压掉之后只剩含糊的 `Sign in to confirm you're
+    not a bot`（用户就会去查网络）。`mapError` 因此改成两个视图：`ERROR:` 行判断「这条片子怎么了」，
+    整个 stderr 只用来认 cookies 失效这一条（顺手把 `nsig extraction failed` 这类 warning 噪音挡在判断之外）。
     改完实测：首帧 34.8/38.5/41.7 s → **9.7 s**（解析已缓存）/ 13.4 s（冷解析 8.8 s），nudge 次数 9~10 → **2**，
     拖到 120 s 从 7.3~11.4 s → **5.0 s**。
 - **全屏不许跟着屏宽继续放大控制条**（2026-11-01 用户报的「全屏模式下的底部菜单栏有点太高了」）：皮肤在

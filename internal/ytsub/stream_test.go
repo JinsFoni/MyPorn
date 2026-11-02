@@ -37,6 +37,52 @@ func writeFakeScript(t *testing.T, body string) string {
 	return path
 }
 
+// TestResolveStreamPassesCookies 播放解析必须把设置里的 cookies.txt 交给 yt-dlp。
+//
+// 2026-11-03 的现场：用户在设置里填了 cookie，播放照样被要求人机验证。量下来是**这条命令行
+// 里根本没有 --cookies**（只有下载那条带了）——登录态对解析一样是刚需：年龄限制 / 被要求
+// 人机验证的片子，不带 cookie 连清单都不给。这条测试钉住「参数里有 --cookies，且文件内容
+// 就是库里那份」（不是空文件，也不是下载那条路的临时文件）。
+func TestResolveStreamPassesCookies(t *testing.T) {
+	dir := t.TempDir()
+	cookieText := "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tsecret-value\n"
+	// 假 yt-dlp：把收到的参数抄一份，顺手把 --cookies 指的文件也留一份下来。
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > " + dir + "/args.txt\n" +
+		"prev=\"\"\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$prev\" = \"--cookies\" ]; then cp \"$a\" " + dir + "/cookies.txt; fi\n" +
+		"  prev=\"$a\"\n" +
+		"done\n" +
+		"cat <<'JSON'\n" +
+		`{"id":"vid1","title":"带 cookie","duration":10,` +
+		`"formats":[{"format_id":"hls","protocol":"m3u8_native","height":1080,` +
+		`"manifest_url":"https://manifest.googlevideo.com/api/manifest/hls_variant/expire/4070908800/id/x/index.m3u8"}]}` + "\n" +
+		"JSON\n"
+	bin := filepath.Join(dir, "yt-dlp")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	y := NewYtDlp(func() string { return bin }, nil, func() string { return cookieText }, nil, nil)
+	if _, err := y.ResolveStream(context.Background(), "vid1"); err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	args, err := os.ReadFile(filepath.Join(dir, "args.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "--cookies") {
+		t.Fatalf("解析命令行里没有 --cookies:\n%s", args)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "cookies.txt"))
+	if err != nil {
+		t.Fatalf("--cookies 指的文件没留下（可能是空路径）: %v", err)
+	}
+	if strings.TrimSpace(string(got)) != strings.TrimSpace(cookieText) {
+		t.Fatalf("交给 yt-dlp 的 cookie 内容不对:\n%q", string(got))
+	}
+}
+
 func TestResolveStreamPicksManifest(t *testing.T) {
 	path := writeFakeScript(t, fakeStreamYtDlp)
 	dlp := NewYtDlp(func() string { return path }, func() string { return "" },

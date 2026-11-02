@@ -128,8 +128,18 @@ func (y *YtDlp) ResolveStream(ctx context.Context, videoID string) (StreamInfo, 
 
 // resolveStreamWith 跑一次 `yt-dlp -j`，client 为空就用 yt-dlp 的默认客户端集合。
 func (y *YtDlp) resolveStreamWith(ctx context.Context, bin, videoID, client string) (StreamInfo, string, error) {
-	args := []string{"-j", "--no-playlist", "--no-warnings", "--socket-timeout", "20"}
+	// 不带 --no-warnings：yt-dlp 关于「这份 cookie 已经在浏览器里被轮换」的提示是 WARNING，
+	// 被压掉之后只剩一句含糊的 `Sign in to confirm you're not a bot`，用户就会去查网络
+	//（2026-11-03 就是这么绕了半天的）。多出来的噪音由 mapError 只认 ERROR 行来兜。
+	args := []string{"-j", "--no-playlist", "--socket-timeout", "20"}
 	args = append(args, y.commonArgs()...)
+	// 登录态：这条是「播放」的解析，年龄限制/要人机验证的片子不带 cookie 连清单都拿不到
+	//（2026-11-03 的现场，见 addCookies 的注释）。
+	args, dropCookies, cerr := y.addCookies(args)
+	defer dropCookies()
+	if cerr != nil {
+		y.log.Debug("写临时 Cookie 失败，这条照旧不带 cookie 跑", "err", cerr)
+	}
 	if client != "" {
 		args = append(args, "--extractor-args", "youtube:player_client="+client)
 	}
@@ -140,6 +150,7 @@ func (y *YtDlp) resolveStreamWith(ctx context.Context, bin, videoID, client stri
 	// 解析耗时是「点开到出画面」里最长的一段（实测冷启动 13~16 秒），
 	// 想优化起播就得先能看见它到底花在哪一次调用上——所以这行用 Debug 常开着不吵。
 	y.log.Debug("yt-dlp 解析完成", "videoId", videoID, "client", clientName(client),
+		"cookies", strings.TrimSpace(y.cookieText()) != "",
 		"elapsed", time.Since(started).Round(time.Millisecond).String(), "err", err)
 	if err != nil {
 		return StreamInfo{}, stderr, err

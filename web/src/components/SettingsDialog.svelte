@@ -788,9 +788,14 @@
                         </span>
                       </div>
                       <p class="mt-1 text-meta text-dim">
-                        只有「需要登录才能看」的内容才用得上（会员、年龄限制）。贴
+                        只有「需要登录才能看」的内容才用得上（会员、年龄限制、要人机验证的片子）。贴
                         <span class="text-muted">cookies.txt</span>（Netscape 格式，整份粘进来即可）或请求头里那整段 Cookie。
                         Cookie 加密存库，保存后不再回显。
+                      </p>
+                      <p class="mt-1 text-meta text-dim">
+                        <span class="text-muted">导出姿势很要紧</span>：开一个<strong>无痕窗口</strong>登录 YouTube → 在那里导出
+                        cookies → <strong>立刻关掉那个窗口</strong>。正常窗口挂着登录态时 YouTube 会一直轮换
+                        <span class="text-muted">__Secure-3PSIDTS</span>，导出的副本用一次就被判「已失效」。
                       </p>
                       <textarea
                         id="yt-cookie"

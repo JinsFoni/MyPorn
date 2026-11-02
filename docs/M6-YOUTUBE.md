@@ -1148,3 +1148,46 @@ metadata 还没到的那几十毫秒按「铺满盒子」退化，`loadedmetadat
 
 **测试**：`TestYtStreamSegmentRejectionDropsSession`（假上游对分片回 403 → 第一次 502、第二次立刻 410）、
 `TestManagerDrop`（作废后按 id 拿不到，重复作废不炸）。
+
+### 14.18 「配了 cookie 还是不能播」：解析那条路根本没带 cookie（2026-11-03）
+
+**起因**：§14.17 之后用户去设置里填了 cookies，再拿 `/youtube/M34TIq4UBA0` 试，还是播不了。
+
+**分两件事，都得修**
+
+1. **解析（`-j`）那条命令行里没有 `--cookies`**——只有下载那条路带了。所以无论填什么 cookie，
+   播放解析都不会用它。量法：用库里的 `yt_cookies`（AES 解密后 4 366 字节 / 33 行，
+   含 `SID` / `SAPISID` / `HSID` / `SSID` / `APISID` / `LOGIN_INFO` / `__Secure-1P*` / `__Secure-3P*`）
+   手工跑 `yt-dlp -j`，与 App 里那次失败的报错一模一样——**但这证明不了 App 带了 cookie**，
+   真正钉住它的是 `TestResolveStreamPassesCookies`（假 yt-dlp 把 `$@` 抄下来，断言参数里有
+   `--cookies` 且文件内容就是库里那份）。补上之后 debug 行变成
+   `msg="yt-dlp 解析完成" videoId=M34TIq4UBA0 client=visionos cookies=true elapsed=2.961s err="exit status 1"`。
+2. **这份 cookie 本身已经被 YouTube 判死**。带 cookie 跑出来的第一行是真话：
+
+   ```
+   WARNING: [youtube] The provided YouTube account cookies are no longer valid.
+            They have likely been rotated in the browser as a security measure.
+   ```
+
+   而且它是**真的被作废**：同一条命令跑完，yt-dlp 回写的 cookie jar 从 33 行掉到 16 行——
+   `LOGIN_INFO` / `SID` / `SAPISID` / `HSID` / `SSID` / `APISID` / `__Secure-1PSID` 全被 YouTube 清掉了。
+   原因是导出时浏览器那个正常窗口还挂着登录态，`__Secure-3PSIDTS` 一直在轮换，导出的是一份「用一次就死」的副本。
+
+**为什么之前看不到这句话**：解析用的参数里带了 `--no-warnings`，WARNING 被压掉，只剩最后一行
+`ERROR: … Sign in to confirm you're not a bot.`——于是现象永远指向「网络/出口 IP」，而真正该做的是重新导出 cookie。
+
+**改了什么**
+
+- `YtDlp.addCookies`：三条解析路径（`ResolveStream` / `ListChannel` / `VideoInfo`）统一把库里的 cookies
+  写进 0600 临时文件并追加 `--cookies`，用完即删；写不出来就照旧不带 cookie 跑（失败原因落在 yt-dlp 的报错上）。
+- 解析不再加 `--no-warnings`；`mapError` 拆成两个视图——`ERROR:` 行判「这条片子怎么了」，整个 stderr 只用来认
+  `no longer valid` / `rotated in the browser`（这条 WARNING 优先于「人机验证」，文案改成
+  「这份 cookies.txt 已经失效（YouTube 说它在浏览器里被轮换了）：用无痕窗口登录 → 导出 → 立刻关掉那个窗口」）。
+  顺手把 `nsig extraction failed` 这类 warning 噪音挡在「接口又变了 → 升级 yt-dlp」的判断之外。
+- 设置 → YouTube 的 Cookie 面板补了导出姿势（无痕窗口 → 登录 → 导出 → 立刻关窗），并说明为什么。
+
+**给用户的结论**：cookie 不是「粘一份就行」，得是**无痕窗口里刚导出、导出后立刻关掉那个窗口**的那一份；
+现在配的这份已经被 YouTube 清掉了，重新导一份即可。代码这边之前就算导对了也白搭——解析那条路没带 cookie。
+
+**测试**：`TestResolveStreamPassesCookies`、`TestMapErrorRotatedCookies`（WARNING 要盖过那句含糊的 bot 报错）、
+`TestMapErrorIgnoresWarningNoise`（`nsig` warning 不能把原因判成「升级 yt-dlp」）。

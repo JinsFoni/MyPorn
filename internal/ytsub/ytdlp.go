@@ -228,6 +228,11 @@ func (y *YtDlp) ListChannel(ctx context.Context, channelID string, limit int) ([
 		"--no-warnings", "--socket-timeout", "20",
 	}
 	args = append(args, y.commonArgs()...)
+	args, dropCookies, err := y.addCookies(args)
+	defer dropCookies()
+	if err != nil {
+		y.log.Debug("写临时 Cookie 失败，这条照旧不带 cookie 跑", "err", err)
+	}
 	args = append(args, url)
 
 	stdout, stderr, err := y.run(ctx, bin, args...)
@@ -296,6 +301,11 @@ func (y *YtDlp) VideoInfo(ctx context.Context, videoID string) (Video, error) {
 	}
 	args := []string{"-J", "--no-playlist", "--no-warnings", "--socket-timeout", "20"}
 	args = append(args, y.commonArgs()...)
+	args, dropCookies, err := y.addCookies(args)
+	defer dropCookies()
+	if err != nil {
+		y.log.Debug("写临时 Cookie 失败，这条照旧不带 cookie 跑", "err", err)
+	}
 	args = append(args, BaseURL+"/watch?v="+videoID)
 
 	stdout, stderr, err := y.run(ctx, bin, args...)
@@ -613,11 +623,47 @@ func writeCookies(dir, content string) (string, func(), error) {
 	return f.Name(), func() { os.Remove(f.Name()) }, nil
 }
 
+// addCookies 把「当前配置的 cookies.txt」落到临时文件并追加 --cookies，返回收尾函数。
+//
+// 为什么要单独一个函数：**解析（-j）这条路原来一条 cookie 都不带**，只有下载那条带了。
+// 2026-11-03 的现场是用户在设置里填好了 cookies，播放照样被要求人机验证——把库里那份
+// cookies 导出成文件再手工跑 `yt-dlp -j`，报的却是「The provided YouTube account cookies
+// are no longer valid」，也就是说登录态对解析一样是刚需（年龄限制/要验证的片子连清单都不给），
+// 而当时 ResolveStream 的命令行里根本没有 --cookies。三条解析路径（清单、频道列表、单条信息）
+// 现在都从这里加。
+//
+// 失败不致命：临时文件写不出来就照旧不带 cookie 跑一次，让失败原因落在 yt-dlp 的报错上。
+func (y *YtDlp) addCookies(args []string) ([]string, func(), error) {
+	content := strings.TrimSpace(y.cookieText())
+	if content == "" {
+		return args, func() {}, nil
+	}
+	dir, err := os.MkdirTemp("", "myporn-ytcookies-")
+	if err != nil {
+		return args, func() {}, err
+	}
+	path, cleanup, err := writeCookies(dir, content)
+	if err != nil || path == "" {
+		os.RemoveAll(dir)
+		return args, func() {}, err
+	}
+	return append(args, "--cookies", path), func() { cleanup(); os.RemoveAll(dir) }, nil
+}
+
 // mapError 把 yt-dlp 的报错翻成统一语义。
 // 「版本过期」是这里最值钱的一条：它占了实际失败的绝大多数（§11.5）。
 func (y *YtDlp) mapError(err error, stderr string) error {
-	msg := strings.ToLower(stderr + " " + err.Error())
+	// stderr 里既有 WARNING 也有 ERROR：'这条片子怎么了' 只看 ERROR 行（yt-dlp 的 warning 里
+	// 常有 `nsig extraction failed` 这类噪音，混着看会把原因判错），而 cookies 被轮换的提示
+	// 偏偏是 WARNING——两个视图分开，各自取自己那段。
+	warn := strings.ToLower(stderr)
+	msg := strings.ToLower(errorLines(stderr) + " " + err.Error())
 	switch {
+	case strings.Contains(warn, "no longer valid") || strings.Contains(warn, "rotated in the browser"):
+		// 2026-11-03 实测：填了一份「正常浏览器里导出」的 cookies，YouTube 第一条请求之后就把它
+		// 清了（LOGIN_INFO/SID/APISID 全没），yt-dlp 原话就是这句。原因是浏览器那边还在轮换
+		// __Secure-3PSIDTS，导出的是一份「用过就死」的副本。
+		return social.Blocked("这份 cookies.txt 已经失效（YouTube 说它在浏览器里被轮换了）：用无痕窗口登录 YouTube → 导出 cookies → 立刻关掉那个窗口，再用导出的文件")
 	case strings.Contains(msg, "sign in to confirm") || strings.Contains(msg, "not a bot"):
 		return social.Blocked("YouTube 要求人机验证（出口 IP 被盯上了）：去设置里给 YouTube 填 cookies.txt（登录态最有效），或换一条真换出口 IP 的代理")
 	case strings.Contains(msg, "http error 403"):
@@ -645,6 +691,18 @@ func (y *YtDlp) mapError(err error, stderr string) error {
 		return social.Upstream("yt-dlp 失败："+tail(strings.TrimSpace(stderr), 300), err)
 	}
 	return social.Upstream("yt-dlp 失败", err)
+}
+
+// errorLines 只取 stderr 里以 `ERROR:` 开头的行（没有就返回空串）。
+func errorLines(stderr string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "ERROR:") {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 func tail(s string, n int) string {

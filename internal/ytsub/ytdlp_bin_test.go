@@ -135,7 +135,8 @@ JSON
 // 会员抢先看的 yt-dlp 原话要翻成一句人话，别把 stderr 原样丢给用户。
 // 实测（2026-11-02，2gtrgAKIH88）：
 // `ERROR: [youtube] 2gtrgAKIH88: Join this channel to get access to members-only content
-//  like this video, and other exclusive perks.`
+//
+//	like this video, and other exclusive perks.`
 func TestMapErrorMembersOnly(t *testing.T) {
 	y := NewYtDlp(func() string { return "" }, nil, nil, nil, nil)
 	stderr := "ERROR: [youtube] 2gtrgAKIH88: Join this channel to get access to members-only content like this video, and other exclusive perks."
@@ -146,6 +147,40 @@ func TestMapErrorMembersOnly(t *testing.T) {
 	}
 	if strings.Contains(msg, "Join this channel") {
 		t.Fatalf("把 yt-dlp 的英文原话丢给用户了: %q", msg)
+	}
+}
+
+// cookies 被浏览器轮换（WARNING）要盖过那句含糊的 `Sign in to confirm you're not a bot`。
+//
+// 实测原话（2026-11-03，M34TIq4UBA0）：
+// `WARNING: [youtube] The provided YouTube account cookies are no longer valid.
+//
+//	They have likely been rotated in the browser as a security measure.`
+//
+// 同一次运行的最后一行才是 `ERROR: … Sign in to confirm you're not a bot.`——
+// 只按 ERROR 判就会让用户又去查网络，而真正该做的是重新导出一份 cookie。
+func TestMapErrorRotatedCookies(t *testing.T) {
+	y := NewYtDlp(func() string { return "" }, nil, nil, nil, nil)
+	stderr := "WARNING: [youtube] The provided YouTube account cookies are no longer valid. " +
+		"They have likely been rotated in the browser as a security measure.\n" +
+		"ERROR: [youtube] M34TIq4UBA0: Sign in to confirm you're not a bot.\n"
+	msg := y.mapError(errStub{}, stderr).Error()
+	if !strings.Contains(msg, "cookies.txt 已经失效") {
+		t.Fatalf("应指向「cookies 失效」，得到: %q", msg)
+	}
+}
+
+// warnings 里的噪音不能把原因判歪：`nsig extraction failed` 这类不是「接口变了」。
+func TestMapErrorIgnoresWarningNoise(t *testing.T) {
+	y := NewYtDlp(func() string { return "" }, nil, nil, nil, nil)
+	stderr := "WARNING: [youtube] nsig extraction failed: Some formats may be missing\n" +
+		"ERROR: [youtube] M34TIq4UBA0: Sign in to confirm you're not a bot.\n"
+	msg := y.mapError(errStub{}, stderr).Error()
+	if !strings.Contains(msg, "人机验证") {
+		t.Fatalf("应判成人机验证，得到: %q", msg)
+	}
+	if strings.Contains(msg, "接口又变了") {
+		t.Fatalf("被 nsig 的 warning 带偏成「升级 yt-dlp」了: %q", msg)
 	}
 }
 
