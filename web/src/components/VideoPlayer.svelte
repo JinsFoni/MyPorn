@@ -1749,20 +1749,32 @@
     // 控制条已经亮着就什么都不做，不和皮肤抢状态；触摸不参与（手机上「点一下才出现」是另一套）。
     // 实测：正常路径下它每颗真实 pointermove 会多派一颗（皮肤随后照样 setActive，结果不变）；
     // 控制条亮着时 synthetic 计数不再增长。
-    const onPointerNet = (event: PointerEvent): void => {
-      if (event.pointerType === 'touch') return;
+    const reviveControls = (): void => {
       const container = skinContainer();
       if (!container || container.hasAttribute('data-controls-visible')) return;
       container.dispatchEvent(
         new PointerEvent('pointermove', { bubbles: false, composed: false, pointerType: 'mouse' }),
       );
     };
+    const onPointerNet = (event: PointerEvent): void => {
+      if (event.pointerType === 'touch') return;
+      reviveControls();
+    };
+    // 滚轮这条是 2026-11-03 第二版复现（用户描述：进全屏→控制条隐藏→「移动鼠标」不出现→点一下才出现
+    // →之后再移动就正常）补的：**触控板两指滚动并不移动指针**，只发 `wheel`，实测控制条纹丝不动
+    // （隐藏态滚 120 再滚 -120，`data-controls-visible` 一直是 false），而鼠标真挪一格就亮——
+    // 这条链路断在「滚动不算指针活动」上。点一下能亮是因为 pointerdown/up 走的是皮肤自己的 setActive。
+    const onWheelNet = (): void => {
+      reviveControls();
+    };
     playerEl?.addEventListener('pointermove', onPointerNet, { capture: true, passive: true });
+    playerEl?.addEventListener('wheel', onWheelNet, { capture: true, passive: true });
     mountBar();
     return () => {
       unsubscribe();
       window.removeEventListener('keydown', onKeydown);
       playerEl?.removeEventListener('pointermove', onPointerNet, { capture: true });
+      playerEl?.removeEventListener('wheel', onWheelNet, { capture: true });
       if (retryTimer !== undefined) clearTimeout(retryTimer);
       if (kickTimer !== undefined) clearTimeout(kickTimer);
       stopSeekWatch();
