@@ -1144,7 +1144,7 @@ metadata 还没到的那几十毫秒按「铺满盒子」退化，`loadedmetadat
 
 **怎么办（给用户的结论）**：这条路 20 分钟前还是好的，是 YouTube 在这个机房出口上临时收紧了；
 重试只会让它更盯你。要么等它自己松开，要么在设置 → YouTube 填一份**登录后的 cookies.txt**，
-要么换一条真能换出口 IP 的代理。站内的「改用 YouTube 播放器」走的是浏览器自己的会话，用户浏览器登录过就能放。
+要么换一条真能换出口 IP 的代理。站内的「改用 YouTube 播放器」走的是浏览器自己的会话——**但只有那个浏览器本身登录过、且这条出口没被要求人机验证时才放得出来**（2026-11-03 05:2x 实测：这台机器上没登录的浏览器，内嵌播放器点播放也是「请登录，以便我们确认你不是聊天机器人」，见 §14.22）。
 
 **测试**：`TestYtStreamSegmentRejectionDropsSession`（假上游对分片回 403 → 第一次 502、第二次立刻 410）、
 `TestManagerDrop`（作废后按 id 拿不到，重复作废不炸）。
@@ -1330,3 +1330,44 @@ MacBook 上「移动鼠标」很容易就做成两指滚动（指针没挪），
 `pointermove` 给 `.media-container`。实测（全屏 1200×991，4K 片，播放中）：隐藏态滚 120 → 显示；
 再等 2 秒隐藏、滚 −120 → 又显示；窗口模式下同样有效（指针在画面里滚轮：隐藏 → 显示，页面照常滚动）。
 最终四条路都量过一遍：滚轮 / 挪 2px / 点一下 / 按方向键，全屏下隐藏态都能把控制条点亮。
+
+### 14.22 「YouTube 视频无法播放了」：cookies 又被判死 + 出口 IP 被要求人机验证（2026-11-03 05:2x）
+
+**现象**：§14.19 修好之后（01:30 粘入新 cookies，1080p 正常），到 04:32 又开始全挂；
+05:08 拿 `/youtube/v98bW21C79Y` 试，播放页只有一句「这份 cookies.txt 已经失效（YouTube 说它在浏览器里被轮换了）」。
+
+**两件事同时成立，谁单独修都不够**
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 接口报什么 | `GET /api/yt/videos/4393/stream` | `blocked`：这份 cookies.txt 已经失效… |
+| 带 cookies 解析 | `yt-dlp -j --cookies ck.txt --extractor-args "youtube:player_client=tv_samsung,web_safari"`（和 app 同一条命令行） | `ERROR: Sign in to confirm you're not a bot` |
+| 不带 cookies | 同上去掉 `--cookies` | 同一句 |
+| 换客户端 | `player_client` = `tv` / `android_vr` / `ios` / `mweb` / `web_embedded` / `tv_simply` / `android` / `web` / `mweb` | 9 个全是同一句 |
+| TLS 指纹 | `--impersonate chrome`（venv 里装了 `curl_cffi 0.17.0`） | 同一句 |
+| 不要 PO token | `--extractor-args "youtube:formats=missing_pot"` | 同一句 |
+| yt-dlp 版本 | `pip index versions yt-dlp` | `2026.10.26` 就是最新，不是版本问题 |
+| cookies 还算登录态吗 | `-J --flat-playlist "https://www.youtube.com/feed/subscriptions"` | `entries: []`；`playlist?list=LL`（稍后看）报 `does not exist` → **不是登录态了** |
+| 出口 IP 呢 | 这台机器上**没登录的浏览器**打开同一条视频 | 正文「请登录，以便我们确认你不是聊天机器人」；点内嵌播放器的播放键，同一句话 |
+| 元数据坏没坏 | `-J --flat-playlist /channel/UC…/videos` | 正常出条目（同步、封面、时长都不受影响） |
+
+**时间线**（同一天，同一台机器）：01:49 `job 335` 的 YouTube 下载成功（§14.19 的恢复）→
+04:32 `job 353`、05:01 `job 367` 全是 bot check → 05:08 连浏览器也要登录。
+也就是说「IP 被盯上」是这两三个小时里发生的，**这类收紧一般几小时到一两天会自己松**。
+
+**顺手改的**（改代码能做的只有这个）：播放页原来在解析失败时只画一张错误卡，两颗按钮要用户自己猜。
+现在 `blocked` / `stale_parser` / `upstream` / `rate_limited` 这四类「解析器这一段整体不通」的错误
+**自动切到 YouTube 内嵌播放器**，上面留一行「自动改用 YouTube 播放器：<原因>」+「再试一次站内解析」；
+`not_found`（视频没了 / 私有 / 会员专属）不兜底——换了播放器一样放不出来。
+隐私模式（浏览器直连 YouTube）下不自动切，行为同以前。
+
+**实测**：`/youtube/v98bW21C79Y` 打开 9 秒后 `iframe=true`、横幅文字就是那句 cookies 失效；
+点「再试一次站内解析」→ 重新解析一次 → 又落回内嵌 + 横幅（不循环、不白屏、没有 JS 报错）。
+注意这时**内嵌播放器本身也放不了**（同一句「请登录」），所以这个兜底只在「cookies 死了但出口没事」
+的那种日子里有用；两种都撞上时唯一的路还是下面两条。
+
+**要继续看只能二选一**
+
+1. 重导 cookies：无痕窗口 → 登录 → F12 → 任意 `youtube.com` 请求的 `cookie:` 那一整行 → 粘进设置
+   （姿势见 §14.19，`document.cookie` 拿不到，`SID`/`LOGIN_INFO` 是 HttpOnly）→ **立刻关掉那个窗口**。
+2. 给 YouTube 配一条真能换出口的代理（设置里已有 `proxy_youtube`；本机现在是空的，Clash 出口和直连同一个 IP）。

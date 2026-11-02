@@ -23,7 +23,7 @@
   import VideoLoading from '../components/VideoLoading.svelte';
   import VideoByline from '../components/VideoByline.svelte';
   import YtCard from '../components/YtCard.svelte';
-  import { api, messageFor } from '../lib/api';
+  import { ApiError, api, messageFor } from '../lib/api';
   import {
     formatBandwidth,
     formatCount,
@@ -58,6 +58,21 @@
   let playError = $state('');
   /** 解析失败时的兜底：改用 YouTube 内嵌播放器（隐私模式下不给这个选项） */
   let useEmbed = $state(false);
+  /**
+   * 「解析这一段过不去、已经自动切到 YouTube 自带播放器」时记下原因，画在播放器上面那一行。
+   *
+   * 2026-11-03 现场：存的 YouTube cookies 被轮换作废 + 出口 IP 被要求人机验证，站内播放器
+   * 要的清单一条都解不出来，而 YouTube 内嵌播放器走的是另一套会话、照样能放。以前这种时候
+   * 页面就停在一张「这份 cookies.txt 已经失效」的错误卡上，用户得自己猜下面那颗按钮有什么用。
+   * 现在自动切过去，把原因和「再试一次站内解析」放在同一行。
+   */
+  let streamBlocked = $state('');
+
+  /**
+   * 这些错误码说明「解析器这一段整体不通」，跟具体哪条视频没关系；内嵌播放器不受影响。
+   * 视频没了 / 私有 / 会员专属（not_found）不在里面。
+   */
+  const RESOLVER_DOWN_CODES = new Set(['blocked', 'stale_parser', 'upstream', 'rate_limited']);
   /** 选中的画质高度；null = 最高 */
   let streamHeight = $state<number | null>(null);
   let selectedQualityId = $state<string | null>(null);
@@ -181,6 +196,7 @@
     streamError = '';
     playError = '';
     useEmbed = false;
+    streamBlocked = '';
     streamHeight = null;
     selectedQualityId = null;
     lastPos = 0;
@@ -244,7 +260,18 @@
       stream = info;
       selectedQualityId = qualityIdFor(info, null);
     } catch (err) {
-      if (token === loadToken) streamError = messageFor(err);
+      if (token !== loadToken) return;
+      streamError = messageFor(err);
+      // 解析这条路被挡住（cookies 死了 / 出口 IP 要人机验证 / yt-dlp 过期 / 限流）时，
+      // 站内播放器一点指望都没有——它要的就是 yt-dlp 解出来的清单。与其把人晾在错误卡上，
+      // 不如直接切到 YouTube 自带播放器（另一套会话，通常还能放），原因写在上面那一行。
+      // 「视频没了 / 私有 / 会员专属」这类不兜底：换了播放器也一样放不出来。
+      const code = err instanceof ApiError ? String(err.code) : '';
+      if (!privacy.on && RESOLVER_DOWN_CODES.has(code)) {
+        useEmbed = true;
+        streamBlocked = streamError;
+        playError = '';
+      }
     } finally {
       if (token === loadToken) streamLoading = false;
     }
@@ -291,6 +318,13 @@
   function switchToEmbed(): void {
     useEmbed = true;
     playError = '';
+  }
+
+  /** 从内嵌播放器回到站内解析（用户看到 YouTube 那边能放之后，想再要 4K 时点这个）。 */
+  function retryInline(): void {
+    useEmbed = false;
+    streamBlocked = '';
+    retryStream();
   }
 
   function onStreamFailed(message: string): void {
@@ -421,6 +455,18 @@
   {@const v = video}
   <article>
     {#if useEmbed}
+      {#if streamBlocked}
+        <div
+          class="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-xl bg-panel px-3 py-2 text-meta text-muted"
+        >
+          <span class="min-w-0 flex-1">
+            自动改用 YouTube 播放器：{streamBlocked}
+          </span>
+          <button type="button" class="btn shrink-0" onclick={retryInline}>
+            再试一次站内解析
+          </button>
+        </div>
+      {/if}
       <!-- 兜底：站内解析失败（或版权视频被上游拒放）才用 YouTube 自己的播放器 -->
       <iframe
         class="aspect-video w-full rounded-xl bg-ink"
