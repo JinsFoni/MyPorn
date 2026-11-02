@@ -2,6 +2,7 @@
   import InfiniteList from '../components/InfiniteList.svelte';
   import PerformerRail from '../components/PerformerRail.svelte';
   import VideoCard from '../components/VideoCard.svelte';
+  import { WALL_GRID } from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import { api, messageFor } from '../lib/api';
   import { live } from '../lib/live.svelte';
@@ -216,7 +217,7 @@
   </p>
 {/if}
 
-<InfiniteList load={loadPage} keyOf={(v: Video) => v.id} {reloadKey}>
+<InfiniteList load={loadPage} keyOf={(v: Video) => v.id} {reloadKey} gridClass={WALL_GRID}>
   {#snippet children(video)}
     <VideoCard video={video} />
   {/snippet}

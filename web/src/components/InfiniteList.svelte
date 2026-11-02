@@ -1,3 +1,15 @@
+<script module lang="ts">
+  /**
+   * 视频墙的栅格：一行最宽 4 个。
+   *
+   * 关注流、B 站、YouTube 三条墙卡片的形状完全一样（16:9 封面 + 标题 + 头像/频道），
+   * 列数不该各写一份——B 站和 YouTube 原先各自抄了一遍同样的 class，关注流用的是默认值 5 个，
+   * 同一块屏幕上一换页就多出一列（2xl 下 5×~290px vs 4×~360px，卡片大小跟着跳）。
+   * 现在三处共用这一个常量。手机上一行 1 个、sm 起 2 个、xl 3 个、2xl 4 个。
+   */
+  export const WALL_GRID = 'grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4';
+</script>
+
 <script lang="ts" generics="T">
   /**
    * IntersectionObserver 分页 + 页淘汰（离屏页卸载 DOM）。

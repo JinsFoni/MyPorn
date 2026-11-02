@@ -17,7 +17,7 @@
    * 这两件事都摆在页面上，不藏在设置里。
    */
   import { onMount } from 'svelte';
-  import InfiniteList from '../components/InfiniteList.svelte';
+  import InfiniteList, { WALL_GRID } from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import TopBar from '../components/TopBar.svelte';
   import BiliLoginDialog from '../components/BiliLoginDialog.svelte';
@@ -454,7 +454,7 @@
       keyOf={(video: Video) => video.id}
       reloadKey={wallKey}
       maxLoadedPages={6}
-      gridClass="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+      gridClass={WALL_GRID}
     >
       {#snippet placeholder()}
         <div class="flex flex-col gap-2">
