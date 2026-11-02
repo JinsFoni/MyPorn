@@ -64,19 +64,38 @@ func (s *Server) handleYtStreamInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	qualities := ytQualities(src.variants, src.tracks)
 	best, _ := hls.PickVariant(src.variants, 0)
-	// 顺手把 4K 那条「单文件 HLS」的会话也建起来（两次 Range 读文件头，几百毫秒），
+	// 默认画质取「菜单里最高的那一档」，不能只看 HLS 清单：配了 cookie 之后
+	// 清单最高只有 1080p、4K 只在 AV1 直链里（见 ytQualities 的注释），照清单给默认
+	// 就等于每次点开都静默降到 1080——「画质默认最高、不静默降级」是硬要求。
+	topHeight, dashTop := 0, 0
+	for _, q := range qualities {
+		if q.Height > topHeight {
+			topHeight = q.Height
+		}
+		if q.Dash && q.Height > dashTop {
+			dashTop = q.Height
+		}
+	}
+	// 顺手把 4K 那条「单文件 HLS」的会话建起来（两次 Range 读文件头，几百毫秒），
 	// 这样前端随后要 dash.m3u8 / 第一条分片时都是现成的——起播时间能省下 2~4 秒。
-	if best.Height >= 2160 {
+	if dashTop > 0 {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 25*time.Second)
 			defer cancel()
-			if _, err := s.ytDashSessionOf(ctx, row.VideoID, best.Height); err != nil {
-				s.log.Debug("4K 会话预热失败", "video", row.VideoID, "err", err)
+			if _, err := s.ytDashSessionOf(ctx, row.VideoID, dashTop); err != nil {
+				s.log.Debug("4K 会话预热失败", "video", row.VideoID, "height", dashTop, "err", err)
 			}
 		}()
 	}
 	// 这里比播放器开口早一秒多（前端要等这个响应才渲染播放器），正好用来预热。
-	go s.warmYtVideo(context.WithoutCancel(r.Context()), row.VideoID, best, src.renditions)
+	//
+	// 只有「默认那一档就走 HLS」时才预热清单分片：默认是 4K 的 AV1 那条时，出第一帧走的是
+	// dash.m3u8（上面那个 goroutine 已经在预热），再拉 1080p 的两段 HLS（约 1.4 MB）纯属往
+	// 一台已经被 YouTube 盯上的出口 IP 上白烧带宽。dash 建不起来时它会 302 回 HLS，
+	// 那条路少一点点预热而已，不影响能不能播。
+	if dashTop == 0 || topHeight == best.Height {
+		go s.warmYtVideo(context.WithoutCancel(r.Context()), row.VideoID, best, src.renditions)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"videoId":     row.VideoID,
 		"title":       row.Title,
@@ -85,7 +104,7 @@ func (s *Server) handleYtStreamInfo(w http.ResponseWriter, r *http.Request) {
 		// 4K 走这条：AV1 分片 mp4 按 sidx 切成 HLS 分片（见 handlers_ytdash.go）
 		"dash":      fmt.Sprintf("/api/yt/videos/%d/dash.m3u8", row.ID),
 		"qualities": qualities,
-		"default":   best.Height,
+		"default":   topHeight,
 		"expiresAt": src.up.ExpiresAt.UTC().Format(time.RFC3339),
 	})
 }
@@ -471,7 +490,33 @@ func ytQualities(variants []hls.StreamVariant, tracks []ytstream.Track) []ytQual
 	for _, t := range tracks {
 		trackAt[t.Height] = t
 	}
-	out := make([]ytQualityDTO, 0, len(best))
+	out := make([]ytQualityDTO, 0, len(best)+len(tracks))
+	// 只出现在 AV1 直链里的档位也要列出来——**HLS 清单里没有不等于视频没有这一档**。
+	// 2026-11-03 实测（3BaMT8c93lA，4K 片）：配了 cookies 之后 yt-dlp 用的是
+	// web_embedded/tv_samsung/web 这套带登录态的客户端，它们的 HLS 清单最高只到 1080p
+	// （[144 240 360 480 720 1080]），2160/1440 只在 `protocol=https` 的 AV1 直链里
+	// （itag 401 / av01.0.13M.08 / 11.5 Mbps，比 HLS 那条 VP9 的 16.0 Mbps 还省）。
+	// 早先无 cookie 的 visionos 客户端清单里带 2160 的 VP9 变体，所以「只看清单」时
+	// 4K 是蒙对的；一配 cookie 清单就掉到 1080，菜单里 4K 直接消失——表现就是
+	// 「YouTube 不能播 4K 了」。这里按高度补齐，缺的那几档走 dash 那条路。
+	for _, t := range tracks {
+		if t.Height <= 0 || t.Bandwidth <= 0 {
+			continue
+		}
+		if _, ok := best[t.Height]; ok {
+			continue
+		}
+		if _, ok := trackAt[t.Height]; !ok {
+			continue
+		}
+		out = append(out, ytQualityDTO{
+			Height:    t.Height,
+			Label:     strconv.Itoa(t.Height) + "p",
+			Bandwidth: int(t.Bandwidth),
+			Codecs:    hls.PickVideoCodec(t.Codecs),
+			Dash:      true,
+		})
+	}
 	for h, v := range best {
 		q := ytQualityDTO{
 			Height: h, Label: strconv.Itoa(h) + "p",

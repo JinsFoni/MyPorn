@@ -83,6 +83,52 @@ func TestResolveStreamPassesCookies(t *testing.T) {
 	}
 }
 
+// 配了 cookies 之后快车道必须换成「支持 cookie 的那些客户端」。
+//
+// 2026-11-03 实测：yt-dlp 一旦拿到登录态就把 visionos 摘掉
+// （`Skipping client "visionos" since it does not support cookies`），快车道只剩几张
+// storyboard 图，白跑一趟；而且它的默认集合给的 HLS 最高 1080p、4K 只在 AV1 直链里。
+// 换成 tv_samsung,web_safari 一次 6.24 s 就拿到 2160 的 AV1 直链 + 18 条 m3u8。
+func TestResolveStreamFastLaneClient(t *testing.T) {
+	run := func(cookieText string) string {
+		dir := t.TempDir()
+		script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + dir + "/args.txt\n" +
+			"cat <<'JSON'\n" +
+			`{"id":"vid1","title":"t","duration":10,` +
+			`"formats":[{"format_id":"hls","protocol":"m3u8_native","height":1080,` +
+			`"manifest_url":"https://manifest.googlevideo.com/api/manifest/hls_variant/expire/4070908800/id/x/index.m3u8"}]}` + "\n" +
+			"JSON\n"
+		bin := filepath.Join(dir, "yt-dlp")
+		if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var cookies func() string
+		if cookieText != "" {
+			cookies = func() string { return cookieText }
+		}
+		y := NewYtDlp(func() string { return bin }, nil, cookies, nil, nil)
+		if _, err := y.ResolveStream(context.Background(), "vid1"); err != nil {
+			t.Fatalf("解析失败: %v", err)
+		}
+		args, err := os.ReadFile(filepath.Join(dir, "args.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(args)
+	}
+
+	if got := run(""); !strings.Contains(got, "player_client=visionos") {
+		t.Fatalf("没 cookie 时快车道应还是 visionos:\n%s", got)
+	}
+	got := run("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tLOGIN_INFO\tv\n")
+	if !strings.Contains(got, "player_client=tv_samsung,web_safari") {
+		t.Fatalf("配了 cookie 时快车道要换成 tv_samsung,web_safari:\n%s", got)
+	}
+	if strings.Contains(got, "player_client=visionos") {
+		t.Fatalf("配了 cookie 还去问 visionos（会被 yt-dlp 摘掉、白跑一趟）:\n%s", got)
+	}
+}
+
 func TestResolveStreamPicksManifest(t *testing.T) {
 	path := writeFakeScript(t, fakeStreamYtDlp)
 	dlp := NewYtDlp(func() string { return path }, func() string { return "" },

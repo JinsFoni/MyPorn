@@ -97,6 +97,19 @@ func (f streamFormat) size() int64 {
 // 不可见，所以拿不到清单时退回默认客户端集合再问一次（见 worthDefaultClients）。
 const fastPlayerClient = "visionos"
 
+// authedFastClients 是「配了 cookies」时的快车道。
+//
+// 为什么不能继续用 visionos：yt-dlp 一旦拿到登录态，会把它认为「不支持 cookie」的客户端
+// 整个摘掉（实测原话 `WARNING: Skipping client "visionos" since it does not support cookies`），
+// 于是快车道只剩几张 storyboard 图（`Only images are available for download`），白跑一趟
+// 再退回默认集合。而且默认集合（authed：web_embedded/tv_samsung/web）给的 HLS 清单最高只有
+// 1080p，4K 只在 AV1 直链里——见 httpapi.ytQualities 里那段注释。
+//
+// 实测（3BaMT8c93lA，2026-11-03）：tv_samsung,web_safari 一次 6.24 s，拿到 2160 的 AV1
+// 直链（itag 401）+ 18 条 m3u8；web_embedded,tv_samsung,web 是 5.63 s 同样结果。
+// 换成这个组合后省掉「先白跑 visionos 再退默认」的那一趟。
+const authedFastClients = "tv_samsung,web_safari"
+
 // ResolveStream 解析一条视频的 HLS master 地址。
 //
 // 特意不带 -f：这里要的是清单，不是某一档格式；带上格式串反而会让 yt-dlp
@@ -106,7 +119,11 @@ func (y *YtDlp) ResolveStream(ctx context.Context, videoID string) (StreamInfo, 
 	if bin == "" {
 		return StreamInfo{}, social.StaleParser("没有找到 yt-dlp：去设置 → YouTube 里填路径，或先装一个（版本越新越好）")
 	}
-	info, stderr, err := y.resolveStreamWith(ctx, bin, videoID, fastPlayerClient)
+	fast := fastPlayerClient
+	if strings.TrimSpace(y.cookieText()) != "" {
+		fast = authedFastClients
+	}
+	info, stderr, err := y.resolveStreamWith(ctx, bin, videoID, fast)
 	if err == nil && info.MasterURL != "" {
 		return info.finish(videoID), nil
 	}

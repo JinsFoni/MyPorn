@@ -428,6 +428,12 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
     + `Manager.Drop(sess.ID)`（剩下的分片立刻 410），hls.js 当场致命退出 → 弹「站内播放失败」→ 用户点重试重新解析，
     这一步才会把真正的原因（签名过期 / `LOGIN_REQUIRED` 人机验证）报出来。`proxyMedia` 同时把上游的 4xx 正文捞一句进日志
     （`上游拒绝取流  platform=youtube status=403 host=… body=…`），不再只留一个状态码。
+  - **画质阶梯 = HLS 清单 ∪ AV1 直链**（2026-11-03 修）：配了 cookies 之后 yt-dlp 换用带登录态的
+    客户端（`web_embedded`/`tv_samsung`/`web`），它们给的 HLS 清单最高只有 1080p，2160/1440 只存在于
+    `protocol=https` 的 AV1 直链里。早先无 cookie 的 `visionos` 清单里带 2160 的 VP9 变体，所以
+    「只看清单」时 4K 是蒙对的；一配 cookie 清单掉到 1080，菜单里 4K 就消失了（「YouTube 不能播 4K 了」）。
+    `ytQualities` 现在按高度取并集，缺的档位标 `dash:true` 走 AV1 那条；`default` 取并集里的最高档
+    （不能只看清单，否则每次点开都静默降到 1080）。
   - **cookies 在三条解析路径上都要带**（2026-11-03 修）：只有下载那条路带过 cookie，`ResolveStream` /
     `ListChannel` / `VideoInfo` 都漏了——用户在设置里填好 cookies、播放照样被要求人机验证，因为那条
     `yt-dlp -j` 命令行里根本没有 `--cookies`。现在统一走 `YtDlp.addCookies`（临时文件 0600、用完即删），
