@@ -1191,3 +1191,29 @@ metadata 还没到的那几十毫秒按「铺满盒子」退化，`loadedmetadat
 
 **测试**：`TestResolveStreamPassesCookies`、`TestMapErrorRotatedCookies`（WARNING 要盖过那句含糊的 bot 报错）、
 `TestMapErrorIgnoresWarningNoise`（`nsig` warning 不能把原因判成「升级 yt-dlp」）。
+
+### 14.19 收尾：从无痕窗口的 F12 里拿那一行，播放恢复（2026-11-03）
+
+§14.18 的结论是「重新导一份、而且要无痕里导」——但**无痕窗口装不了扩展**（Chrome 不允许在无痕里
+装新扩展），所以真正的取法是 **F12 → Network → 任意 `youtube.com` 请求 → Request Headers 里 `cookie:` 那一整行**，
+粘进设置即可（`normalizeYtCookie` 会转成 Netscape）。`document.cookie` 拿不到这些——`SID` / `LOGIN_INFO`
+都是 HttpOnly。
+
+顺带确认了「读磁盘」这条路在这台机器两头都不通：`ls ~/Library/Application Support/Google/Chrome`
+直接 `Operation not permitted`（macOS 挡住别的 App 的数据目录），`yt-dlp --cookies-from-browser chrome`
+因此报 `could not find chrome cookies database`；而无痕窗口的 cookie 本来就只在内存里。
+
+**实测结果**（2026-11-03 01:30，粘入这段 30 条 cookie 之后）：
+
+| 检查 | 结果 |
+|---|---|
+| `PUT /api/settings` | 200，`hasCookies=true`、`cookiesBroken=false` |
+| `GET /api/yt/videos/4090/stream` | `default=1080`、`durationSec=81`（之前是 `blocked`） |
+| 播放（静音、真浏览器） | `20.82 → 26.82`（6 秒推进 6 秒）、`1920×1080`、`readyState=4`、`error=null` |
+| 分片 | 16 个 `/api/yt/seg/`，**0 个 ≥400**（之前同一个视频是 13.5 秒后 403） |
+| 之前全挂的四条 4084 / 4067 / 4069 / 4062 | 全部 `default=1080`，`87 / 266 / 110 / 100` 秒 |
+| `grep "no longer valid\|上游拒绝取流" run.log` | 0 条 |
+
+所以 §14.17/§14.18 里那两件事（出口 IP 被盯上、cookies 被轮换）现在都不再挡路：**登录态一到，
+1080p 直接给**。唯一要守的纪律是：导出之后**关掉那个无痕窗口**，否则 `__Secure-3PSIDTS` 继续轮换，
+这份副本迟早再被判死一次（那时报的就是「这份 cookies.txt 已经失效…」，照同样姿势重导即可）。
