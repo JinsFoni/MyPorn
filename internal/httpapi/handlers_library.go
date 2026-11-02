@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -150,12 +152,17 @@ func libraryVideoDTO(it *store.LibraryVideo) map[string]any {
 // 为什么放在播放页上（而不是只留媒体库页那张卡）：用户是在「看」的时候发现「这部片占空间/
 // 下错版本了」，让他回媒体库再找一遍是多余的一跳。
 //
-// 三个必须做的事：
+// 四个必须做的事：
 //  1. 路径必须落在库根之内才删（和 /file、/art 同一道闸门，见 insideRoot）——记录被写脏、
 //     或者库根被人改小之后，这条接口绝不能变成「按库里的字符串随便删本机文件」。
 //  2. 先删文件、后删记录：文件删不掉（被播放器占着、权限不够）就**留着记录**，
 //     否则媒体库里会剩一条指着空气的记录（卡片上那条「文件已不在磁盘上」就是这么来的）。
-//  3. 顺手把空目录收掉：Emby 那种「一片一个文件夹」的结构，删完片不留一个空壳文件夹。
+//  3. **整个文件夹端掉**，不是只删记录里那 5 个路径（2026-11-03 用户要求「目录和元数据都要删掉」）：
+//     Emby 那种「一片一个文件夹」的结构，下载失败留下的半截文件、字幕、`thumb-sheet.jpg`
+//     之类都不在记录里，只按记录删就剩一个装着垃圾的壳。端之前先问一句「这里面还有别人的
+//     东西吗」（CountLibraryFilesUnder），有就退回逐个删，绝不碰别人的片。
+//  4. 这条片派生出来的缓存一起清：合流成品（`data/mux/<id>-*.mp4`，4K 一档 500 MB 起步）
+//     和下载工作目录（`data/tmp/dl-<id>-<lib>`）。不清的话盘上会留一堆再也没人读的大文件。
 func (s *Server) handleDeleteLibraryVideo(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -210,7 +217,12 @@ func (s *Server) handleDeleteLibraryVideo(w http.ResponseWriter, r *http.Request
 				removed = append(removed, p)
 			}
 		}
+		// 剩下的散件（半截下载、字幕、临时图）连同文件夹一起端掉
+		if extra := s.purgeVideoDir(root, videoPath); len(extra) > 0 {
+			removed = append(removed, extra...)
+		}
 		pruneEmptyDirs(root, filepath.Dir(videoPath))
+		s.clearVideoDerived(lf.VideoID, lf.LibraryID)
 		if delErr := s.st.DeleteLibraryFile(lf.VideoID, lf.LibraryID); delErr != nil {
 			s.log.Warn("删库记录失败", "video", lf.VideoID, "library", lf.LibraryID, "err", delErr)
 		}
@@ -220,6 +232,65 @@ func (s *Server) handleDeleteLibraryVideo(w http.ResponseWriter, r *http.Request
 		"removed": removed,
 		"kept":    kept,
 	})
+}
+
+// purgeVideoDir 把这条片自己的那个文件夹整个删掉，返回删掉的文件清单。
+//
+// 三条硬性前提，任何一条不满足就退回「只删记录里那几个路径」：
+//   - 文件夹在库根之内、且不是库根本身（有人的库是「根目录直接堆片」，那种情况清空文件夹
+//     等于清空整个库）；
+//   - 文件夹里没有别的 library_files 记录（`CountLibraryFilesUnder`）——rel_dir 被写脏成
+//     两条片共用一个目录时，端文件夹就是替别人删片；
+//   - 文件夹真是这条片的目录（`filepath.Dir(videoPath)`），不是别的什么路径。
+func (s *Server) purgeVideoDir(root, videoPath string) []string {
+	dir := filepath.Dir(filepath.Clean(videoPath))
+	if dir == filepath.Clean(root) || !insideRoot(root, dir) {
+		return nil
+	}
+	if n, err := s.st.CountLibraryFilesUnder(dir, filepath.Clean(videoPath)); err != nil || n > 0 {
+		if err != nil {
+			s.log.Warn("查同目录其它记录失败，退回逐个删", "dir", dir, "err", err)
+		}
+		return nil
+	}
+	// 先把要删的文件名列出来（删除之后就数不出来了），响应里要能看见究竟删了什么
+	var entries []string
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			entries = append(entries, p)
+		}
+		return nil
+	})
+	if err := os.RemoveAll(dir); err != nil {
+		s.log.Warn("删除影片目录失败", "dir", dir, "err", err)
+		return nil
+	}
+	return entries
+}
+
+// clearVideoDerived 清掉这条片派生出来的大文件：合流的成品与下载工作目录。
+//
+// 合流缓存 `data/mux/<videoId>-<variant>.mp4` 是按「看的时候临时合一条 mp4」攒下来的，
+// 实测 4K 一档 500 MB 起步（本机 mux 目录一度 512 MB / 13 个文件）；片子都删了它还留着，
+// 就是纯粹的占空间。工作目录 `data/tmp/dl-<videoId>-<lib>` 是下载中途的暂存，失败的任务会留下它。
+func (s *Server) clearVideoDerived(videoID, libraryID int64) {
+	if s.cfg != nil && s.cfg.DataDir != "" {
+		work := filepath.Join(s.cfg.DataDir, "tmp", fmt.Sprintf("dl-%d-%d", videoID, libraryID))
+		if err := os.RemoveAll(work); err != nil {
+			s.log.Warn("清理下载工作目录失败", "dir", work, "err", err)
+		}
+	}
+	if s.mux != nil {
+		prefix := fmt.Sprintf("%d-", videoID)
+		for _, key := range s.mux.KeysWithPrefix(prefix) {
+			if p := s.mux.Path(key); p != "" {
+				if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+					s.log.Warn("清理合流缓存失败", "key", key, "err", err)
+				}
+			}
+			s.mux.Clear(key)
+		}
+	}
 }
 
 // insideRoot 判断一个绝对路径是否落在库根之内（含根自身）。

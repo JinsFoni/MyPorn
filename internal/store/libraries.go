@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/JinsFoni/MyPorn/internal/model"
@@ -180,6 +182,28 @@ func (s *Store) ListLibraryFilesByVideo(videoID int64) ([]*model.LibraryFile, er
 func (s *Store) DeleteLibraryFile(videoID, libraryID int64) error {
 	_, err := s.db.Exec(`DELETE FROM library_files WHERE video_id = ? AND library_id = ?`, videoID, libraryID)
 	return err
+}
+
+// CountLibraryFilesUnder 数一数还有几条记录的文件落在 dir 之下（不含 dir 自身那条）。
+//
+// 播放页那颗「删除」现在是**把这部片的整个文件夹端掉**（Emby 那种一片一个文件夹的结构），
+// 而不是只删记录里那几个路径：下载失败留下的半截文件、字幕、临时 `.thumb.src` 都在同一个
+// 文件夹里，只按记录删就会剩一个装着垃圾的壳。端文件夹之前必须问一句「这里面还有别人的东西吗」，
+// 否则一个改坏了的 rel_dir（比如两条片都被记成同一个目录）就会连别人的片一起删掉。
+func (s *Store) CountLibraryFilesUnder(dir, excludePath string) (int, error) {
+	dir = strings.TrimSuffix(dir, string(filepath.Separator))
+	if dir == "" {
+		return 0, nil
+	}
+	prefix := dir + string(filepath.Separator)
+	// 用 instr 而不是 substr(…, 1, n)：substr 的第三个参数是**字符**数，len() 数的是字节，
+	// 路径里一带中文（「测试视频」）就错位、一行都匹配不上——实测这个 bug 直接让「同目录还有
+	// 别人的片」这条守卫失效，别人的片跟着被删掉（TestDeleteLibraryVideoKeepsSharedFolder）。
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM library_files
+		WHERE video_path <> ? AND instr(video_path, ?) = 1`,
+		excludePath, prefix).Scan(&n)
+	return n, err
 }
 
 // LibraryUsage 汇总某个库已落盘的文件数与字节数。

@@ -1184,23 +1184,43 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
 两个库里不该有两个角度。和 `/api/yt/videos/{id}/rotate`（`yt_videos.rotate_deg`）是同一套做法——
 两条表是两条链路（YouTube 墙 vs 关注流/媒体库），谁也没法引用谁。
 
-### E4. `DELETE /api/library/videos/{id}` —— 把这部片从本地库删掉（磁盘文件一起删）
+### E4. `DELETE /api/library/videos/{id}` —— 把这部片从本地库删掉（**整个文件夹 + 元数据**一起删）
 
 ```
 → 200 {"ok": true,
-       "removed": ["/…/主库/xHamster/Hot Pearl/…/xxx.mp4", "…/xxx.nfo", "…/poster.jpg", …],
+       "removed": ["/…/主库/xHamster/Hot Pearl/…/xxx.mp4", "…/xxx.nfo", "…/poster.jpg",
+                   "…/xxx.zh.srt", "…/xxx.mp4.part", …],
        "kept": []}
 ```
 
 - **磁盘文件真删**，不是只删索引（这一页叫「删除」，不是「移除记录」；下载页的「移除」才是只删任务）。
-  边角文件（`nfo` / `poster` / `thumb` / `fanart` / `strm`）一起走，空目录一路收回到库根。
+- **端掉的是这一部片的整个文件夹**（2026-11-03 用户要求「目录和元数据都要删掉」），不是只删
+  `library_files` 记录里那 5 个路径：下载失败留下的 `*.part`、字幕、`thumb-sheet.jpg`、临时 `.thumb.src`
+  都不在记录里，只按记录删就会剩一个装着垃圾的壳。`removed` 里如实列出删掉的文件。
+- 三条前提，任一条不满足就退回「只删记录里那几个路径」：文件夹在库根之内、文件夹**不是库根本身**
+  （有的库是根目录直接堆片，清空目录等于清空整个库）、文件夹里**没有别的 `library_files` 记录**
+  （`CountLibraryFilesUnder`；`rel_dir` 被写脏成两条片共用一个目录时，端文件夹就是替别人删片）。
+  后两条有测试：`TestDeleteLibraryVideoKeepsSharedFolder`、`TestDeleteLibraryVideoKeepsRoot`。
+  > 这个守卫的第一版是 `substr(video_path, 1, len(prefix))`，`substr` 数**字符**、`len()` 数**字节**，
+  > 路径里一带中文（「测试频道」）就一行也匹配不上、守卫等于没有——`TestDeleteLibraryVideoKeepsSharedFolder`
+  > 当场把别人的片删掉了才暴露，改成分字符的 `instr(video_path, prefix) = 1`。
+- 这条片派生的大文件一起清（`clearVideoDerived`）：合流成品 `data/mux/<videoId>-<variant>.mp4`
+  （实测 4K 一档 500 MB 起步，本机 mux 目录一度 512 MB / 13 个文件）和下载工作目录
+  `data/tmp/dl-<videoId>-<lib>`（下载中途失败会留下它）。
 - **先删文件、后删记录**：文件删不掉（播放器占着、权限不够）就留着记录并写进 `kept[].reason`
   （`ok` 变 `false`），否则媒体库里会剩一条指着空气的记录。
 - 路径必须落在库根之内才删（`insideRoot`，和 `/file`、`/art` 同一道闸门）：`kept[].reason` 会是
-  「文件不在库目录内」。库里的字符串**永远**不能直接拿去 `os.Remove`。
+  「文件不在库目录内」。库里的字符串**永远**不能直接拿去 `os.Remove` / `RemoveAll`。
 - 影片本身（`videos` 行）留着：播放页删完要能退回平台在线播放；已经没本地文件时再删 → 404。
 - 前端入口是播放页标题行那颗垃圾桶（本地已有的片子才有，见 ARCHITECTURE §7.6 媒体库行），
-  点之前 `window.confirm` 问一句「磁盘上的文件会一起删掉」。
+  点之前 `window.confirm` 问一句「本地库里它的整个文件夹会一起删掉（视频、nfo、海报、剧照）」。
+
+实测（2026-11-03，本机 :18081，用一条现下的 xHamster 片 448 做「装了垃圾再删」）：
+文件夹里先塞进 `*.zh.srt` / `*.mp4.part` / `thumb-sheet.jpg`，另造 `data/mux/448-1080p.av1.mp4` 与
+`data/tmp/dl-448-1/`，再 `DELETE` → `removed` 列全 8 个文件，文件夹当场没了、
+`data/mux/448-*` 与 `data/tmp/dl-448-1` 一起没了、`library_files` 行归零、媒体库从 9 条回到 8 条。
+UI 一遍（真机 1440×900，`window.confirm` 打桩记下文案再点掉）：确认框文案即上面那句，
+删完标题行那颗垃圾桶换成「下载到本地库」、播放器退回平台在线流。
 
 ### E2. `GET /api/videos/{id}/art?libraryId=1&k=thumb` —— 本地海报 / 剧照
 

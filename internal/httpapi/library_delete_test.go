@@ -107,3 +107,117 @@ func TestDeleteLibraryVideoRefusesOutsideRoot(t *testing.T) {
 		t.Errorf("删不掉时要留着记录，否则媒体库里剩一条指着空气的卡：%v / %d 条", err, len(files))
 	}
 }
+
+// 「删除」要连文件夹一起端掉：下载失败留下的半截文件、字幕、临时图都不在 library_files
+// 记录里，只按记录删就会剩一个装着垃圾的壳（2026-11-03 用户要求「目录和元数据都要删掉」）。
+func TestDeleteLibraryVideoPurgesWholeFolder(t *testing.T) {
+	fx := newLibraryServer(t)
+	dir := filepath.Dir(fx.mp4)
+	// 记录里没有、但实际躺在同一个文件夹里的东西
+	strays := []string{
+		filepath.Join(dir, "测试视频.zh.srt"),
+		filepath.Join(dir, "测试视频.mp4.part"),
+		filepath.Join(dir, ".thumb.src"),
+		filepath.Join(dir, "thumb-sheet.jpg"),
+	}
+	for _, p := range strays {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	code, res := deleteLibraryVideo(t, fx.srv, itoa(fx.videoID))
+	if code != http.StatusOK || !res.OK {
+		t.Fatalf("应 200 + ok，得到 %d ok=%v kept=%+v", code, res.OK, res.Kept)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("影片文件夹应整个消失：%v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range res.Removed {
+		got[p] = true
+	}
+	for _, p := range append(strays, fx.mp4) {
+		if !got[p] {
+			t.Errorf("removed 里应列出 %s", p)
+		}
+	}
+}
+
+// 两条片被记成同一个目录（rel_dir 写脏）时，端文件夹就是替别人删片——必须退回只删自己那份。
+func TestDeleteLibraryVideoKeepsSharedFolder(t *testing.T) {
+	fx := newLibraryServer(t)
+	dir := filepath.Dir(fx.mp4)
+	libraries, err := fx.st.ListLibraries()
+	if err != nil || len(libraries) == 0 {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "另一部.mp4")
+	if err := os.WriteFile(other, []byte("别人的片"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	vid, _, err := fx.st.UpsertVideo(&model.Video{
+		Platform: "xhamster", PlatformVideoID: "shared-1", Title: "共用一个目录", URL: "https://example.invalid/v",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.st.SaveLibraryFile(&model.LibraryFile{
+		VideoID: vid, LibraryID: libraries[0].ID, RelDir: "x", VideoName: "另一部.mp4",
+		VideoPath: other, SizeBytes: 12,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, res := deleteLibraryVideo(t, fx.srv, itoa(fx.videoID))
+	if code != http.StatusOK || !res.OK {
+		t.Fatalf("应 200 + ok，得到 %d ok=%v", code, res.OK)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("同目录里别人的片被删了：%v", err)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("同目录还有人时不该端文件夹：%v", err)
+	}
+}
+
+// 有的库是「根目录直接堆片」（没有一片一个文件夹），这时候清空目录等于清空整个库。
+func TestDeleteLibraryVideoKeepsRoot(t *testing.T) {
+	fx := newLibraryServer(t)
+	libraries, err := fx.st.ListLibraries()
+	if err != nil || len(libraries) == 0 {
+		t.Fatal(err)
+	}
+	flat := filepath.Join(fx.libRoot, "平铺的片.mp4")
+	sibling := filepath.Join(fx.libRoot, "同库另一部.mp4")
+	for _, p := range []string{flat, sibling} {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	vid, _, err := fx.st.UpsertVideo(&model.Video{
+		Platform: "xhamster", PlatformVideoID: "flat-1", Title: "平铺", URL: "https://example.invalid/v",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.st.SaveLibraryFile(&model.LibraryFile{
+		VideoID: vid, LibraryID: libraries[0].ID, RelDir: "", VideoName: "平铺的片.mp4",
+		VideoPath: flat, SizeBytes: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, res := deleteLibraryVideo(t, fx.srv, itoa(vid)); code != http.StatusOK || !res.OK {
+		t.Fatalf("应 200 + ok，得到 %d ok=%v", code, res.OK)
+	}
+	if _, err := os.Stat(flat); !os.IsNotExist(err) {
+		t.Errorf("这条片自己该被删：%v", err)
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Errorf("库根直接被端了：%v", err)
+	}
+	if _, err := os.Stat(fx.libRoot); err != nil {
+		t.Errorf("库根不该消失：%v", err)
+	}
+}

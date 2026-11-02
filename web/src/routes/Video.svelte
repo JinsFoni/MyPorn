@@ -243,14 +243,23 @@
   }
 
   /**
-   * 删掉本地文件（磁盘上的文件一起删，不是只删索引）。
+   * 删掉本地文件：**整个文件夹端掉**（视频 + nfo / 海报 / 剧照 + 下载失败留下的散件），
+   * 不是只删索引、也不是只删记录里那几个路径（服务端见 handleDeleteLibraryVideo）。
    * 删完重新取一遍详情与片源：这部片就从「本地播放」退回「平台在线播放」，
    * 标题行那颗键也随之从「删除」变回「下载」。
    */
   async function removeLocal(): Promise<void> {
     if (video === null || removing) return;
-    const where = video.localLibraryIds.length > 1 ? `这 ${String(video.localLibraryIds.length)} 个库里的文件` : '磁盘上的文件';
-    if (!window.confirm(`删除《${video.title}》的本地文件？\n${where}会一起删掉，删了找不回来（Emby 那边也会消失）。`)) return;
+    const where =
+      video.localLibraryIds.length > 1
+        ? `这 ${String(video.localLibraryIds.length)} 个库里的文件夹`
+        : '本地库里它的整个文件夹';
+    if (
+      !window.confirm(
+        `删除《${video.title}》？\n${where}会一起删掉（视频、nfo、海报、剧照），删了找不回来（Emby 那边也会消失）。`,
+      )
+    )
+      return;
     removing = true;
     try {
       const res = await api.deleteLibraryVideo(video.id);
@@ -259,7 +268,7 @@
         live.toast(`删除失败：${why}`, 'error');
         return;
       }
-      live.toast('本地文件已删除', 'success');
+      live.toast('已删除：文件夹和元数据一起清掉了', 'success');
       if (res.kept.length > 0) live.toast(`有 ${String(res.kept.length)} 个文件没删掉：${res.kept[0].reason}`, 'error');
       await loadVideo();
       await loadPlayback();
@@ -753,13 +762,13 @@
                 </svg>
               </button>
 
-              <!-- 删除：磁盘上的文件一起删（会先问一句），删完这部片退回「在线播放」 -->
+              <!-- 删除：整个文件夹一起删（视频 + nfo/海报/剧照，会先问一句），删完这部片退回「在线播放」 -->
               <button
                 type="button"
                 class="icon-act"
                 data-danger=""
-                title="删除本地文件"
-                aria-label="删除本地文件"
+                title="删除这部片的本地文件夹（连 nfo、海报、剧照一起）"
+                aria-label="删除本地文件和元数据"
                 onclick={() => void removeLocal()}
                 disabled={removing}
               >
