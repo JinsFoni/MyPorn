@@ -204,10 +204,11 @@ func (a *Adapter) ParsePerformerURL(raw string) (string, error) {
 // **不要改成 `/full-length/newest`**（2026-11-04 改过又撤了，证据留在这儿）。
 // 起因是 `hot-pearl` 的 `/newest` 第 1 页混着 8 条 60–163s 的片花，看着像「`full-length` 才是完整版」。
 // 把两边整份列表拉下来对照才发现它不是过滤器，而是个更小的子集：
-// 她 `/newest` 是 12 页 545 条、`/full-length/newest` 只有 5 页 214 条；拿最近 6 页（276 条）去比，
-// **188 条不在 full-length 里，其中 146 条 ≥360s**——包括 1126s 的「Hot Pearl & Lina Shisuta Share BBC」
-// 和 3708s 的「21 SEXTURY … 1 HOUR of DPs」。抽那条 1126s（xh2grDz）实测照样解出 2160p 直链，
-// 既没付费墙也没截断，就是普通正片。也就是说换成 `full-length` 会静默丢掉三分之一正片。
+// 她 `/newest` 是 12 页 545 条（正好等于页面自称的 `videoCount`）、`/full-length/newest` 只有 5 页 200 条；
+// 545 条里 **345 条不在 full-length**——360–600s 145 条、600–1200s 139 条、≥1200s 10 条、
+// 180–360s 26 条、<180s 25 条。不是「只削短片」：抽被剔掉的 1126s 那条（xh2grDz）把 HLS 清单数了一遍，
+// **281 段、合计 1125.9 秒、带 `#EXT-X-ENDLIST`**，是完整的 18.8 分钟正片、没有付费墙。
+// 也就是说换成 `full-length` 会静默丢掉三分之二正片。
 // 片花改在入库时按 `minVideoDuration` 挡掉，见 ListPerformerVideos。
 func performerPath(slug string, page int) string {
 	if page <= 1 {
