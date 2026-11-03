@@ -171,6 +171,34 @@ func TestGetProfileEmpty(t *testing.T) {
 	}
 }
 
+// 时间线解析不出帖子（账号不存在 / 结构变了）必须报错，不能交一个「成功但 0 条」的空页：
+// 那条静默路径会让动态页永远显示「同步成功」，用户看到的就是「怎么一直不更新」。
+func TestListPostsEmpty(t *testing.T) {
+	noResults := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(emptyFixture))
+	})
+	_, err := noResults.ListPosts(context.Background(), "qweqweqwe123zzz", "")
+	if err == nil {
+		t.Fatal("hasResults:false 时应报错")
+	}
+	if k := social.KindOf(err); k != social.KindNotFound {
+		t.Errorf("错误种类 = %s，期望 not_found（%v）", k, err)
+	}
+
+	// 有结果但一条帖子都解析不出来：是解析器坏了，不能当「没有新帖」。
+	emptyEntries := `<html><body><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"contextProvider":{"hasResults":true},"timeline":{"entries":[]}}}}</script></body></html>`
+	noPosts := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(emptyEntries))
+	})
+	_, err = noPosts.ListPosts(context.Background(), "mini", "")
+	if err == nil {
+		t.Fatal("有结果但 0 条时应报错")
+	}
+	if k := social.KindOf(err); k != social.KindStaleParser {
+		t.Errorf("错误种类 = %s，期望 stale_parser（%v）", k, err)
+	}
+}
+
 // 429 要带着 reset 时间回来，并且之后直接冷却、不再打网络。
 // 窗口已经翻篇、但响应头里还留着 remaining=0 的那种响应（CDN 缓存的旧头）：
 // 不该判死，照常解析。

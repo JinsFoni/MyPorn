@@ -295,6 +295,15 @@ func (a *Adapter) ListPosts(ctx context.Context, handle, cursor string) (*social
 			page.Posts = append(page.Posts, p)
 		}
 	}
+	// 一页解析不出任何帖子时不能当「同步成功、没有新帖」交差：那会把「账号不存在/设了保护」
+	// 和「X 又改了页面结构」一起咽下去，界面只显示「同步成功」但墙上一年没动静——2026-11-03
+	// 排查「动态里好像没有抓取最新的推特照片」时就差点被这条静默路径骗过去。
+	if len(page.Posts) == 0 {
+		if !nd.Props.PageProps.ContextProvider.HasResults {
+			return nil, social.NotFound(fmt.Sprintf("X 上没有 @%s，或对方设了保护", handle))
+		}
+		return nil, social.StaleParser(fmt.Sprintf("@%s 的时间线有结果但解析不出帖子（页面结构可能又变了）", handle))
+	}
 	return page, nil
 }
 

@@ -436,6 +436,32 @@ curl -s -H 'User-Agent: Mozilla/5.0 …Chrome/131…' \
 # 看配额：加 -D - 打头，读 x-rate-limit-remaining / -reset
 ```
 
+### 15.9 「动态一直不更新」怎么分清是抓取坏了还是上游没新帖（2026-11-03）
+
+用户报「动态里好像没有抓取最新的推特照片」。量下来的结论是**抓取没坏，是这条公开路径上没有更新的帖子**，
+顺手补了一条静默失败路径。可复现的判据：
+
+```
+GET …/screen-name/mysaaat        → 200, 122602 B, entries=32, 全部 type=photo
+                                   最早 2024-09-24，最新 2025-07-04T16:30:07Z
+换 UA(curl/8.7.1) + Cache-Control: no-cache + Accept-Language: ja-JP → 同一份 122602 B（不是 CDN 缓存差异）
+GET …/screen-name/NASA (对照)     → 200, entries=20, 最新 2026-11-02T22:30:01Z（当天）→ 端点本身是好的
+?showReplies=true                → 200 但无 __NEXT_DATA__（错误壳，和 §15.2 一致）
+```
+
+再拿现场这 32 条和库里对照：**32 条全在库里**（`social_posts` 共 33 条，多出来的一条
+`1856304913774493929` 是上游已经删掉的旧帖）。也就是说 `internal/jobs/social.go` 那条
+「第 1 页 → 全是已入库 → 当作没有新帖收工」的路径是对的：这一页确实没有新东西。
+
+**顺带修掉的静默路径**：`ListPosts` 以前解析出 0 条也返回成功空页，于是「账号不存在/设了保护」
+和「X 又改了页面结构」都会被记成「同步成功」，界面上就是「上次同步：刚刚，但墙上一年没动」。
+现在 0 条会分流成 `not_found`（`hasResults:false`）或 `stale_parser`（有结果但解析不出帖子），
+写进 `social_accounts.last_error`，见 `TestListPostsEmpty`。
+
+如果哪天这条公开时间线**真的**开始落后于登录后看到的页面（敏感媒体/受保护帖不发给匿名访客），
+唯一的解法是把 X 适配器改成带 Cookie 的登录抓取（现在 `xcom` 一行 cookie 都没用，设置里也没有
+`x_cookie`），代价是要跟 X 的 GraphQL `queryId` 走，隔一阵就会失效一次。
+
 
 ---
 
@@ -463,7 +489,7 @@ curl -s -H 'User-Agent: Mozilla/5.0 …Chrome/131…' \
 | 文件 | 覆盖 |
 |---|---|
 | `internal/store/social_test.go` | 账号 upsert 摘要（不覆盖空字段）、帖子去重、照片墙顺序与游标、URL 反查艺人 + 按艺人过滤、删号级联 |
-| `internal/social/xcom/xcom_test.go` | 正常时间线、无 `__NEXT_DATA__`、`hasResults:false`、真限流、**过期 `remaining:0` 头** |
+| `internal/social/xcom/xcom_test.go` | 正常时间线、无 `__NEXT_DATA__`、`hasResults:false`、**0 条帖子必须报错（`not_found` / `stale_parser`）**、真限流、**过期 `remaining:0` 头** |
 | `internal/social/igram/igram_test.go` | 首屏/第二页解析、carousel 拆图、Cookie 解析、无 Cookie → `needs_auth`、401 / 429 |
 | `internal/imgcache/evict_test.go` | 超限时从最旧删到 90%、未设上限/未超限时不动、空目录 |
 | `internal/httpapi/social_err_test.go` | 五种 `social.Error` → 状态码/错误码映射、`rate_limited` 带 `details.resetAt`、超时不漏 Go 原始错误 |
