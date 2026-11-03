@@ -194,23 +194,25 @@ func (a *Adapter) ParsePerformerURL(raw string) (string, error) {
 	return "", errors.New("链接里没有艺人标识（应形如 /pornstars/<slug>）")
 }
 
-// performerPath 返回艺人影片列表的路径（第 1 页与第 N 页）。
+// performerPath 返回艺人影片列表的路径（第 1 页与第 N 页）。两个参数都是踩出来的：
 //
-// **必须带 `/newest`**：不带时站点给的是默认序（`sort: "rated"`，按评分/默认排序），
-// 而增量同步是「遇到已入库影片即停」——第 1 页最上面躺着一堆几年前的老片，
-// 一撞上就停，新上传的片子永远发现不了。
+// **1）必须带 `/full-length`**（站点的「完整影片」分类）。不带时 `/newest` 是「该艺人所有新片」，
+// 会连 60–180 秒的付费预告一起抓：2026-11-04 实测 `hot-pearl` 的 `/newest` 第 1 页 46 条里
+// 有 8 条 <180s（60 / 67 / 70 / 112s，标题带 `- Trailer`、`Private com -` 这类），
+// 而 `/full-length/newest` 5 页 214 条最短 361s、一条预告都没有；`mysaaat` 这种每部都 ≥9min 的
+// 艺人，两个地址给出**完全相同**的 42 条 id——所以这个过滤只削短片，不会漏长片，页数还从 12 降到 5。
+// 注意 `full-length` 是站点的内容分类，不是我们算的时长门槛（riley-reid 那边最短 1274s、
+// hot-pearl 最短 361s，门槛是上传时人工标的）。竖版短视频另有 `/shorts` 页（hot-pearl 上 234 条），不要。
 //
-// 2026-10 实测（`mysaaat`，42 部）：默认页只会给出 38 条按评分排的
-// （`trendingVideoSectionComponent`），最新那 4 条单独挂在 `newestVideoSectionComponent` 里、我们根本没用；
-// 换 `/newest` 后是 42 条、`sort: "added"`、按 `created` 严格倒序，最新那条落在第一位。
-// 另一个坑：`/full-length/newest` 不是「完整视频」而是「长片」这个分类（riley-reid 上只剩 34 条、
-// 且第 2 页直接 404），别拿它当过滤器用；竖版短视频另有 `/shorts` 页，
-// 默认列表与 `/newest` 都是横版长片（实测缩略图 526x298、时长 2 分钟起）。
+// **2）必须带 `/newest`**：不带时站点给默认序（`sort: "rated"`），而增量同步是「遇到已入库影片即停」——
+// 第 1 页最上面躺着一堆几年前的老片，一撞上就停，新上传的永远发现不了。2026-10 实测（`mysaaat`）：
+// 默认页只有 38 条按评分排的，最新那 4 条单独挂在 `newestVideoSectionComponent` 里；
+// 换 `/newest` 后 42 条、`sort: "added"`、按 `created` 严格倒序，最新那条落在第一位。
 func performerPath(slug string, page int) string {
 	if page <= 1 {
-		return "/pornstars/" + url.PathEscape(slug) + "/newest"
+		return "/pornstars/" + url.PathEscape(slug) + "/full-length/newest"
 	}
-	return fmt.Sprintf("/pornstars/%s/newest/%d", url.PathEscape(slug), page)
+	return fmt.Sprintf("/pornstars/%s/full-length/newest/%d", url.PathEscape(slug), page)
 }
 
 // performerURLPath 是给人看/存下来的艺人主页地址（不带排序）。
@@ -236,14 +238,21 @@ func (a *Adapter) GetPerformer(ctx context.Context, performerID string) (*model.
 	return p, nil
 }
 
-// ListPerformerVideos 取一页影片：`/pornstars/<slug>/newest`，第 2 页起是 `/newest/<n>`，
-// 每页 46 条（`perPage` 字段也是 46），按发布时间倒序（为什么必须指定排序见 performerPath）。
+// ListPerformerVideos 取一页影片：`/pornstars/<slug>/full-length/newest`，第 2 页起是
+// `/full-length/newest/<n>`，每页 46 条（`perPage` 字段也是 46），按发布时间倒序。
+// 为什么必须是这个路径（完整影片 + 最新排序）见 performerPath。
 func (a *Adapter) ListPerformerVideos(ctx context.Context, performerID string, page int) (*platform.Page, error) {
 	if page < 1 {
 		page = 1
 	}
 	body, err := a.get(ctx, performerPath(performerID, page), nil)
 	if err != nil {
+		// `/full-length` 的页数比 `/newest` 少得多，站点对越界页是直接 404（riley-reid 的
+		// `/full-length/newest/2` 实测 404）。这不算抓取失败，当「没有下一页」收尾，
+		// 别让一次越界把整个艺人的同步标红。
+		if page > 1 && errors.Is(err, errNotFound) {
+			return &platform.Page{Page: page}, nil
+		}
 		return nil, err
 	}
 	iv, err := parseInitials(body)
@@ -267,7 +276,10 @@ func (a *Adapter) ListPerformerVideos(ctx context.Context, performerID string, p
 		out.TotalPages = pc.LastPageNumber
 		out.HasMore = page < pc.LastPageNumber
 	} else {
-		out.HasMore = len(out.Items) > 0
+		// 站点不给分页组件 = 就这一页（`riley-reid` 的 `/full-length/newest` 正是如此：
+		// 34 条、`paginationComponent: null`）。原先是 `len(items) > 0`，于是同步会去要第 2 页、
+		// 拿回 404，日志里留一条「分页抓取中断」。
+		out.HasMore = false
 	}
 	return out, nil
 }

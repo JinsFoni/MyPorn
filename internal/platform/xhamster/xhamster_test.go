@@ -180,3 +180,72 @@ func TestResolvePlaybackPageSkipsRedirect(t *testing.T) {
 		t.Fatalf("按 ID 解析的请求序列 = %v，期望先 /videos/xhW3Ivw 再被 301 到 slug", paths)
 	}
 }
+
+// `/full-length` 的页数比 `/newest` 少得多，站点对没有分页组件的列表只给一页
+// （2026-11-04 实测 riley-reid：34 条、`paginationComponent: null`，`/full-length/newest/2` 直接 404）。
+// 原来的 `HasMore = len(items) > 0` 会让同步接着要第 2 页、拿回 404、写一条「分页抓取中断」。
+func TestListPerformerVideosSinglePageWhenNoPagination(t *testing.T) {
+	// get() 把 <2048 字节的响应当成链路被掐（按限流处理），所以补点空白凑体积。
+	const listing = `<script>window.initials={"sort":"added",` +
+		`"trendingVideoSectionComponent":{"videoListProps":{"videoThumbProps":[` +
+		`{"id":31387800,"duration":2301,"title":"Unusual Hot Orgy","pageURL":"https://xhamster.com/videos/unusual-xhA"},` +
+		`{"id":31387799,"duration":1033,"title":"She Caught the Boss","pageURL":"https://xhamster.com/videos/boss-xhB"}` +
+		`]}}};</script>`
+	pad := strings.Repeat("<!-- "+strings.Repeat("x", 200)+" -->\n", 12)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/2") {
+			t.Errorf("不该请求第 2 页（没有分页组件就是只有一页），实际请求 %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, listing+pad)
+	}))
+	defer srv.Close()
+
+	a, err := New(srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.lim = rate.NewLimiter(rate.Inf, 1)
+	page, err := a.ListPerformerVideos(context.Background(), "riley-reid", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("第 1 页条数 = %d，期望 2", len(page.Items))
+	}
+	if page.TotalPages != 0 || page.HasMore {
+		t.Fatalf("没有分页组件时应只有一页，得到 TotalPages=%d HasMore=%v", page.TotalPages, page.HasMore)
+	}
+}
+
+// 越界页 404 当「到头了」，不要把整个艺人的同步标成失败。
+func TestListPerformerVideosNotFoundEndsPagination(t *testing.T) {
+	const listing = `<script>window.initials={"sort":"added",` +
+		`"paginationComponent":{"currentPageNumber":1,"lastPageNumber":2},` +
+		`"trendingVideoSectionComponent":{"videoListProps":{"videoThumbProps":[` +
+		`{"id":31387800,"duration":2301,"title":"Unusual Hot Orgy","pageURL":"https://xhamster.com/videos/unusual-xhA"}` +
+		`]}}};</script>`
+	pad := strings.Repeat("<!-- "+strings.Repeat("y", 200)+" -->\n", 12)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/full-length/newest/2") {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, listing+pad)
+	}))
+	defer srv.Close()
+
+	a, err := New(srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.lim = rate.NewLimiter(rate.Inf, 1)
+	page, err := a.ListPerformerVideos(context.Background(), "hot-pearl", 2)
+	if err != nil {
+		t.Fatalf("越界 404 不该报错: %v", err)
+	}
+	if len(page.Items) != 0 || page.HasMore {
+		t.Fatalf("404 页应为空且没有下一页，得到 %d 条 HasMore=%v", len(page.Items), page.HasMore)
+	}
+}
