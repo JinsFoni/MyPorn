@@ -203,13 +203,15 @@
 
       <!-- 窄屏时这层是 `display: contents`：名字栏和资料表仍然是页头栅格的两个直接子项，
            资料表才跨得了两列、掉到头像下面。`xl` 起它才变成真栅格，把名字栏和资料表并排，
-           并用 `items-start` 让两边的行起点贴在同一条上沿——于是名字/计数/身材/排名这四行
-           就跟资料表的前四行一行对一行。整层自己 `self-center`，头像的中线仍然落在资料表的中线上。 -->
+           用 `items-end` 让两边的**最后一行贴同一条下沿**（2026-11-04 用户要求「改成底部对齐」，
+           原来是 `items-start` 对齐上沿）。整层自己 `self-center`，头像的中线仍落在这组的中线上。 -->
       <div
-        class="contents xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] xl:items-start xl:gap-x-5 xl:self-center"
+        class="contents xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] xl:items-end xl:gap-x-5 xl:self-center"
       >
         <!-- 名字这一栏按资料表的行距来排：每行 20px（资料行是 14px/1.25rem 的一行，名字用
-             `leading-5` 压到同样 20px）+ `gap-y-2` 的 8px 行距，四行的总高 104px 跟四行资料表一样高。 -->
+             `leading-5` 压到同样 20px）+ `gap-y-2` 的 8px 行距，四行的总高 104px 跟四行资料表一样高。
+             行数一样多时两种对齐（上沿 / 下沿）看不出差别；行数不一样时现在是**下沿对齐**——
+             名字/计数/身材/排名这四行的最后一行跟资料表的最后一行贴在同一条线上。 -->
         <div class="grid min-w-0 gap-y-2">
           <div class="flex flex-wrap items-center gap-2">
             <!-- 名字 28px 但行高只有 20px：Roboto 的大写高 0.711em ≈ 19.9px，正好填满这一行，
