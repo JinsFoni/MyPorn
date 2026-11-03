@@ -37,7 +37,10 @@
              图标 16 + 间距 6 + 最长的「出身地」42 ≈ 64px，四个字的标签也放得下。 -->
         <div class="grid grid-cols-[5rem_minmax(0,1fr)] items-baseline gap-2">
           <dt class="text-ui text-dim"><ProfileIcon label={field.label} value={field.value} />{field.label}</dt>
-          <dd class="min-w-0 break-words text-ui text-fg">{field.value}</dd>
+          <!-- 值一行：2026-11-04 用户要求「资料表里的值限制一行」。长的（爱好、三围那种一长串）
+               折行会把整块资料撑高、把右边那一列挤歪，截断后再把完整值放进 `title`
+               （读屏读的仍是 DOM 里的全文，不受截断影响）。`min-w-0` 是 `truncate` 生效的前提。 -->
+          <dd class="min-w-0 truncate text-ui text-fg" title={field.value}>{field.value}</dd>
         </div>
       {/each}
     </dl>
