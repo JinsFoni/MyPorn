@@ -1,8 +1,12 @@
 <script lang="ts">
   /**
    * 媒体库的卡片：**和关注流 / B 站 / YouTube 那三条墙同一套模板**
-   * （`CoverArt` 封面 + `CardDuration` 右下时长 + `CardByline` 圆头像/一行标题/副行
-   * + `CardDownloadButton` 左下角悬停动作）。要改卡片长相就改那几个组件，别在这里单独调。
+   * （`CoverArt` 封面 + `CardDuration` 右下时长 + `CardByline` 圆头像/一行标题/副行）。
+   * 要改卡片长相就改那几个组件，别在这里单独调。
+   *
+   * 2026-11-04 用户要求「媒体库视频卡片的复制按钮去掉」：这一页**没有悬停动作按钮**了
+   * （`CardDownloadButton` 只在三条墙上用）。理由站得住：这一页的东西都已经在盘上，
+   * 复制路径是个极低频的小工具，却占着封面左下角、还得跟分辨率角标 / 缺失提示抢地方。
    *
    * 这张卡和三条墙的差别只有「它代表的是磁盘上的一个文件」：
    * - 圆头像和副行名字是**频道 / UP 主**（和三条墙同一位置放同一件事）：平台影片取第一位
@@ -10,20 +14,20 @@
    *   只有一个库时副行只写体积，多库时才在体积前带上库名。
    * - 封面优先用下载时落盘的 thumb.jpg（`localThumbUrl`），远端封面地址过期也照样有图；
    *   隐私模式下**必须**换回 /api/img 的小糊图——本地那张是按原尺寸发的，没有糊化那一层。
-   * - 封面左上角是 `2160p`（落盘时 probe 的尺寸）：三条墙不知道分辨率所以没有这一格，
+   * - 封面**左下角**是 `2160p`（落盘时 probe 的尺寸）：三条墙不知道分辨率所以没有这一格，
    *   而这一页的每一行都带着分辨率，是「值不值得留」的依据之一。
-   * - 左下角那颗按钮是**复制文件路径**（已经下到盘上了，再下一次没有意义），
-   *   用的还是 `CardDownloadButton`，只换图标。
-   * - 文件被挪走 / 删掉时整条压暗、盖一条砖红色的「文件已不在磁盘上」（和 YouTube 卡的
-   *   「直播」标同一个位置同一个做法），链接直接不渲染——点过去只会 404。
+   *   2026-11-04 用户要求「分辨率标识放在左下角，不要显示黑色背景」，从左上角搬到这里，
+   *   同时去掉 `bg-ink/70` 药丸底——改成和右下角时长完全一致的写法
+   *   （`text-meta` 500 + `tabular-nums` + 三层 `text-shadow`），同一行两端一个样。
+   * - 文件被挪走 / 删掉时整条压暗、**右上角**盖一条砖红色的「文件已不在磁盘上」，
+   *   链接直接不渲染——点过去只会 404。（原来在左下角，得给复制按钮让位；
+   *   复制按钮去掉后左下角归分辨率角标，提示挪到空出来的右上角，谁都不用挤。）
    */
   import CardByline from './CardByline.svelte';
-  import CardDownloadButton from './CardDownloadButton.svelte';
   import CardDuration from './CardDuration.svelte';
   import CoverArt from './CoverArt.svelte';
   import { formatBytes, formatDate, relativeTime } from '../lib/format';
   import { imageUrl } from '../lib/img';
-  import { live } from '../lib/live.svelte';
   import { privacy } from '../lib/privacy.svelte';
   import { router } from '../lib/router.svelte';
   import type { LibraryVideo } from '../lib/types';
@@ -65,21 +69,6 @@
       ? `${item.libraryName} · ${formatBytes(item.sizeBytes)}`
       : formatBytes(item.sizeBytes),
   );
-
-  let copied = $state(false);
-
-  async function copyPath(event: MouseEvent): Promise<void> {
-    event.preventDefault();
-    event.stopPropagation();
-    try {
-      await navigator.clipboard.writeText(item.videoPath);
-      copied = true;
-      window.setTimeout(() => (copied = false), 1600);
-      live.toast('路径已复制', 'success');
-    } catch {
-      live.toast('复制失败，请手动选择路径', 'error');
-    }
-  }
 </script>
 
 <article class="group relative min-w-0 [contain-intrinsic-size:auto_16rem] [content-visibility:auto]">
@@ -97,8 +86,9 @@
       </div>
 
       {#if quality}
+        <!-- 左下角、不带药丸底：写法抄 `CardDuration`（右下一模一样的字号/字重/三层阴影） -->
         <span
-          class="pointer-events-none absolute left-2 top-2 rounded bg-ink/70 px-1.5 py-0.5 text-[0.6875rem] font-medium tabular-nums text-fg"
+          class="pointer-events-none absolute bottom-2 left-2 text-meta font-medium tabular-nums text-fg [text-shadow:0_1px_5px_rgba(0,0,0,0.8),0_0_12px_rgba(0,0,0,0.7),0_0_3px_rgba(0,0,0,0.8)]"
         >
           {quality}
         </span>
@@ -107,9 +97,9 @@
       <CardDuration seconds={item.durationSec} />
 
       {#if item.missing}
-        <!-- 左下角让给「复制路径」按钮（`CardDownloadButton`，`left-2` 起 28px）：右移 40px -->
+        <!-- 左下角归分辨率角标、右下角归时长，警告放空出来的右上角 -->
         <span
-          class="absolute bottom-2 left-10 rounded bg-brick/90 px-1.5 py-0.5 text-[0.6875rem] font-medium text-fg"
+          class="absolute right-2 top-2 rounded bg-brick/90 px-1.5 py-0.5 text-[0.6875rem] font-medium text-fg"
         >
           文件已不在磁盘上
         </span>
@@ -126,11 +116,4 @@
       dateTitle={relativeTime(item.downloadedAt)}
     />
   </a>
-
-  <CardDownloadButton
-    label={`复制 ${item.fileName} 的路径`}
-    title={copied ? '已复制' : '复制文件路径'}
-    icon={copied ? 'check' : 'copy'}
-    onclick={(event) => void copyPath(event)}
-  />
 </article>
