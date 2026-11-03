@@ -3,6 +3,7 @@
   import type { Snippet } from 'svelte';
   import TopBar from './TopBar.svelte';
   import Toasts from './Toasts.svelte';
+  import ConfirmDialog from './ConfirmDialog.svelte';
   import { live } from '../lib/live.svelte';
   import { installScrollProbe } from '../lib/scroll';
   import { connectEvents } from '../lib/sse';
@@ -505,4 +506,5 @@
   </nav>
 
   <Toasts />
+  <ConfirmDialog />
 </div>

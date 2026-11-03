@@ -10,6 +10,7 @@
   import { formatBytes, formatCount, formatDate, formatDateTime, relativeFuture, relativeTime } from '../lib/format';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
+  import { confirmDialog } from '../lib/confirm.svelte';
   import { platformLabel } from '../lib/platform';
   import { navigate, router } from '../lib/router.svelte';
   import { ui } from '../lib/ui.svelte';
@@ -142,7 +143,12 @@
   }
 
   async function removeYt(channel: YtChannel): Promise<void> {
-    if (!window.confirm(`取消订阅「${channel.title}」？只删记录，已下载到本地库的视频不会动。`)) return;
+    const ok = await confirmDialog.ask({
+      title: `取消订阅「${channel.title}」？`,
+      body: '只删记录，已下载到本地库的视频不会动。',
+      confirmText: '取消订阅',
+    });
+    if (!ok) return;
     ytBusyId = channel.id;
     try {
       await api.ytDelete(channel.id);
@@ -237,12 +243,12 @@
   }
 
   async function removeBili(channel: BiliChannel): Promise<void> {
-    if (
-      !window.confirm(
-        `取消订阅「${channel.name}」？它的投稿会一起从 B 站墙上撤下（重新订阅就能恢复），已下载到本地库的文件不会动。`,
-      )
-    )
-      return;
+    const ok = await confirmDialog.ask({
+      title: `取消订阅「${channel.name}」？`,
+      body: '它的投稿会一起从 B 站墙上撤下（重新订阅就能恢复），已下载到本地库的文件不会动。',
+      confirmText: '取消订阅',
+    });
+    if (!ok) return;
     biliBusyId = channel.id;
     try {
       await api.unsubscribe(channel.subscriptionId);
@@ -353,7 +359,12 @@
   }
 
   async function removeMoment(account: MomentAccount): Promise<void> {
-    if (!window.confirm(`取消订阅 @${account.handle}？已存进本地库的照片不会删除。`)) return;
+    const ok = await confirmDialog.ask({
+      title: `取消订阅 @${account.handle}？`,
+      body: '已存进本地库的照片不会删除。',
+      confirmText: '取消订阅',
+    });
+    if (!ok) return;
     momentBusyId = account.id;
     try {
       await api.deleteMomentAccount(account.id);

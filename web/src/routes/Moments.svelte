@@ -18,6 +18,7 @@
   import { ApiError, api, messageFor } from '../lib/api';
   import { blurredImageUrl, imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
+  import { confirmDialog } from '../lib/confirm.svelte';
   import { patchQuery, router } from '../lib/router.svelte';
   import { ui } from '../lib/ui.svelte';
   import { formatDateTime } from '../lib/format';
@@ -220,9 +221,11 @@
    * 所以确认框里要写清楚「删的只是墙上这一张」，不然用户会以为硬盘上也清了。
    */
   async function removePhoto(photo: MomentPhoto): Promise<void> {
-    const ok = window.confirm(
-      '从照片墙删掉这张？\n以后同步也不会再抓回来。已经存进本地库的文件不会被删除。',
-    );
+    const ok = await confirmDialog.ask({
+      title: '从照片墙删掉这张？',
+      body: '以后同步也不会再抓回来。已经存进本地库的文件不会被删除。',
+      confirmText: '删除',
+    });
     if (!ok) return;
     try {
       await api.deleteMomentPhoto(photo.id);

@@ -2,6 +2,7 @@
   import { api, messageFor } from '../lib/api';
   import { formatBytes } from '../lib/format';
   import { live } from '../lib/live.svelte';
+  import { confirmDialog } from '../lib/confirm.svelte';
   import type { Library, PathValidation, UploadPolicy } from '../lib/types';
 
   let libraries = $state<Library[]>([]);
@@ -136,7 +137,12 @@
 
   async function remove(lib: Library): Promise<void> {
     if (busyId !== null) return;
-    if (!window.confirm(`删除本地库「${lib.name}」？\n只删索引，磁盘上的文件不会被删除。`)) return;
+    const ok = await confirmDialog.ask({
+      title: `删除本地库「${lib.name}」？`,
+      body: '只删索引，磁盘上的文件不会被删除。',
+      confirmText: '删除',
+    });
+    if (!ok) return;
     busyId = lib.id;
     try {
       await api.deleteLibrary(lib.id);

@@ -17,6 +17,7 @@
   } from '../lib/format';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
+  import { confirmDialog } from '../lib/confirm.svelte';
   import { platformLabel } from '../lib/platform';
   import { privacy } from '../lib/privacy.svelte';
   import {
@@ -254,12 +255,12 @@
       video.localLibraryIds.length > 1
         ? `这 ${String(video.localLibraryIds.length)} 个库里的文件夹`
         : '本地库里它的整个文件夹';
-    if (
-      !window.confirm(
-        `删除《${video.title}》？\n${where}会一起删掉（视频、nfo、海报、剧照），删了找不回来（Emby 那边也会消失）。`,
-      )
-    )
-      return;
+    const ok = await confirmDialog.ask({
+      title: `删除《${video.title}》？`,
+      body: `${where}会一起删掉（视频、nfo、海报、剧照），删了找不回来（Emby 那边也会消失）。`,
+      confirmText: '删除',
+    });
+    if (!ok) return;
     removing = true;
     try {
       const res = await api.deleteLibraryVideo(video.id);
