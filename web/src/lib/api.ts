@@ -493,15 +493,15 @@ export const api = {
   markMomentsSeen(): Promise<{ unseen: number }> {
     return request<{ unseen: number }>('/api/moments/seen', { method: 'POST' });
   },
-  saveMomentPhotos(photoIds: number[], libraryId?: number): Promise<{ jobId: number; count: number; libraryId: number }> {
-    return request<{ jobId: number; count: number; libraryId: number }>('/api/moments/photos/save', {
+  /**
+   * 从照片墙上批量删掉（服务端软删：同一张图以后同步也不会再插回来）。
+   * 照片是自动落盘的，所以墙上不再有「存进本地库」这个动作，多选只用来删。
+   */
+  deleteMomentPhotos(photoIds: number[]): Promise<{ deleted: number }> {
+    return request<{ deleted: number }>('/api/moments/photos/delete', {
       method: 'POST',
-      body: { photoIds, libraryId: libraryId ?? 0 },
+      body: { photoIds },
     });
-  },
-  /** 从照片墙上删掉一张（服务端软删，同一张图以后同步也不会再回来）。 */
-  deleteMomentPhoto(photoId: number): Promise<void> {
-    return request<void>(`/api/moments/photos/${id(photoId)}`, { method: 'DELETE' });
   },
   manageMoments(): Promise<MomentsManageResponse> {
     return request<MomentsManageResponse>('/api/manage/moments');

@@ -354,6 +354,11 @@ export interface SocialSettings {
   discoverMinutes: number;
   /** Instagram 是否已配 Cookie（Cookie 本身不回显） */
   hasInstagramCookie: boolean;
+  /**
+   * 图片库根目录：抓到的照片自动下到这里，按 `{名字}/{年}/{月}/` 分目录。
+   * 不是任何一个视频库的 rootPath——照片和影片分开归档。
+   */
+  photoRoot: string;
 }
 
 export interface Settings {
@@ -428,7 +433,13 @@ export interface SettingsPatch {
   downloadRateKb?: number;
   openlist?: { baseUrl?: string; root?: string; token?: string };
   /** instagramCookie 传空串表示清除 */
-  social?: { syncHours?: number; discoverMinutes?: number; instagramCookie?: string };
+  social?: {
+    syncHours?: number;
+    discoverMinutes?: number;
+    instagramCookie?: string;
+    /** 改了之后服务端会立刻补一轮存量照片的下载 */
+    photoRoot?: string;
+  };
   /** cookies 传空串表示清除 */
   youtube?: {
     syncHours?: number;
@@ -508,6 +519,15 @@ export interface PhotoNewEvent {
   accountId: number;
   platform: string;
   handle: string;
+}
+
+/**
+ * SSE：一批照片已经下载进图片库。
+ * 照片是自动落盘的（2026-11-04），墙上的「待存」角标靠它清掉，不用重拉整条墙。
+ */
+export interface PhotoSavedEvent {
+  ids: number[];
+  count: number;
 }
 
 /** SSE：某个博主的抓取进度 */

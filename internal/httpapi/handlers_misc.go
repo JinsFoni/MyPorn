@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -378,6 +379,9 @@ type socialDTO struct {
 	DiscoverMinutes    int    `json:"discoverMinutes"`
 	HasInstagramCookie bool   `json:"hasInstagramCookie"`
 	InstagramCookie    string `json:"instagramCookie,omitempty"`
+	// PhotoRoot 是「图片库根目录」：抓到的照片自动下载到这里，按 {名字}/{年}/{月} 分目录
+	// （2026-11-04 用户要求）。它不是任何一个视频库的 root_path，所以单独一项设置。
+	PhotoRoot string `json:"photoRoot"`
 }
 
 // socialPatch 是设置里可以改的社交项；InstagramCookie 传 "" 表示清空。
@@ -385,6 +389,7 @@ type socialPatch struct {
 	SyncHours       *int    `json:"syncHours"`
 	DiscoverMinutes *int    `json:"discoverMinutes"`
 	InstagramCookie *string `json:"instagramCookie"`
+	PhotoRoot       *string `json:"photoRoot"`
 }
 
 // proxyDTO 是各平台的专用代理。留空表示跟随全局代理。
@@ -480,6 +485,7 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 			SyncHours:          socialSyncHours(get("social_sync_hours", "6")),
 			DiscoverMinutes:    socialDiscoverMinutes(get("social_discover_minutes", "60")),
 			HasInstagramCookie: s.hasInstagramCookie(),
+			PhotoRoot:          get("photo_root", filepath.Join(s.cfg.LibraryRoot, "photos")),
 		},
 		YouTube: youtubeDTO{
 			SyncHours:     youtubeInt(get("yt_sync_hours", "6"), 6, 1, 48),
@@ -575,6 +581,18 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if p.Social.DiscoverMinutes != nil {
 			set("social_discover_minutes", fmt.Sprint(socialDiscoverMinutes(fmt.Sprint(*p.Social.DiscoverMinutes))))
+		}
+		if p.Social.PhotoRoot != nil {
+			root := strings.TrimSpace(*p.Social.PhotoRoot)
+			old, _ := s.st.GetSetting("photo_root")
+			set("photo_root", root)
+			// 改了落点就把存量照片补一轮：用户填完根目录，界面上立刻该有东西下起来，
+			// 而不是等 6 小时后的那轮同步（存量可能上千张，任务里按批补，见 socialUnsavedPerRun）。
+			if root != "" && root != strings.TrimSpace(old) && s.runner != nil {
+				if _, err := s.runner.EnqueueSocialSave(nil, -1); err != nil {
+					s.log.Warn("投递照片补存任务失败", "err", err)
+				}
+			}
 		}
 		if p.Social.InstagramCookie != nil {
 			raw := strings.TrimSpace(*p.Social.InstagramCookie)

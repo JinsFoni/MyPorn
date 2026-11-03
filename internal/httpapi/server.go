@@ -240,7 +240,7 @@ func (s *Server) Routes() http.Handler {
 			pr.Delete("/moments/accounts/{id}", s.handleDeleteMomentAccount)
 			pr.Post("/moments/accounts/{id}/sync", s.handleSyncMomentAccount)
 			pr.Post("/moments/seen", s.handleMarkMomentsSeen)
-			pr.Post("/moments/photos/save", s.handleSaveMomentPhotos)
+			pr.Post("/moments/photos/delete", s.handleDeleteMomentPhotos)
 			pr.Delete("/moments/photos/{id}", s.handleDeleteMomentPhoto)
 			pr.Post("/moments/cooldown", s.handleClearMomentCooldown)
 			pr.Get("/manage/moments", s.handleManageMoments)

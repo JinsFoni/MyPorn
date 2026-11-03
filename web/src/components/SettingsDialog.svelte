@@ -27,7 +27,7 @@
     libraryRoot: './media',
     ffmpegAvailable: true,
     openlist: { baseUrl: 'http://192.168.0.108:5244', root: '/123云盘/资源目录/MyPorn', hasToken: true },
-    social: { syncHours: 6, discoverMinutes: 60, hasInstagramCookie: false },
+    social: { syncHours: 6, discoverMinutes: 60, hasInstagramCookie: false, photoRoot: './media/photos' },
     youtube: {
       syncHours: 6,
       backfillLimit: 200,
@@ -87,6 +87,7 @@
   let openlistToken = $state('');
   let socialSyncHours = $state(6);
   let socialDiscoverMinutes = $state(60);
+  let photoRoot = $state('');
   let instagramCookie = $state('');
   let youtubeProxy = $state('');
   let ytSyncHours = $state(6);
@@ -121,6 +122,7 @@
     openlistToken = '';
     socialSyncHours = value.social.syncHours;
     socialDiscoverMinutes = value.social.discoverMinutes ?? 60;
+    photoRoot = value.social.photoRoot;
     instagramCookie = '';
     youtubeProxy = value.platformProxy.youtube ?? '';
     ytSyncHours = value.youtube.syncHours;
@@ -186,7 +188,11 @@
     };
     const token = openlistToken.trim();
     if (token.length > 0) patch.openlist = { ...patch.openlist, token };
-    patch.social = { syncHours: socialSyncHours, discoverMinutes: socialDiscoverMinutes };
+    patch.social = {
+      syncHours: socialSyncHours,
+      discoverMinutes: socialDiscoverMinutes,
+      photoRoot: photoRoot.trim(),
+    };
     // Cookie 只在用户真的粘了新内容时才提交：留空 = 不动（服务端把它当"清除"，
     // 所以这里必须"没填就不带这个字段"）。
     const cookie = instagramCookie.trim();
@@ -988,6 +994,25 @@
                           不需要登录。免费配额是每 15 分钟 30 次请求（按 IP 计），一次抓取只用 1–2 次。
                         </p>
                       </div>
+                    </div>
+
+                    <div class="mt-5">
+                      <label for="photo-root" class="label-meta mb-1.5">图片库根目录</label>
+                      <input
+                        id="photo-root"
+                        class="field font-mono text-meta"
+                        type="text"
+                        placeholder="留空 = 媒体库根目录下的 photos"
+                        spellcheck="false"
+                        autocomplete="off"
+                        bind:value={photoRoot}
+                        disabled={saving}
+                      />
+                      <p class="mt-1 text-meta text-dim">
+                        抓到的照片<strong class="text-fg">自动</strong>下载到这里，按 <code class="font-mono">名字/年/月/</code> 分目录：名字用博主名
+                        （没有显示名才用 @handle），年月取发帖时间，文件名是
+                        <code class="font-mono">日期_帖子末 8 位_序号.jpg</code>。改完保存会立刻补一轮存量照片。
+                      </p>
                     </div>
 
                     <div class="mt-5">

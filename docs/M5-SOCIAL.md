@@ -4,7 +4,8 @@
 > Instagram 无登录 100% 不可用（必须 Cookie）。§2 与 §5 已按实测结果改写。
 > 上位需求见 `REQUIREMENTS.md`，接口契约落地时并入 `docs/API.md`，解析自查清单并入 `docs/NEEDS-VERIFICATION.md`。
 
-一句话：**订阅 X / Instagram 博主 → 定时抓帖子里的静态照片 → 汇总成一面照片墙；看中的一键存进本地库。**
+一句话：**订阅 X / Instagram 博主 → 定时抓帖子里的静态照片 → 汇总成一面照片墙；照片抓下来就自动下载进本地库
+（`{名字}/{年}/{月}/`），不用人再点「保存」。**
 
 ---
 
@@ -15,7 +16,7 @@
 | 博主增删改查（粘贴主页链接）、启用/停用、单独同步 | 视频 / 动图 / Reels / Story（灯箱里给「原帖」外链兜底） |
 | 定时抓取（默认 6h）、首次回填最近 100 帖、游标断点续跑 | 评论、点赞数以外的互动数据、私信、推荐算法 |
 | 照片墙（混流 + 博主筛选）、灯箱看大图 | 动态页的播放能力（动态不接播放器） |
-| 一键存进本地库（按博主/日期归档） | Emby 剧集式整合（照片不做 nfo，见 §9） |
+| 抓到即自动下载入库（按 `名字/年/月` 归档，根目录在设置里填） | Emby 剧集式整合（照片不做 nfo，见 §9） |
 | 与「艺人」打通（艺人页顺带显示社交照片） | 推送通知（只在页面内用 SSE 提示，复用现有事件中心） |
 | 隐私模式覆盖（封面同款小糊图） | 按名字猜账号（只认 URL，见 §8） |
 
@@ -26,7 +27,7 @@
 | 抓取方式 | **X：无登录公开端点（默认）→ Cookie 升级；Instagram：只能 Cookie** | 实测（§15）：X 的 syndication 时间线免登录可用；IG 三个接口一律 `401 require_login`、主页直接 302 去登录页，免登录不存在可行路径。不引入 gallery-dl 这类外部依赖（守住单二进制） |
 | 页面形态 | **纯照片墙** | 密度高、滚动爽；正文和原帖在灯箱里看 |
 | 回填深度 | **每个博主最多 100 帖**，之后 **6 小时**增量（沿用 `syncIntervalHours` 默认，可单独覆盖） | 但 X 无登录**只给最近 20 帖且没有翻页游标**（§15-1），所以：X 未配 Cookie → 实际回填 20 帖，靠 6h 一轮慢慢累积；X 配了 Cookie 或 IG → 真的能翻到 100 帖 |
-| 照片落地 | **支持一键存进本地库** | 复用 M2 的库结构，重要照片能进归档 |
+| 照片落地 | **抓完自动下载到「图片库」，路径 `{名字}/{年}/{月}/`；根目录是独立设置项 `photo_root`，不是一个视频库** | 用户要的是「设一个图片库根目录，按名字/年/月分」，照片和影片本来就不该混在同一棵树里；手动「一键存」在几百张的存量面前是伪需求（2026-11-04 改成自动） |
 | 与艺人关系 | **打通** | 艺人页已有 `social_json` 的社交链接，可精确匹配，不需要猜名字 |
 | 隐私模式 | 覆盖动态页 | 和封面同一套 `/api/img?s=` 机制，保持一致 |
 
@@ -40,7 +41,8 @@
 | 管理页 → 新 tab「动态管理」 | 添加博主、启用开关、单独同步、删除、关联艺人（手动改）、看帖子数/照片数/上次同步/错误 |
 | 设置弹窗 → 新分类「动态」 | 抓取总开关、同步间隔、回填上限、X / Instagram Cookie、Instagram 代理、图片缓存上限 |
 | 艺人 page（`/performer/:id`） | 已关联的话多一块「社交动态」：最近 12 张缩略图，点开进灯箱 |
-| 灯箱（`/moments?p=<photoId>` 可深链） | 大图 + 博主 + 时间 + 正文（超 3 行折叠）+「原帖」+「存进本地库」 |
+| 灯箱（`/moments?p=<photoId>` 可深链） | 大图 + 博主 + 时间 + 正文（超 3 行折叠）+「原帖」+「删除这张」 |
+| 照片墙多选 | 格子上角「勾选」进入多选 → 底部浮条「已选 N 张 / 取消 / 删除」（2026-11-04 用户要求：原来这里是「存进本地库」，自动落盘之后改成批量删除）；未落盘的照片左上角一枚「待存」小角标，落盘后自动消失 |
 
 **移动端底栏**：现有 6 项加「动态」变成 7 项，375px 宽度会挤到截断。方案：底栏固定 5 项
 （关注 / 动态 / 艺人 / 下载 / 管理），设置走顶栏图标（已有），「发现」并入「艺人」页的搜索入口。
@@ -103,11 +105,11 @@ CREATE TABLE IF NOT EXISTS social_photos (
     UNIQUE (platform, url)
 );
 
--- 照片的落库记录
+-- 照片的落库记录（library_id 自 0014 起不再外键到 libraries：0 = 设置里的图片库根目录）
 CREATE TABLE IF NOT EXISTS social_photo_files (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     photo_id   INTEGER NOT NULL REFERENCES social_photos(id) ON DELETE CASCADE,
-    library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+    library_id INTEGER NOT NULL DEFAULT 0,
     rel_path   TEXT NOT NULL,
     size_bytes INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -233,7 +235,7 @@ type Adapter interface {
 | 任务 | 行为 |
 |---|---|
 | `social_sync` | 首次 `backfill_done=0`：从 `cursor` 续翻，直到凑满 100 帖或没有更多；之后：只抓第 1 页，遇到已入库 `post_id` 即停 |
-| `photo_save` | 单张照片存进本地库（§9），独立 worker，默认并发 2，可暂停/重试 |
+| `social_save` | 照片下载入库（§9），并发 = `download_concurrency`；payload `{photoIds?, accountId?}`，`accountId > 0` = 该博主的存量补漏、`-1` = 所有博主 |
 
 - 调度：`Scheduler` 里加一条与订阅同步并列的循环，间隔取设置项 `social_sync_hours`（默认 6）。
 - 事件：新增 `photo.new {photoId, accountId, postId, postedAt}`、`social.progress {accountId, phase, posts, photos}`。
@@ -275,21 +277,67 @@ type Adapter interface {
 
 ---
 
-## 9. 存进本地库
+## 9. 自动下载入库
 
-复用 M2 的库、路径清洗（`library.Sanitize`，单段 ≤120 字符）与磁盘空间校验：
+**2026-11-04 用户要求**：动态里的照片「抓取后自动下载入库」，不再等人一张张点。原来那套
+「勾几张 → 存进本地库（`POST /api/moments/photos/save` + `libraryId`）」整个删掉了。
+
+### 9.1 落在哪儿
+
+根目录是独立设置项 `photo_root`（设置 → 动态 → 图片库根目录），默认
+`{LIBRARY_ROOT}/photos`，**不是**任何一个视频库的 `rootPath`——照片和影片分开归档，
+`social_photo_files.library_id` 固定写 `0` 表示「设置里的图片库根目录」（该列的外键已经去掉，
+见 `0014_photo_root.sql`）。路径规则：
 
 ```
-{库根}/{平台显示名}/{博主名}/照片/{YYYY-MM-DD}_{postId 末 8 位}/
-├── 01.jpg
-├── 02.jpg
-└── post.json     # 正文 / 原帖链接 / 发布时间 / 博主 / 原图尺寸，便于回溯
+{photo_root}/{名字}/{年}/{月}/{YYYY-MM-DD}_{帖子 id 末 8 位}_{序号两位}.jpg
+{photo_root}/{名字}/{年}/{月}/{YYYY-MM-DD}_{帖子 id 末 8 位}.post.json
 ```
 
-- **不写 `.nfo`**：Emby 对照片不刮削，写空的 nfo 只会制造垃圾；`post.json` 是给人看的。
-- 单张写入用「先写 `.part` 再 rename」，中断不留半个文件；`(photo_id, library_id)` 唯一，重复存直接跳过。
-- 没有可用库时前端直接禁用「保存」并提示去建库（复用现有 `no_library` 错误码语义）。
-- 失败只影响这一张，任务里记录错误，灯箱该图角上标「保存失败 · 重试」。
+- `名字` = 博主显示名（`display_name`）去掉首尾空白的**单段目录名**，没有显示名才回退 `@handle`，
+  两者都没有就 `未知博主`。显示名里的 `/` 会被路径清洗换成 `_`（`library.Sanitize`）。
+- 年月取**发帖时间**（`posted_at`，UTC），不取抓取时间：照片是按「谁的哪个月」找的。
+- 没有 `posted_at` 的老帖落 `{名字}/未标注/未标注/`，文件名不带日期前缀（`{帖子 id 末 8 位}_{序号}.jpg`）——
+  硬塞进「本月」比放进「未标注」更误导。
+- 序号沿用帖子内该图的下标（`seq + 1`，补足两位）；同目录里同名文件已存在时加 `_{photo_id}` 后缀，
+  不覆盖（同一帖子的两张图理论上不会撞名，撞了说明帖子 id 末 8 位重复，宁可多一个后缀也不丢图）。
+- 每个帖子每个月份目录写一份 `{日期}_{帖子末 8 位}.post.json`（正文 / 原帖链接 / 发布时间 / 博主 /
+  该帖**已经落盘**的文件名清单）——清单从 `social_photo_files` 里查，不靠扫目录；
+  也**不写 `.nfo`**（Emby 不刮削照片，空 nfo 只是垃圾）。
+
+实测（2026-11-04，本机 973 张存量）：
+
+| 项 | 数字 |
+|---|---|
+| 落盘照片 | 973 张 → 972 个文件（另有 1 条是改造前按旧布局存进「主库」的老记录，留在原处不动） |
+| 体积 | 270 MB（平均 ~285 KB/张） |
+| 耗时 | 5 个任务、约 6 分钟，单任务 200 张上限 |
+| 失败 | 每批 0–2 张，下一轮自动补上（自愈，见 9.2），最后未落盘 = **0** |
+
+### 9.2 什么时候下
+
+| 时机 | 行为 |
+|---|---|
+| 同步抓完一个博主 | 把这一轮**新增的**照片 id 投递给 `social_save` |
+| 同步**失败**（限流 / 风控） | 照样投递一次该博主的存量补漏——落盘是本地活，跟上游限流无关 |
+| 保存设置里的 `photo_root`（且值变了） | 立刻投递一轮「所有博主」的存量补漏，不然得等 6 小时后的同步才见到文件 |
+| 每次任务开始时 | 先补上「墙上还在、但还没落盘」的存量（每轮最多 200 张） |
+
+- **自愈**：老帖的照片是抓取时就取好了 CDN 直链（IG 的 `scontent-*.cdninstagram.com` 带签名，
+  会过期），所以「以前没存下来的」未必还能下——下不动的就留着未落盘，下一轮再试，不阻塞别人。
+- **续排**：一轮 200 张跑完若还有存量、且这一轮**确实下成功了**，就再排一个任务接着下
+  （存量上千张时分批跑，单个任务不会一跑几十分钟）。下不动时 `saved = 0`，队列自然停，不会空转。
+- 落盘走「先写 `.part` 再 rename」，中断不留半个文件；`(photo_id, library_id)` 唯一，重复存直接跳过。
+- 一批下完广播 `photo.saved {ids, count}`：照片墙据此把「待存」角标当场清掉，不重拉整条墙
+  （重拉会把人弹回第一屏，这正是当初 A1 里那条「新图不自动插到墙顶」的同一个理由）。
+- 失败只影响这一张，记 warn 日志，任务里不中断；照片墙上那张左上角仍标「待存」，下一轮再试。
+
+### 9.3 删除
+
+照片墙的删除（单张垃圾桶 / 多选「删除」）与入库是两件事：
+
+- 服务端**软删**（`hidden = 1` 当墓碑），同一张图以后同步也不会再插回来（`UNIQUE (platform, url)` 撞键）；
+- **已经下到图片库的文件不删**——那是用户的资产，删墙 ≠ 删盘，确认框里写清这一点。
 
 ---
 
@@ -310,9 +358,10 @@ type Adapter interface {
 ## 11. 接口契约
 
 > **实施后定稿见 `docs/API.md` 附录「M5 新增接口（动态 / 照片墙）」**（B1–B13）。
-> 与下面这份草案的差异：存照片改成批量 `POST /api/moments/photos/save`（一次最多 200 张），
-> 探测与新增拆成 `POST /api/moments/resolve` 与 `POST /api/moments/accounts`，
-> 「已看」时刻存在 settings 的 `social_seen_at`（没有单独建表）。
+> 与下面这份草案的差异：探测与新增拆成 `POST /api/moments/resolve` 与
+> `POST /api/moments/accounts`，「已看」时刻存在 settings 的 `social_seen_at`（没有单独建表），
+> **照片不再有「保存」接口**——自动下载入库（§9），照片墙上只剩 `POST /api/moments/photos/delete`
+> 这一个批量删除动作（2026-11-04 起；此前是 `POST /api/moments/photos/save`，一次最多 200 张）。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -323,11 +372,11 @@ type Adapter interface {
 | DELETE | `/api/moments/accounts/{id}` | 移除（级联删记录，不动已存文件） |
 | POST | `/api/moments/accounts/{id}/sync` | 立即同步（入队 `social_sync`） |
 | POST | `/api/moments/seen` | 标记已读（写 `moments_seen_at`） |
-| POST | `/api/moments/photos/{id}/save` | `{libraryId}` → 入队 `photo_save` |
+| POST | `/api/moments/photos/delete` | `{photoIds: []}`（≤500）→ `{deleted}`；批量软删，未知 id 跳过 |
 | DELETE | `/api/moments/photos/{id}` | 从照片墙删掉一张（软删，`hidden = 1` 当墓碑，挡同步重插；不动已存文件） |
 | GET | `/api/manage/moments` | 管理页快照：博主 + 统计（帖子/照片/缓存占用/最近抓取/错误） |
 
-错误码沿用现有表，新增：`needs_auth`（401 上游要登录态）、`already_saved`（409 已在库里）。
+错误码沿用现有表，新增：`needs_auth`（401 上游要登录态）。`already_saved`（409 已在库里）随「手动保存」一起删掉了。
 
 ---
 
@@ -337,7 +386,7 @@ type Adapter interface {
 |---|---|---|
 | **M5-a** | 表 + `social.Adapter` + X 无登录抓取 + 照片墙 + 动态管理 tab | 粘一个 X 主页链接 → 回填 100 帖 → 墙上出图（≥300 张）→ 灯箱能翻能存 → 管理页看得到同步状态 |
 | **M5-b** | Instagram 抓取 + Cookie 配置 + IG 代理 | 同上；无 Cookie 失败时 UI 明确指出「需登录态」并给配置入口 |
-| **M5-c** | 打通与打磨：艺人关联、一键存库、未读、隐私模式、缓存上限清理 | 艺人页出现社交区块；隐私模式全糊；清理任务跑过一轮；移动端底栏不截断 |
+| **M5-c** | 打通与打磨：艺人关联、自动下载入库、未读、隐私模式、缓存上限清理 | 艺人页出现社交区块；设置里填图片库根目录后照片自动落成 `{名字}/{年}/{月}/`；隐私模式全糊；清理任务跑过一轮；移动端底栏不截断 |
 
 ---
 
@@ -521,12 +570,12 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
 | `internal/social/social.go` | `Adapter` 接口、可选接口 `Discoverer`（便宜的「只发现最新几条」，§15.16）、`Error`（`needs_auth` / `rate_limited` / `stale_parser` / `not_found` / `upstream`）、`Throttle`（串行 + 间隔 + **整站冷却 `CoolUntil` / 按宿主冷却 `CoolUntilHost`**）、`NormalizeHandle`、`Registry` |
 | `internal/social/xcom/` | X 免登录抓取：时间线 widget（历史）+ 主页 HTML 发现新帖（§15.10）+ 单帖 `tweet-result`（详情）、限流冷却、fixture 单测 |
 | `internal/social/igram/` | Instagram Cookie 抓取：`graphql.go` 是主路径（主页抠 `lsd`/`fb_dtsg` → `POST /api/graphql` + doc_id，游标 `gql:…`），`igram.go` 留 `web_profile_info` / `feed/user` 作降级；carousel 拆图、Cookie 归一化（**Netscape cookies.txt / Cookie 头 / JSON 三种写法**）、fixture 单测 + `LIVE=1` 真实网络冒烟 |
-| `internal/store/social.go` + `migrations/0007_m5_social.sql` | 四张表与全部读写、照片墙 keyset 游标、计数、URL 反查艺人 |
-| `internal/jobs/social.go` | `social_sync`（每轮最多 5 页/账号；`mode=auto/full/discover`，遇 `needs_auth` 整轮停、遇 `rate_limited` 只跳过该账号，§15.16）/ `social_save`（下载入库 + `post.json`） |
-| `internal/httpapi/handlers_moments.go` | B1–B11 全部端点 + `writeSocialErr`（错误码 → 状态码的唯一出口） |
-| `web/src/routes/Moments.svelte` | 照片墙（`InfiniteList` 复用 + 灯箱 + 多选存档 + 添加博主） |
+| `internal/store/social.go` + `migrations/0007_m5_social.sql` | 四张表与全部读写、照片墙 keyset 游标、计数、URL 反查艺人；`migrations/0014_photo_root.sql` 把 `social_photo_files.library_id` 的库外键拆掉（`0` = 图片库根），并补 `HideSocialPhotos`（批量软删）/ `PhotoSaved` / `ListUnsavedSocialPhotos`（补漏查询）/ `PostSavedPhotoPaths` |
+| `internal/jobs/social.go` | `social_sync`（每轮最多 5 页/账号；`mode=auto/full/discover`，遇 `needs_auth` 整轮停、遇 `rate_limited` 只跳过该账号，§15.16）/ `social_save`（下载入库到 `photo_root/{名字}/{年}/{月}/` + `.post.json`，每轮 200 张上限、自愈、成功即续排，§9） |
+| `internal/httpapi/handlers_moments.go` | B1–B11 全部端点（含批量删除 `POST /api/moments/photos/delete`）+ `writeSocialErr`（错误码 → 状态码的唯一出口） |
+| `web/src/routes/Moments.svelte` | 照片墙（`InfiniteList` 复用 + 灯箱 + 多选删除 + 添加博主；未落盘的照片标「待存」） |
 | `web/src/routes/Manage.svelte` | 「动态管理」页签：博主列表 / 同步 / 重填 / 启停 / 删除 |
-| `web/src/components/SettingsDialog.svelte` | 「动态」分类：抓取间隔 + Instagram Cookie |
+| `web/src/components/SettingsDialog.svelte` | 「动态」分类：抓取间隔 + **图片库根目录（`photo_root`，保存后立刻补一轮存量）** + Instagram Cookie |
 | `web/src/routes/Performer.svelte` | 艺人页「社交动态」区块（12 张，6 列两行，点图跳带 `account` 筛选的照片墙） |
 | `internal/proxying/` | 代理解析器（设置优先、环境变量兜底）+ 动态 HTTP 客户端接线，改设置即时生效 |
 | `internal/imgcache/evict.go` | 缓存上限与淘汰（`IMG_CACHE_MAX_MB`，默认 2048；按 mtime 淘汰到 90%；启动扫一次 + 写入后十分钟一次） |
@@ -535,7 +584,8 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
 
 | 文件 | 覆盖 |
 |---|---|
-| `internal/store/social_test.go` | 账号 upsert 摘要（不覆盖空字段）、帖子去重、照片墙顺序与游标、URL 反查艺人 + 按艺人过滤、删号级联 |
+| `internal/store/social_test.go` | 账号 upsert 摘要（不覆盖空字段）、帖子去重、照片墙顺序与游标、URL 反查艺人 + 按艺人过滤、删号级联、**批量软删（跨账号、幂等、未知 id 不计数、空入参无操作）**、**补漏查询（只列墙上还在且未落盘的、新→旧、`accountID=0` = 全部博主、软删后不再算）** |
+| `internal/jobs/social_save_test.go` | **目录/文件名规则**（显示名优先、`@handle` 回退、`posted_at` 缺失落 `未标注`、帖子 id 不足 8 位用全名）、**整条落盘流程**（写文件 + `.post.json` 清单 + `library_id=0` + `rel_path` 相对图片库根；重跑不重复下载、不因同名改后缀） |
 | `internal/social/xcom/xcom_test.go` | 正常时间线、无 `__NEXT_DATA__`、`hasResults:false`、**0 条帖子必须报错（`not_found` / `stale_parser`）**、**主页 HTML 发现的新帖进结果且按时间倒序**、**主页被登录墙挡住时退回时间线**、token、真限流、**过期 `remaining:0` 头** |
 | `internal/social/igram/igram_test.go` | 首屏/第二页解析、carousel 拆图、Cookie 解析、无 Cookie → `needs_auth`、401 / 429、GraphQL 断掉时回退 |
 | `internal/social/igram/graphql_test.go` | GraphQL 首屏/翻页（`after` 带上）、资料走 `node.user`、**少 `Referer`/`Sec-Fetch-*` 时被降级成网页壳 → 换令牌重试一次再报 blocked**、`1675004` 限流进冷却、`1675012` 回退旧接口、两边都失败时错误里写清两边原因、`jazoest` 对答案、令牌 TTL、**部分字段失败的响应当成功** |
@@ -551,6 +601,10 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
 - **同步并发固定为 1**：限流按 IP 算，并行抓只会更快撞 429。
 - **免登录 X 的「20 帖」**：一次只有 20 条且无游标，所以「最近 100 帖」对 X 免登录实际是
   「每 6 小时累积 20 条新的」。IG（有 Cookie）和 X（将来接 Cookie）才真能一次翻到 100。
+- **照片改自动落盘（2026-11-04）**：手动「一键存进本地库」整套拆掉，改成抓完就下到
+  `photo_root/{名字}/{年}/{月}/`（§9）。照片墙的多选因此从「存档」变成「删除」。
+  代价是：用户不能只挑几张存了——全都存。实测 973 张存量 = 270 MB，占得下一个家宽相册，
+  但真要空间紧张，只能改根目录到别的盘（或在系统层面清）。
 - **未做**：动态→Emby、动态内播放（动态只做「看和存」）；X Cookie/GraphQL 升级留到 M6。
 
 ### 16.3 实施中踩到的坑（值得记住）
@@ -578,7 +632,7 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
 
 - **Instagram 图片地址带签名，数小时内失效**（2026-11-04 量到 `display_url` 的 `oe` 参数 = 105.5 小时 ≈ 4.4 天，见 §15.13）。已缓存的图不受影响（缓存键是地址，命中就不再回源），
   但很久以前、当时没被看过的照片再打开会因签名过期抓不到，此时 `/api/img` 按既有契约给占位图，
-  页面不会崩。想长期留住就点「存进本地库」。
+  页面不会崩。抓到手的那几张会立刻自动落盘（§9），已经在硬盘上的不受签名过期影响。
 - **限流头可能是过期值**：`remaining=0` 但 `reset` 已经过去时按正常响应处理（窗口已翻篇，
   否则会把可以用的响应误判成限流）。
 - **限流是「按 IP + 按 HTTP 版本」的**：同一台机器上别的工具把配额用满，动态功能也会跟着停，

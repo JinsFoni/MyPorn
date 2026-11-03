@@ -17,8 +17,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/JinsFoni/MyPorn/internal/library"
-	"github.com/JinsFoni/MyPorn/internal/model"
 	"github.com/JinsFoni/MyPorn/internal/social"
 	"github.com/JinsFoni/MyPorn/internal/store"
 )
@@ -406,14 +404,12 @@ func (s *Server) handleMarkMomentsSeen(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"unseen": 0})
 }
 
-// ---- 存进本地库 ----
+// ---- 从照片墙删（单张 / 多选批量）----
 
-type momentSaveReq struct {
-	PhotoIDs  []int64 `json:"photoIds"`
-	LibraryID int64   `json:"libraryId"`
+// momentDeleteReq 是照片墙「多选 → 删除」的请求体。
+type momentDeleteReq struct {
+	PhotoIDs []int64 `json:"photoIds"`
 }
-
-// ---- 从照片墙删一张 ----
 
 // handleDeleteMomentPhoto 把一张照片从墙上删掉（软删，见 store.HideSocialPhoto）。
 func (s *Server) handleDeleteMomentPhoto(w http.ResponseWriter, r *http.Request) {
@@ -438,37 +434,30 @@ func (s *Server) handleDeleteMomentPhoto(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleSaveMomentPhotos(w http.ResponseWriter, r *http.Request) {
-	var req momentSaveReq
+// handleDeleteMomentPhotos 批量软删（照片墙多选删除）。一次最多 500 张：
+// 墙上一页 36 张，多选到这个量级已经不是「点两下」了，再多就该在上游分页里做。
+func (s *Server) handleDeleteMomentPhotos(w http.ResponseWriter, r *http.Request) {
+	var req momentDeleteReq
 	if err := decodeJSON(r, &req); err != nil || len(req.PhotoIDs) == 0 {
 		writeErr(w, http.StatusBadRequest, "bad_request", "请先选中照片")
 		return
 	}
-	if len(req.PhotoIDs) > 200 {
-		writeErr(w, http.StatusBadRequest, "bad_request", "一次最多保存 200 张")
+	if len(req.PhotoIDs) > 500 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "一次最多删 500 张")
 		return
 	}
-	var lib *model.Library
-	var err error
-	if req.LibraryID > 0 {
-		lib, err = s.st.GetLibrary(req.LibraryID)
-	} else {
-		lib, err = s.st.DefaultLibrary()
-	}
+	deleted, accounts, err := s.st.HideSocialPhotos(req.PhotoIDs)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "no_library", "还没有可用的本地库，请先在设置里创建")
+		writeErr(w, http.StatusInternalServerError, "internal", "删除照片失败")
 		return
 	}
-	if err := library.EnsureWritable(lib.RootPath); err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_request", "库目录不可写: "+err.Error())
-		return
+	// 照片数挂在账号上，删完顺手对齐；对不齐不影响这次删除。
+	for _, id := range accounts {
+		if err := s.st.RefreshSocialCounts(id); err != nil {
+			s.log.Warn("刷新博主照片计数失败", "account", id, "err", err)
+		}
 	}
-	jobID, err := s.runner.EnqueueSocialSave(req.PhotoIDs, lib.ID)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"jobId": jobID, "count": len(req.PhotoIDs), "libraryId": lib.ID})
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
 
 // ---- 管理页 ----

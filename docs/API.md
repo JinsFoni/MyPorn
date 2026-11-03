@@ -581,22 +581,21 @@ type Video = {
 
 标记「动态已看到此刻」。照片墙打开时调一次。
 
-### B9. `POST /api/moments/photos/save`
+### B9. `POST /api/moments/photos/delete`
 
-`{ "photoIds": [12, 13], "libraryId": 1 }`（`photoIds` 上限 200，省略 `libraryId` 用默认库）→
-202 Accepted，入队 `social_save`。落盘路径：
+`{ "photoIds": [12, 13] }`（上限 500）→ 200 `{ "deleted": 2 }`。
 
-```
-{库根}/{平台显示名}/{博主名}/照片/{YYYY-MM-DD}_{post_id 后 8 位}/{序号两位}.jpg
-```
+照片墙的「多选 → 删除」。2026-11-04 之前的同名接口是**保存**（`/photos/save`，带 `libraryId`）：
+照片改成抓取后**自动**下载入库之后，「存档」不再需要人动手，多选只剩清理这一个用途。
 
-同一个帖子目录里会写一份 `post.json`（正文、原帖地址、发布时间、图片清单），不写 `.nfo`——
-动态是「看和存」，不进影片库的刮削口径。
+- 服务端批量**软删**（同 B9b），顺手重算涉及博主的 `photoCount`；
+- 未知 id 直接跳过（不报错、也不计数），所以「墙已经被别的标签页删过了」不会让整批失败；
+- 已经下载到图片库的文件**不动**。
 
 ### B9b. `DELETE /api/moments/photos/{id}` → 204
 
-把一张照片从照片墙上删掉（照片格子右下角那个垃圾桶）。服务端是**软删**：行留着、
-`hidden = 1`。
+把一张照片从照片墙上删掉（照片格子右下角那个垃圾桶、灯箱里的「删除这张」）。
+服务端是**软删**：行留着、`hidden = 1`。
 
 - 为什么留行：`social_photos` 上有 `UNIQUE (platform, url)`，写入是 `INSERT OR IGNORE`。
   行真删掉，下一轮同步（默认 6 小时，手动同步也算）会把这同一张图原样插回来，
@@ -653,13 +652,18 @@ type Video = {
 |---|---|---|
 | `photo.new` | `{photoId, accountId, platform, handle}` | 照片墙增量刷新 + 侧边栏未读 +1 |
 | `social.progress` | `{accountId, handle, page, newPhotos, backfilling}` | 抓取过程中的进度（一次同步可能连着好几页） |
+| `photo.saved` | `{ids, count}` | 一批照片已下载进图片库（自动落盘，§9）；照片墙据此把「待存」角标当场清掉，不用重拉整条墙 |
 
 ### B14. 任务类型
 
 | `type` | 载荷 | 并发 |
 |---|---|---|
 | `social_sync` | `{accountId, mode}`（`accountId=0` 表示全部启用的博主） | 1（限流按 IP 算，并行只会更快撞 429） |
-| `social_save` | `{photoIds, libraryId}` | 跟下载并发数一致 |
+| `social_save` | `{photoIds?, accountId?}`：`photoIds` = 刚抓到的这几张；`accountId > 0` = 该博主存量补漏、`-1` = 所有博主（用来把「还没落盘的」一次扫干净） | 跟下载并发数一致 |
+
+照片是**自动**下载入库的（落在设置里的 `photo_root/{名字}/{年}/{月}/`），前端不再有「保存」这个动作，
+所以 `social_save` 的载荷里没有 `libraryId`——写入时 `social_photo_files.library_id` 固定是 `0`
+（`0` = 设置里的图片库根目录，该列自 `0014_photo_root.sql` 起不再外键到 `libraries`）。
 
 定时器：每 10 分钟醒一次，距上次抓取超过 `social.syncHours`（默认 6）就投递一轮 `social_sync`。
 

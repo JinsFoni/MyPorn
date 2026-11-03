@@ -10,7 +10,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -117,6 +116,8 @@ func (r *Runner) runSocialSyncJob(ctx context.Context, j *model.Job, c *Ctl) err
 		if err != nil {
 			failed++
 			r.recordSocialError(acc.ID, err)
+			// 抓取失败不该拖住已经抓到的图（以及以前漏下的）：落盘是本地活，跟限流/风控无关。
+			r.enqueuePhotoSave(acc.ID, nil)
 			// 未登录会让整轮都白跑，直接收工；限流不再收工——X 的额度是按宿主分的
 			// （widget / 主页 / 单帖各一份，§15.15），一个账号撞上的往往只挡住它自己，
 			// 后面的账号换个宿主照样能抓到新帖。真的整站限流时，Throttle 会让后续请求
@@ -164,11 +165,13 @@ func (r *Runner) recordSocialError(accountID int64, err error) {
 	}
 }
 
-// storeSocialPage 把一页帖子写进库，返回新增照片数、以及「这一页有没有已入库的帖子」。
+// storeSocialPage 把一页帖子写进库，返回新增照片 id、以及「这一页有没有已入库的帖子」。
 //
+// 返回的是 id 而不是数量：新增的照片紧接着要自动落盘（2026-11-04 用户要求
+// 「图片抓取后自动下载入库」），ids 直接进存图任务的 payload，不再让用户勾选。
 // skipKnown=true 时遇到已入库的帖子就跳过并标记 known（增量同步靠它提前收手）；
 // false 用于回填，重复的帖子照样重写一遍（幂等，顺手补全缺失字段）。
-func (r *Runner) storeSocialPage(acc *store.SocialAccount, page *social.Page, skipKnown bool) (int, bool, error) {
+func (r *Runner) storeSocialPage(acc *store.SocialAccount, page *social.Page, skipKnown bool) ([]int64, bool, error) {
 	inputs := make([]store.SocialPostInput, 0, len(page.Posts))
 	known := false
 	for _, p := range page.Posts {
@@ -186,7 +189,7 @@ func (r *Runner) storeSocialPage(acc *store.SocialAccount, page *social.Page, sk
 	}
 	ids, err := r.st.InsertSocialPosts(acc.ID, acc.Platform, inputs)
 	if err != nil {
-		return 0, known, fmt.Errorf("写入帖子失败: %w", err)
+		return nil, known, fmt.Errorf("写入帖子失败: %w", err)
 	}
 	for _, id := range ids {
 		r.hub.Publish("photo.new", map[string]any{
@@ -196,7 +199,7 @@ func (r *Runner) storeSocialPage(acc *store.SocialAccount, page *social.Page, sk
 			"handle":    acc.Handle,
 		})
 	}
-	return len(ids), known, nil
+	return ids, known, nil
 }
 
 // discoverSocialAccount 只跑便宜的那条发现路子（social.Discoverer），不刷资料、不碰 widget。
@@ -219,10 +222,11 @@ func (r *Runner) discoverSocialAccount(ctx context.Context, c *Ctl, acc *store.S
 	if err != nil {
 		return err
 	}
-	n, _, err := r.storeSocialPage(acc, page, false)
+	ids, _, err := r.storeSocialPage(acc, page, false)
 	if err != nil {
 		return err
 	}
+	n := len(ids)
 	if n > 0 {
 		// 发现轮不走 SaveSocialSync（那会动回填游标），所以计数得自己刷，否则界面上
 		// 「37 帖 / 52 图」会一直停在完整同步那一刻。
@@ -237,6 +241,7 @@ func (r *Runner) discoverSocialAccount(ctx context.Context, c *Ctl, acc *store.S
 			"newPhotos": n,
 		})
 	}
+	r.enqueuePhotoSave(acc.ID, ids)
 	return nil
 }
 
@@ -279,6 +284,7 @@ func (r *Runner) syncSocialAccount(ctx context.Context, c *Ctl, acc *store.Socia
 	}
 	pages := 0
 	newPhotos := 0
+	newIDs := []int64{}
 	backfillDone := !full
 	for {
 		if err := c.Check(); err != nil {
@@ -301,11 +307,12 @@ func (r *Runner) syncSocialAccount(ctx context.Context, c *Ctl, acc *store.Socia
 			break
 		}
 
-		n, known, err := r.storeSocialPage(acc, page, !full)
+		ids, known, err := r.storeSocialPage(acc, page, !full)
 		if err != nil {
 			return err
 		}
-		newPhotos += n
+		newPhotos += len(ids)
+		newIDs = append(newIDs, ids...)
 
 		pages++
 		cursor = page.NextCursor
@@ -331,47 +338,96 @@ func (r *Runner) syncSocialAccount(ctx context.Context, c *Ctl, acc *store.Socia
 	if err := r.st.SaveSocialSync(acc.ID, cursor, backfillDone, "", time.Now()); err != nil {
 		r.log.Warn("保存博主同步进度失败", "account", acc.ID, "err", err)
 	}
+	// 抓完就自动落盘：新抓的排前面，任务里再补这个博主以前漏下的（见 socialUnsavedPerRun）。
+	// 没抓到新图也投一次——「上次没下完」正是需要这一轮补的场合。
+	r.enqueuePhotoSave(acc.ID, newIDs)
 	return nil
+}
+
+// enqueuePhotoSave 把刚抓到的照片交给存图任务；accountID>0 时任务顺带补这个博主的库存。
+func (r *Runner) enqueuePhotoSave(accountID int64, photoIDs []int64) {
+	if _, err := r.EnqueueSocialSave(photoIDs, accountID); err != nil {
+		r.log.Warn("投递照片自动入库任务失败", "account", accountID, "err", err)
+	}
 }
 
 // ---- 存进本地库 ----
 
 type socialSavePayload struct {
-	PhotoIDs  []int64 `json:"photoIds"`
-	LibraryID int64   `json:"libraryId"`
+	// PhotoIDs 是这一轮同步刚抓到的新照片（优先下）。
+	PhotoIDs []int64 `json:"photoIds"`
+	// AccountID > 0 时顺带补这个博主名下漏下的照片；-1 表示全部博主（改完图片库根目录时用）。
+	AccountID int64 `json:"accountId"`
 }
 
-// EnqueueSocialSave 投递一次「照片存进本地库」任务。
-func (r *Runner) EnqueueSocialSave(photoIDs []int64, libraryID int64) (int64, error) {
-	return r.st.Enqueue(model.JobTypeSocialSave, socialSavePayload{PhotoIDs: photoIDs, LibraryID: libraryID}, 8)
+// photoRootLibraryID 是 social_photo_files.library_id 的占位值：0 = 设置里的图片库根目录。
+// 照片不再挂在任何视频库下，见 0014_photo_root.sql。
+const photoRootLibraryID int64 = 0
+
+// socialUnsavedPerRun 是一次任务最多补多少张「以前漏下的」照片。
+//
+// 为什么要补：自动入库是 2026-11-04 才有的（此前要用户在墙上勾选），存量一张都没落盘
+// （本机实测 973 张）；而且失败是常态——图床抽风、磁盘满、根目录还没填。只下「本轮新增」
+// 的话旧图永远补不回来。给个上限是为了别让一次任务跑成几百张的长下载：每轮补一批，几轮就齐。
+const socialUnsavedPerRun = 200
+
+// EnqueueSocialSave 投递一次「照片存进图片库」任务。photoIDs 可以是空的（纯补漏）。
+func (r *Runner) EnqueueSocialSave(photoIDs []int64, accountID int64) (int64, error) {
+	return r.st.Enqueue(model.JobTypeSocialSave,
+		socialSavePayload{PhotoIDs: photoIDs, AccountID: accountID}, 8)
 }
 
-// runSocialSaveJob 把选中的照片下载到本地库。
+// photoRoot 读「图片库根目录」设置（`photo_root`），空值回落到 {媒体库根}/photos。
+func (r *Runner) photoRoot() string {
+	if r.st != nil {
+		if v, err := r.st.GetSetting("photo_root"); err == nil {
+			if root := strings.TrimSpace(v); root != "" {
+				return root
+			}
+		}
+	}
+	if r.cfg != nil && strings.TrimSpace(r.cfg.LibraryRoot) != "" {
+		return filepath.Join(r.cfg.LibraryRoot, "photos")
+	}
+	return ""
+}
+
+// runSocialSaveJob 把照片下载进图片库。
 //
 // 目录规则（docs/M5-SOCIAL.md §9）：
 //
-//	{库根}/{平台显示名}/{博主名}/照片/{YYYY-MM-DD}_{帖子 id 末 8 位}/{序号}.jpg
+//	{图片库根}/{名字}/{年}/{月}/{YYYY-MM-DD}_{帖子 id 末 8 位}_{序号}.jpg
 //
-// 一条帖子一个目录，帖内按 seq 编号；顺便写一份 post.json 留正文与原帖地址。
+// 「名字」= 博主显示名，空着才用 @handle；年/月取帖子发布时间，缺时间的老帖落到
+// 「未标注/未标注」——不硬塞进当下这个月，那会让归档看起来像今天发的。
+// 同一帖的文件名共享 `{日期}_{帖子末 8 位}` 前缀，正文/原帖地址写在同目录
+// `{前缀}.post.json` 里（照片不再一帖一目录，清单只能从库里取，见 PostSavedPhotoPaths）。
 func (r *Runner) runSocialSaveJob(ctx context.Context, j *model.Job, c *Ctl) error {
 	var p socialSavePayload
 	if err := json.Unmarshal([]byte(j.Payload), &p); err != nil {
 		return fmt.Errorf("任务参数损坏")
 	}
-	if len(p.PhotoIDs) == 0 {
-		return fmt.Errorf("没有选中照片")
+	root := r.photoRoot()
+	if root == "" {
+		return fmt.Errorf("还没有配置图片库根目录，请先在设置里填写")
 	}
-	lib, err := r.socialLibrary(p.LibraryID)
+	if err := library.EnsureWritable(root); err != nil {
+		return fmt.Errorf("图片库目录不可写: %w", err)
+	}
+	ids, err := r.socialPhotoQueue(p)
 	if err != nil {
 		return err
 	}
-	if err := library.EnsureWritable(lib.RootPath); err != nil {
-		return fmt.Errorf("库目录不可写: %w", err)
+	if len(ids) == 0 {
+		c.Progress(100, "没有需要下载的照片", 0, 0, 0)
+		return nil
 	}
-	client := r.httpClient("")
 
+	client := r.httpClient("")
 	saved := 0
-	for i, photoID := range p.PhotoIDs {
+	// 落成了哪些：广播给前端清「待存」角标（一批最多 200 个 int，SSE 扛得住）
+	savedIDs := make([]int64, 0, 16)
+	for i, photoID := range ids {
 		if err := c.Check(); err != nil {
 			return err
 		}
@@ -380,74 +436,132 @@ func (r *Runner) runSocialSaveJob(ctx context.Context, j *model.Job, c *Ctl) err
 			r.log.Warn("照片不存在，跳过", "photo", photoID, "err", err)
 			continue
 		}
-		rel, size, err := r.saveSocialPhoto(ctx, client, lib, photo)
+		rel, size, err := r.saveSocialPhoto(ctx, client, root, photo)
 		if err != nil {
 			r.log.Warn("保存照片失败", "photo", photoID, "err", err)
-			c.Progress(float64(i+1)/float64(len(p.PhotoIDs))*100,
-				fmt.Sprintf("第 %d/%d 张失败：%v", i+1, len(p.PhotoIDs), err), 0, 0, 0)
+			c.Progress(float64(i+1)/float64(len(ids))*100,
+				fmt.Sprintf("第 %d/%d 张失败：%v", i+1, len(ids), err), 0, 0, 0)
 			continue
 		}
-		if err := r.st.SavePhotoFile(photoID, lib.ID, rel, size); err != nil {
+		if err := r.st.SavePhotoFile(photoID, photoRootLibraryID, rel, size); err != nil {
 			r.log.Warn("记录照片落盘失败", "photo", photoID, "err", err)
 		}
+		// 元数据在记账之后再写：清单是从库里取的，先写就会漏掉这一张。
+		r.writePhotoPostMeta(filepath.Join(root, filepath.FromSlash(photoRelDir(photo))), photo)
+		savedIDs = append(savedIDs, photo.ID)
 		saved++
-		c.Progress(float64(i+1)/float64(len(p.PhotoIDs))*100,
-			fmt.Sprintf("已保存 %d/%d 张", saved, len(p.PhotoIDs)), 0, 0, 0)
+		c.Progress(float64(i+1)/float64(len(ids))*100,
+			fmt.Sprintf("已保存 %d/%d 张", saved, len(ids)), 0, 0, 0)
 	}
-	r.hub.Publish("download.done", map[string]any{
-		"kind":    "social_photo",
-		"count":   saved,
-		"library": lib.ID,
+	r.hub.Publish("photo.saved", map[string]any{
+		"ids":   savedIDs,
+		"count": saved,
 	})
 	if saved == 0 {
 		return fmt.Errorf("一张都没保存成功")
 	}
-	c.Progress(100, fmt.Sprintf("已保存 %d 张照片到「%s」", saved, lib.Name), 0, 0, 0)
+	// 还有没下完的就接着排：单个任务最多 socialUnsavedPerRun 张（别让一个任务跑几十分钟），
+	// 但存量可能有上千张（改完图片库根目录的头一轮就是）。只在「这一轮确实下成了」时续排——
+	// 剩下的全是坏图时 saved=0，队列就停，不会变成空转的死循环。
+	if p.AccountID != 0 && saved > 0 {
+		scope := p.AccountID
+		if scope < 0 {
+			scope = 0 // 0 = 所有博主
+		}
+		if rest, err := r.st.ListUnsavedSocialPhotos(scope, 1); err == nil && len(rest) > 0 {
+			if _, err := r.EnqueueSocialSave(nil, p.AccountID); err != nil {
+				r.log.Warn("续排照片补漏任务失败", "err", err)
+			}
+		}
+	}
+	// 「第几轮补漏」对用户没意义，只说清落哪儿了。
+	c.Progress(100, fmt.Sprintf("已保存 %d 张照片到图片库", saved), 0, 0, 0)
 	return nil
 }
 
-// socialLibrary 取目标库：payload 指定了就用它，否则用默认库。
-func (r *Runner) socialLibrary(id int64) (*model.Library, error) {
-	if id > 0 {
-		lib, err := r.st.GetLibrary(id)
-		if err != nil {
-			return nil, fmt.Errorf("指定的本地库不存在")
+// socialPhotoQueue 拼出这次要下的照片：本轮新抓的 + 漏下的（有上限），已落盘的跳过。
+func (r *Runner) socialPhotoQueue(p socialSavePayload) ([]int64, error) {
+	seen := map[int64]bool{}
+	out := make([]int64, 0, len(p.PhotoIDs))
+	add := func(id int64) error {
+		if id <= 0 || seen[id] {
+			return nil
 		}
-		return lib, nil
+		seen[id] = true
+		ok, err := r.st.PhotoSaved(id)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			out = append(out, id)
+		}
+		return nil
 	}
-	lib, err := r.st.DefaultLibrary()
-	if err != nil {
-		return nil, fmt.Errorf("还没有可用的本地库，请先在设置里创建")
+	for _, id := range p.PhotoIDs {
+		if err := add(id); err != nil {
+			return nil, err
+		}
 	}
-	return lib, nil
+	if p.AccountID != 0 {
+		accountID := p.AccountID
+		if accountID < 0 {
+			accountID = 0 // 0 = 所有博主
+		}
+		rest, err := r.st.ListUnsavedSocialPhotos(accountID, socialUnsavedPerRun)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range rest {
+			if err := add(id); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return out, nil
 }
 
-// saveSocialPhoto 下载一张照片并返回相对库根的路径与体积。
+// photoRelDir 是这张照片该落的目录（相对图片库根）：{名字}/{年}/{月}。
+func photoRelDir(photo *store.SocialPhotoRow) string {
+	name := strings.TrimSpace(photo.Account.DisplayName)
+	if name == "" {
+		name = photo.Account.Handle
+	}
+	if name == "" {
+		name = "未知博主"
+	}
+	year, month := "未标注", "未标注"
+	if photo.PostedAt != nil {
+		year = photo.PostedAt.Format("2006")
+		month = photo.PostedAt.Format("01")
+	}
+	return path.Join(library.Sanitize(name, 60), year, month)
+}
+
+// photoBaseName 是文件名主干：{YYYY-MM-DD}_{帖子 id 末 8 位}_{序号}（无时间的老帖省掉日期）。
+func photoBaseName(photo *store.SocialPhotoRow) string {
+	parts := []string{}
+	if photo.PostedAt != nil {
+		parts = append(parts, photo.PostedAt.Format("2006-01-02"))
+	}
+	if key := tail(postIDFromURL(photo.Post.URL), 8); key != "" {
+		parts = append(parts, key)
+	}
+	parts = append(parts, fmt.Sprintf("%02d", maxInt(photo.Seq, 1)))
+	return strings.Join(parts, "_")
+}
+
+// saveSocialPhoto 下载一张照片，返回相对图片库根的路径与体积。
 func (r *Runner) saveSocialPhoto(ctx context.Context, client *http.Client,
-	lib *model.Library, photo *store.SocialPhotoRow) (string, int64, error) {
+	root string, photo *store.SocialPhotoRow) (string, int64, error) {
 	rawURL := photo.URL
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
 		return "", 0, fmt.Errorf("图片地址无效")
 	}
 
-	blogger := strings.TrimSpace(photo.Account.DisplayName)
-	if blogger == "" {
-		blogger = photo.Account.Handle
-	}
-	postKey := postIDFromURL(photo.Post.URL)
-	day := "undated"
-	if photo.PostedAt != nil {
-		day = photo.PostedAt.Format("2006-01-02")
-	}
-	dirRel := path.Join(
-		platformName(photo.Platform),
-		library.Sanitize(blogger, 60),
-		"照片",
-		day+"_"+tail(postKey, 8),
-	)
-	dirAbs := filepath.Join(lib.RootPath, filepath.FromSlash(dirRel))
-	if !library.WithinRoot(lib.RootPath, dirAbs) {
+	dirRel := photoRelDir(photo)
+	dirAbs := filepath.Join(root, filepath.FromSlash(dirRel))
+	if !library.WithinRoot(root, dirAbs) {
 		return "", 0, fmt.Errorf("目标路径越界")
 	}
 	if err := os.MkdirAll(dirAbs, 0o755); err != nil {
@@ -455,8 +569,15 @@ func (r *Runner) saveSocialPhoto(ctx context.Context, client *http.Client,
 	}
 
 	ext := imageExt(u)
-	name := fmt.Sprintf("%02d%s", maxInt(photo.Seq, 1), ext)
+	base := photoBaseName(photo)
+	name := base + ext
 	fileAbs := filepath.Join(dirAbs, name)
+	// 同名文件已经在：要么是同一张（落盘记录丢了，重下），要么是同帖同序号的另一行。
+	// 不覆盖，后缀自己的 id，两张都留得下。
+	if _, statErr := os.Stat(fileAbs); statErr == nil {
+		name = fmt.Sprintf("%s_%d%s", base, photo.ID, ext)
+		fileAbs = filepath.Join(dirAbs, name)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -499,10 +620,23 @@ func (r *Runner) saveSocialPhoto(ctx context.Context, client *http.Client,
 		return "", 0, err
 	}
 
-	// post.json：一条帖子一份，留正文、原帖地址和「这帖存了哪几张」。
-	//
-	// 每次都重写（而不是「存在就跳过」）：同一条帖子的照片可能是分几次存的，
-	// 只有重写才能让 photos 列表反映目录里真实存在的文件。
+	return path.Join(dirRel, name), size, nil
+}
+
+// writePhotoPostMeta 写同目录的 `{日期}_{帖子末 8 位}.post.json`：正文 / 原帖地址 /
+// 发布时间 / 博主 / 这帖已经落盘的那几张。每次落一张就重写一遍，清单才是当前真值。
+func (r *Runner) writePhotoPostMeta(dirAbs string, photo *store.SocialPhotoRow) {
+	key := tail(postIDFromURL(photo.Post.URL), 8)
+	base := key
+	if photo.PostedAt != nil {
+		base = photo.PostedAt.Format("2006-01-02")
+		if key != "" {
+			base += "_" + key
+		}
+	}
+	if base == "" {
+		base = "post"
+	}
 	meta := map[string]any{
 		"platform": photo.Platform,
 		"account":  photo.Account.Handle,
@@ -512,15 +646,20 @@ func (r *Runner) saveSocialPhoto(ctx context.Context, client *http.Client,
 	if photo.PostedAt != nil {
 		meta["postedAt"] = photo.PostedAt.Format(time.RFC3339)
 	}
-	if files, err := savedPhotoFiles(dirAbs); err == nil {
+	if paths, err := r.st.PostSavedPhotoPaths(photo.Post.ID); err == nil && len(paths) > 0 {
+		files := make([]string, 0, len(paths))
+		for _, p := range paths {
+			files = append(files, filepath.Base(filepath.FromSlash(p)))
+		}
 		meta["photos"] = files
 	}
-	if b, err := json.MarshalIndent(meta, "", "  "); err == nil {
-		if err := os.WriteFile(filepath.Join(dirAbs, "post.json"), b, 0o644); err != nil {
-			r.log.Warn("写 post.json 失败", "dir", dirRel, "err", err)
-		}
+	b, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return
 	}
-	return path.Join(dirRel, name), size, nil
+	if err := os.WriteFile(filepath.Join(dirAbs, base+".post.json"), b, 0o644); err != nil {
+		r.log.Warn("写帖子元数据失败", "dir", dirAbs, "err", err)
+	}
 }
 
 // postIDFromURL 从帖子地址里取平台侧的 id（`…/status/123` → 123，`/p/ABC/` → ABC）。
@@ -559,30 +698,4 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// savedPhotoFiles 列出帖子目录里已经存好的图片文件名（按序号排序）。
-//
-// 只认「两位序号 + 图片后缀」这一种命名：`.part` 半成品、post.json、以及别的东西都不会被算进来。
-func savedPhotoFiles(dirAbs string) ([]string, error) {
-	entries, err := os.ReadDir(dirAbs)
-	if err != nil {
-		return nil, err
-	}
-	out := []string{}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if len(name) < 6 || name[0] < '0' || name[0] > '9' || name[1] < '0' || name[1] > '9' || name[2] != '.' {
-			continue
-		}
-		switch strings.ToLower(path.Ext(name)) {
-		case ".jpg", ".jpeg", ".png", ".webp", ".gif":
-			out = append(out, name)
-		}
-	}
-	sort.Strings(out)
-	return out, nil
 }

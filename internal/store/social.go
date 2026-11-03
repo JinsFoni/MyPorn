@@ -507,7 +507,7 @@ func NormalizeSocialURL(raw string) (platform, handle string, ok bool) {
 // 为什么不真删：`social_photos` 上有 `UNIQUE (platform, url)`，写入是 `INSERT OR IGNORE`——
 // 行真没了，下一轮同步（默认 6 小时一轮，也能手动点「同步」）会把这同一张图原样塞回来，
 // 用户看到的就是「删了又回来」。留一行 `hidden = 1` 撞唯一键，它就不会再回到墙上
-//（`ListMoments` 和账号的 photo_count 都只算 `hidden = 0`）。
+// （`ListMoments` 和账号的 photo_count 都只算 `hidden = 0`）。
 //
 // 已经存进本地库的文件不在这里动：那是媒体库里的资产，照片墙删图不该带走它。
 // 返回这张照片属于哪个账号，调用方好刷一下照片计数。
@@ -526,7 +526,116 @@ func (s *Store) HideSocialPhoto(id int64) (int64, error) {
 	return accountID, nil
 }
 
+// HideSocialPhotos 批量软删（照片墙上的多选删除）。返回真删掉几张、以及涉及哪些账号。
+//
+// 和单张的 HideSocialPhoto 同一套语义（`hidden = 1` 当墓碑，挡住同步重插），
+// 只是把 N 次 UPDATE 收进一个事务：50 张一起删不该是 50 个提交。
+func (s *Store) HideSocialPhotos(ids []int64) (int, []int64, error) {
+	if len(ids) == 0 {
+		return 0, nil, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, nil, err
+	}
+	defer tx.Rollback()
+	accounts := map[int64]bool{}
+	deleted := 0
+	for _, id := range ids {
+		var accountID int64
+		err := tx.QueryRow(`SELECT account_id FROM social_photos WHERE id = ?`, id).Scan(&accountID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		res, err := tx.Exec(`UPDATE social_photos SET hidden = 1 WHERE id = ? AND hidden = 0`, id)
+		if err != nil {
+			return 0, nil, err
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			deleted++
+		}
+		accounts[accountID] = true
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, nil, err
+	}
+	out := make([]int64, 0, len(accounts))
+	for id := range accounts {
+		out = append(out, id)
+	}
+	return deleted, out, nil
+}
+
+// PhotoSaved 回答「这张照片已经落到硬盘上了吗」。
+func (s *Store) PhotoSaved(photoID int64) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM social_photo_files WHERE photo_id = ?`, photoID).Scan(&n)
+	return n > 0, err
+}
+
+// ListUnsavedSocialPhotos 列出「墙上还在、但硬盘上还没有」的照片 id（accountID=0 = 全部博主）。
+//
+// 自动入库的自愈靠它：一次同步没抓新帖，不代表之前的图都下完了——上次可能磁盘满了、
+// 图床抽了、或者那一刻用户刚把图片库根目录配好。每轮按最新优先补一小批，慢慢就齐了。
+func (s *Store) ListUnsavedSocialPhotos(accountID int64, limit int) ([]int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	where := "ph.hidden = 0"
+	args := []any{}
+	if accountID > 0 {
+		where += " AND ph.account_id = ?"
+		args = append(args, accountID)
+	}
+	rows, err := s.db.Query(`SELECT ph.id FROM social_photos ph
+		WHERE `+where+`
+		  AND NOT EXISTS (SELECT 1 FROM social_photo_files f WHERE f.photo_id = ph.id)
+		ORDER BY COALESCE(ph.posted_at,'') DESC, ph.id DESC
+		LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// PostSavedPhotoPaths 返回一条帖子已经落盘的文件（相对路径，按序号排）。
+// 照片不再是「一条帖子一个目录」，所以 post.json 里的清单得从库里取，不能靠扫目录。
+func (s *Store) PostSavedPhotoPaths(postID int64) ([]string, error) {
+	rows, err := s.db.Query(`SELECT f.rel_path FROM social_photo_files f
+		JOIN social_photos ph ON ph.id = f.photo_id
+		WHERE ph.post_id = ?
+		ORDER BY ph.seq ASC`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // SavePhotoFile 记一条「这张照片已经存进某个库」的记录（已存在则更新体积）。
+//
+// libraryID 传 0 表示「设置里的图片库根目录」（不挂在任何视频库下，见 0014_photo_root.sql），
+// relPath 相对图片库根。
 func (s *Store) SavePhotoFile(photoID, libraryID int64, relPath string, size int64) error {
 	_, err := s.db.Exec(`INSERT INTO social_photo_files (photo_id, library_id, rel_path, size_bytes)
 		VALUES (?,?,?,?)

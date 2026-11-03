@@ -45,6 +45,11 @@ class LiveStore {
   momentsUnseen = $state(0);
   /** 有新照片进来就 +1，照片墙据此刷新 */
   momentsVersion = $state(0);
+  /**
+   * 已经落盘的照片 id。抓完就自动下载入库（2026-11-04），照片墙靠这个把「待存」
+   * 角标当场清掉——不重拉整条墙，免得把人弹回第一屏。
+   */
+  savedPhotoIds = $state<Set<number>>(new Set());
   /** YouTube：上次看过之后新入库的视频数（侧边栏角标） */
   ytUnseen = $state(0);
   /** 有新视频进来就 +1，YouTube 墙据此刷新 */
@@ -75,6 +80,14 @@ class LiveStore {
 
   bumpMoments(): void {
     this.momentsVersion += 1;
+  }
+
+  /** 服务端一批照片落盘完就报一次，这里记下来（刷新页面会重新拉，不需要持久化）。 */
+  markPhotosSaved(ids: number[]): void {
+    if (ids.length === 0) return;
+    const next = new Set(this.savedPhotoIds);
+    for (const id of ids) next.add(id);
+    this.savedPhotoIds = next;
   }
 
   setMomentsUnseen(n: number): void {

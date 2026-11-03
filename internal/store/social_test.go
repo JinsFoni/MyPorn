@@ -176,6 +176,130 @@ func TestHideSocialPhotoStaysHidden(t *testing.T) {
 	}
 }
 
+// 照片墙多选删除（2026-11-04）：批量软删、返回涉及哪些账号、幂等、未知 id 不算数。
+func TestHideSocialPhotosBatch(t *testing.T) {
+	st := newTestStore(t)
+	a, err := st.UpsertSocialAccount(&SocialAccount{Platform: "x", Handle: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.UpsertSocialAccount(&SocialAccount{Platform: "x", Handle: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted := time.Date(2026, 11, 4, 3, 0, 0, 0, time.UTC)
+	mk := func(acc *SocialAccount, id string) {
+		if _, err := st.InsertSocialPosts(acc.ID, "x", []SocialPostInput{{
+			PostID: id, URL: "https://x.com/" + acc.Handle + "/status/" + id, PostedAt: posted,
+			Photos: []SocialPhotoInput{
+				{URL: "https://pbs.twimg.com/media/" + id + "-1.jpg", Seq: 1},
+				{URL: "https://pbs.twimg.com/media/" + id + "-2.jpg", Seq: 2},
+			},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk(a, "100")
+	mk(b, "200")
+
+	wallOf := func(accID int64) int {
+		rows, _, err := st.ListMoments(MomentsQuery{AccountID: accID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(rows)
+	}
+	if wallOf(a.ID) != 2 || wallOf(b.ID) != 2 {
+		t.Fatalf("两边上墙前都该是 2 张：%d / %d", wallOf(a.ID), wallOf(b.ID))
+	}
+
+	rowsA, _, _ := st.ListMoments(MomentsQuery{AccountID: a.ID})
+	rowsB, _, _ := st.ListMoments(MomentsQuery{AccountID: b.ID})
+	// 三位 id：A 的两张 + B 的一张 + 一个不存在的
+	ids := []int64{rowsA[0].ID, rowsA[1].ID, rowsB[0].ID, 999999}
+	deleted, accounts, err := st.HideSocialPhotos(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 3 {
+		t.Errorf("应删掉 3 张（不存在的那个不算），得到 %d", deleted)
+	}
+	if len(accounts) != 2 {
+		t.Errorf("应报 2 个账号，得到 %v", accounts)
+	}
+	if wallOf(a.ID) != 0 {
+		t.Errorf("A 该清空，剩 %d 张", wallOf(a.ID))
+	}
+	if wallOf(b.ID) != 1 {
+		t.Errorf("B 该只剩 1 张，剩 %d 张", wallOf(b.ID))
+	}
+
+	// 幂等：再删一次同一批，一张也不该再多删（deleted 归 0），并且不报错。
+	again, _, err := st.HideSocialPhotos(ids)
+	if err != nil {
+		t.Fatalf("重复删不该报错: %v", err)
+	}
+	if again != 0 {
+		t.Errorf("重复删应删 0 张，得到 %d", again)
+	}
+	// 空入参安全。
+	if n, accs, err := st.HideSocialPhotos(nil); err != nil || n != 0 || accs != nil {
+		t.Errorf("空入参应无操作：%d %v %v", n, accs, err)
+	}
+}
+
+// 自动入库的自愈查询：只返回「墙上还在 + 硬盘上还没有」的，按新→旧，可按博主收窄。
+func TestListUnsavedSocialPhotos(t *testing.T) {
+	st := newTestStore(t)
+	acc, err := st.UpsertSocialAccount(&SocialAccount{Platform: "x", Handle: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := st.InsertSocialPosts(acc.ID, "x", []SocialPostInput{
+		{PostID: "1", URL: "https://x.com/u/status/1", PostedAt: older,
+			Photos: []SocialPhotoInput{{URL: "https://pbs.twimg.com/media/1.jpg", Seq: 1}}},
+		{PostID: "2", URL: "https://x.com/u/status/2", PostedAt: newer,
+			Photos: []SocialPhotoInput{{URL: "https://pbs.twimg.com/media/2.jpg", Seq: 1}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.ListUnsavedSocialPhotos(acc.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("两张都没落盘，应都算未存，得到 %v", got)
+	}
+
+	// 存掉新的那张，未存列表里就只剩老的；再按「全部博主」查也一致。
+	if err := st.SavePhotoFile(got[0], 0, "u/2026/11/2026-11-01_2_01.jpg", 123); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.ListUnsavedSocialPhotos(acc.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("落盘后应只剩 1 张未存，得到 %v", got)
+	}
+	all, err := st.ListUnsavedSocialPhotos(0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0] != got[0] {
+		t.Fatalf("accountID=0 应等于全部博主：%v vs %v", all, got)
+	}
+	// 藏起来的照片不再算未存（墙上没有了就别再下了）。
+	if _, _, err := st.HideSocialPhotos(got); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := st.ListUnsavedSocialPhotos(0, 10); len(left) != 0 {
+		t.Fatalf("软删后不该再有未存照片，得到 %v", left)
+	}
+}
+
 func TestListMomentsOrderAndCursor(t *testing.T) {
 	st := newTestStore(t)
 	acc, err := st.UpsertSocialAccount(&SocialAccount{Platform: "x", Handle: "mini"})

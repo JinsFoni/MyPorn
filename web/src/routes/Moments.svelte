@@ -3,7 +3,11 @@
    * 动态：订阅的 X / Instagram 博主的照片墙。
    *
    * 三件事：看照片（瀑布流 + 灯箱）、管博主（添加 / 启停 / 立即同步）、
-   * 存档（勾几张 → 存进本地库，走后台任务）。
+   * 删掉不要的（勾几张 → 删除）。
+   *
+   * 2026-11-04 用户要求：照片抓下来就**自动**下载进图片库（按 {名字}/{年}/{月} 分目录，
+   * 根目录在设置里填），墙上原来那个「多选 → 存进本地库」因此改成「多选 → 删除」——
+   * 存档不再需要人动手，多选只剩清理这一个用途。
    *
    * 页面顶部**没有标题**（2026-11-02 用户要求去掉左上角那个「动态」）：直接是博主头像条，
    * 和关注页 / B 站页 / YouTube 页同一套 `AvatarRail`——72px 圆头像、名字居中，点谁筛谁、再点一次取消。
@@ -26,7 +30,6 @@
   import { socialBrandOfPlatform } from '../lib/socialBrand';
   import type { RailItem } from '../lib/rail';
   import type {
-    Library,
     MomentAccount,
     MomentPhoto,
     MomentResolve,
@@ -50,11 +53,9 @@
   /** 刚被删掉的照片 id：交给 InfiniteList 立刻从版面上抹掉（换筛选时清空） */
   let droppedPhotos = $state<Set<number>>(new Set());
 
-  // ---- 选择与存档 ----
+  // ---- 选择与删除 ----
   let selection = $state<Set<number>>(new Set());
-  let libraries = $state<Library[]>([]);
-  let libraryId = $state<number>(0);
-  let saving = $state(false);
+  let deleting = $state(false);
 
   // ---- 灯箱 ----
   let lightboxAt = $state<number | null>(null);
@@ -194,69 +195,71 @@
     selection = next;
   }
 
-  async function openSave(): Promise<void> {
-    if (selectionCount === 0 || saving) return;
-    if (libraries.length === 0) {
-      try {
-        const res = await api.libraries();
-        libraries = res.items;
-        libraryId = res.items.find((l) => l.isDefault)?.id ?? res.items[0]?.id ?? 0;
-      } catch {
-        /* 下面提交时会再报错 */
-      }
-    }
-    saving = true;
+  /**
+   * 批量删掉选中的照片（底部操作条那个「删除」）。
+   *
+   * 服务端是软删：留一行 `hidden = 1` 当墓碑，所以「以后同步也不会再抓回来」是真的
+   * （`social_photos` 上 `UNIQUE (platform, url)` 会挡住重插）。硬盘上已经落到图片库里的
+   * 文件不动——那是用户的资产，删墙不等于删盘，确认框里得说清这一点。
+   */
+  async function deleteSelected(): Promise<void> {
+    if (selectionCount === 0 || deleting) return;
+    const count = selectionCount;
+    const ok = await confirmDialog.ask({
+      title: `从照片墙删掉这 ${count} 张？`,
+      body: '以后同步也不会再抓回来。已经下载到图片库里的文件不会被删除。',
+      confirmText: '删除',
+    });
+    if (!ok) return;
+    deleting = true;
+    const ids = [...selection];
     try {
-      const ids = [...selection];
-      const res = await api.saveMomentPhotos(ids, libraryId || undefined);
-      live.toast(`已开始保存 ${res.count} 张照片`, 'success');
-      selection = new Set();
+      const res = await api.deleteMomentPhotos(ids);
+      dropLocally(ids);
+      live.toast(res.deleted > 0 ? `已从照片墙删除 ${res.deleted} 张` : '这些照片已经不在墙上了', 'success');
     } catch (err) {
       live.toast(messageFor(err), 'error');
     } finally {
-      saving = false;
+      deleting = false;
     }
   }
 
-  async function saveOne(photo: MomentPhoto): Promise<void> {
-    try {
-      await api.saveMomentPhotos([photo.id], libraryId || undefined);
-      live.toast('已加入保存队列', 'success');
-    } catch (err) {
-      live.toast(messageFor(err), 'error');
+  /** 从版面上抹掉这些 id，并把它们从选择里摘掉（不重拉整条墙，免得把人弹回第一屏）。 */
+  function dropLocally(ids: number[]): void {
+    const dropped = new Set(droppedPhotos);
+    for (const id of ids) dropped.add(id);
+    droppedPhotos = dropped;
+    if (ids.some((id) => selection.has(id))) {
+      const next = new Set(selection);
+      for (const id of ids) next.delete(id);
+      selection = next;
     }
+    // 头像条上那位博主的「N 张」跟着变，重拉一次博主列表（几个账号，很便宜）
+    void loadAccounts();
   }
 
   /**
-   * 删掉一张照片（格子右下角那个垃圾桶）。
+   * 删掉一张照片（格子右下角的垃圾桶、灯箱里的「删除这张」）。
    *
-   * 服务端是软删：这张图留一行 `hidden = 1` 当墓碑，所以「以后同步也不会再抓回来」是真的
-   *（`social_photos` 上 `UNIQUE (platform, url)` 会挡住重插）。但已经存进本地库的文件不会删，
-   * 所以确认框里要写清楚「删的只是墙上这一张」，不然用户会以为硬盘上也清了。
+   * 和批量删除同一套语义（软删、不动硬盘上的文件），只是确认框写得更具体一点。
+   * `closeLightbox` 为 true 时删完顺手关掉灯箱——留着会停在一张已经不在墙上的图上。
    */
-  async function removePhoto(photo: MomentPhoto): Promise<void> {
+  async function removePhoto(photo: MomentPhoto, closeLightbox = false): Promise<void> {
     const ok = await confirmDialog.ask({
       title: '从照片墙删掉这张？',
-      body: '以后同步也不会再抓回来。已经存进本地库的文件不会被删除。',
+      body: '以后同步也不会再抓回来。已经下载到图片库里的文件不会被删除。',
       confirmText: '删除',
     });
     if (!ok) return;
     try {
-      await api.deleteMomentPhoto(photo.id);
+      await api.deleteMomentPhotos([photo.id]);
     } catch (err) {
       live.toast(messageFor(err), 'error');
       return;
     }
-    // 只把这张从版面上抹掉：不重拉整条墙，免得把人弹回第一屏
-    droppedPhotos = new Set(droppedPhotos).add(photo.id);
-    if (selection.has(photo.id)) {
-      const next = new Set(selection);
-      next.delete(photo.id);
-      selection = next;
-    }
+    if (closeLightbox) lightboxAt = null;
+    dropLocally([photo.id]);
     live.toast('已从照片墙删除', 'success');
-    // 头像条上那位博主的「N 张」跟着变，重拉一次博主列表（三个账号，很便宜）
-    void loadAccounts();
   }
 
   // ---- 灯箱键盘 ----
@@ -565,12 +568,15 @@
             </svg>
           </button>
 
-          {#if photo.saved}
+          <!-- 2026-11-04 起照片是自动下载入库的，所以「已存」成了常态、标出来只是噪音：
+               标反了——只有还没落盘的才亮一枚小角标。存量照片被一格一格补全的过程，
+               在这枚角标上直接看得见（下完刷新就没了）。 -->
+          {#if !photo.saved && !live.savedPhotoIds.has(photo.id)}
             <span
-              class="absolute left-1.5 top-1.5 rounded-full bg-ink/60 px-1.5 py-0.5 text-[0.625rem] text-fg/90"
-              title="已存进本地库"
+              class="absolute left-1.5 top-1.5 rounded-full bg-ink/55 px-1.5 py-0.5 text-[0.625rem] text-fg/75"
+              title="还没下载到图片库"
             >
-              已存
+              待存
             </span>
           {/if}
 
@@ -612,33 +618,24 @@
   {/if}
 </div>
 
-<!-- 选中操作条：固定在底部，有选中才出现 -->
+<!-- 选中操作条：固定在底部，有选中才出现。
+     2026-11-04 用户要求：多选从「存进本地库」改成「删除」——照片抓完就自动落盘，
+     多选剩下唯一的用途是把墙上不要的批量清掉。 -->
 {#if selectionCount > 0}
   <div
     class="fixed inset-x-0 bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-30 mx-auto flex w-fit max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-full bg-panel/95 px-3 py-2 text-meta shadow-lg backdrop-blur-xl lg:bottom-6"
   >
     <span class="pl-1 text-fg">已选 {selectionCount} 张</span>
-    {#if libraries.length > 1}
-      <select
-        bind:value={libraryId}
-        class="rounded-full border border-white/10 bg-raise px-2 py-1 text-meta text-fg outline-none"
-        aria-label="选择本地库"
-      >
-        {#each libraries as lib (lib.id)}
-          <option value={lib.id}>{lib.name}</option>
-        {/each}
-      </select>
-    {/if}
     <button type="button" onclick={() => (selection = new Set())} class="rounded-full px-2 py-1 text-dim hover:text-fg">
       取消
     </button>
     <button
       type="button"
-      onclick={() => void openSave()}
-      disabled={saving}
-      class="rounded-full bg-hi px-3 py-1 font-medium text-ink transition-opacity hover:opacity-90 disabled:opacity-50"
+      onclick={() => void deleteSelected()}
+      disabled={deleting}
+      class="rounded-full bg-brick px-3 py-1 font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
     >
-      {saving ? '提交中…' : '存进本地库'}
+      {deleting ? '删除中…' : '删除'}
     </button>
   </div>
 {/if}
@@ -707,10 +704,10 @@
         {/if}
         <button
           type="button"
-          onclick={() => void saveOne(current)}
-          class="rounded-full bg-hi px-3 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
+          onclick={() => void removePhoto(current, true)}
+          class="rounded-full bg-raise px-3 py-1.5 text-meta font-medium text-fg transition-colors hover:bg-brick hover:text-white"
         >
-          {current.saved ? '再存一次' : '存进本地库'}
+          删除这张
         </button>
       </div>
     </div>

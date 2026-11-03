@@ -7,6 +7,7 @@ import type {
   PhotoNewEvent,
   SocialProgressEvent,
   SyncProgress,
+  PhotoSavedEvent,
   VideoNewEvent,
   YtNewEvent,
 } from './types';
@@ -16,6 +17,7 @@ export interface LiveEventMap {
   'sync.progress': SyncProgress;
   'video.new': VideoNewEvent;
   'photo.new': PhotoNewEvent;
+  'photo.saved': PhotoSavedEvent;
   'social.progress': SocialProgressEvent;
   'yt.new': YtNewEvent;
   ping: Record<string, never>;
@@ -46,6 +48,18 @@ function parseData(raw: string): unknown {
 /**
  * 建立实时事件连接。返回清理函数（组件卸载时调用）。
  */
+/** 服务端可能推的所有事件名（`bind` 对没有处理函数的名字是空操作，所以列全无害）。 */
+const EVENTS = [
+  'job.updated',
+  'sync.progress',
+  'video.new',
+  'photo.new',
+  'photo.saved',
+  'social.progress',
+  'yt.new',
+  'ping',
+] as const satisfies readonly (keyof LiveEventMap)[];
+
 export function connectEvents(handlers: LiveHandlers, options: LiveOptions = {}): () => void {
   const url = options.url ?? '/api/events';
   let source: EventSource | null = null;
@@ -114,10 +128,10 @@ export function connectEvents(handlers: LiveHandlers, options: LiveOptions = {})
           scheduleReconnect(); // 探测本身失败（断网）仍按原逻辑重连
         });
     });
-    bind(src, 'job.updated');
-    bind(src, 'sync.progress');
-    bind(src, 'video.new');
-    bind(src, 'ping');
+    // 列全：以前这里是手写的 4 个名字，`photo.new` / `social.progress` / `yt.new` 三个
+    // 一直在 LiveEventMap 里躺着却没被 bind——服务端发了、AppShell 也写了处理函数，
+    // 就是永远不触发（不报错、不刷新，查起来极费劲）。新增事件记得往这张表里加。
+    for (const name of EVENTS) bind(src, name);
   };
 
   const onVisibility = (): void => {
