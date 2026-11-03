@@ -5,8 +5,9 @@
   /**
    * 头像条：横向滚动的圆头像＝**过滤器**（关注页 / 动态页 / B 站页 / YouTube 页共用一套）。
    *
-   * 尺寸（2026-11-02 按用户要求「头像改小一点」从 72px 缩到 56px）：**56px 圆头像**
-   * （`h-14 w-14`）+ 80px 宽的姓名（`w-20`，`text-meta` 12px，**单行截断**），**不显示任何计数**；
+   * 尺寸（2026-11-02 按用户要求「头像改小一点」72 → 56px；2026-11-04 又说「再调大一点点」，56 → **64px**）：
+   * **64px 圆头像**（`h-16 w-16`，取 128px 的图正好 2x）+ 80px 宽的姓名（`w-20`，`text-meta` 12px，**单行截断**），
+   * **不显示任何计数**；
    * 点头像＝把 `id` 交回去，由页面写地址栏；选中态是头像外 2px 白环 + 姓名 `font-medium`，
    * 再点同一个取消（这是**唯一**的取消入口：下面那行筛选行不再有带 ✕ 的名字胶囊）。
    *
@@ -86,7 +87,7 @@
           >
             <span class="relative block">
               <span
-                class="block h-14 w-14 overflow-hidden rounded-full bg-panel {selected === item.id
+                class="block h-16 w-16 overflow-hidden rounded-full bg-panel {selected === item.id
                   ? 'ring-2 ring-fg ring-offset-2 ring-offset-ink'
                   : ''}"
               >
@@ -132,15 +133,15 @@
     </ul>
   </nav>
 {:else if loading}
-  <!-- 占位行跟真身用同一套外框（等量负边距 + 内边距 + 横向滚动）：6 颗 56px 圆
-       在 390 宽的手机上装不下（6×56 + 5×12 = 396 > 366 可用），不加滚动会把整页顶出横向滚动条。 -->
+  <!-- 占位行跟真身用同一套外框（等量负边距 + 内边距 + 横向滚动）：6 颗 64px 圆
+       在 390 宽的手机上装不下（6×64 + 5×12 = 444 > 366 可用），不加滚动会把整页顶出横向滚动条。 -->
   <div class="mb-4 lg:mb-5" aria-hidden="true">
     <div
       class="no-scrollbar -mx-3 -mt-1.5 flex gap-3 overflow-x-auto px-3 pb-1 pt-1.5 sm:-mx-4 sm:px-4 lg:-mx-1.5 lg:px-1.5"
     >
       {#each Array.from({ length: 6 }, (_, i) => i) as i (i)}
         <div class="flex w-20 shrink-0 flex-col items-start gap-1">
-          <div class="h-14 w-14 rounded-full bg-panel"></div>
+          <div class="h-16 w-16 rounded-full bg-panel"></div>
           <div class="h-3 w-12 rounded-full bg-panel"></div>
         </div>
       {/each}
