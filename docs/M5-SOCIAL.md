@@ -169,32 +169,40 @@ type Adapter interface {
 - Cookie 升级路径：配 `auth_token` + `ct0` 后走 `i/api/graphql/{queryId}/UserMedia`，才有真游标。
   **queryId 随前端发版变化**，失效时明确报「需要更新 X 解析版本」，绝不静默返回空列表。
 
-### 5.2 Instagram（Cookie 为主、免登录兜底，见 §15.2 / §15.11）
+### 5.2 Instagram（走网页版 GraphQL，见 §15.14）
 
-~~免登录在这个站已经彻底没有路径~~ —— 这是 2026-10-28 的结论，**2026-11-04 复测已不成立**：
-`web_profile_info` 免登录能拿到最新 12 条（翻页仍然要求登录），详见 §15.11。
-下面是 10-28 当天各条路子的实测记录，留作对照：
+**现在的主路径是网页版自己在用的那个 GraphQL 端点**，不是 `web_profile_info`：
 
-| 试过的路子 | 实测结果 |
-|---|---|
-| `i.instagram.com/api/v1/users/web_profile_info/?username=…`（带 `x-ig-app-id`、移动端 UA） | `401 {"require_login":true}` |
-| `www.instagram.com/api/v1/users/web_profile_info/`（同一套头 + Referer） | `401 require_login` |
-| `…/api/v1/users/{user}/usernameinfo/` | `429 {"spam":true}` |
-| `www.instagram.com/{user}/?__a=1&__d=dis` | `201`，空响应体 |
-| 主页 HTML（找首屏 JSON） | `302` 跳登录页，HTML 里 0 处 `cdninstagram` |
+```
+1) GET  https://www.instagram.com/{handle}/          只为从 HTML 里抠 lsd / fb_dtsg
+2) POST https://www.instagram.com/api/graphql        doc_id=29600383452901789（PolarisProfilePostsQuery）
+   表单：doc_id / variables / server_timestamps / fb_api_caller_class / fb_api_req_friendly_name
+        / lsd / fb_dtsg / jazoest("2"+fb_dtsg 字符码求和)
+   头：  x-ig-app-id: 936619743392459 / x-fb-lsd / x-csrftoken(cookie 里的值) / x-fb-friendly-name
+        / Origin / **Referer: https://www.instagram.com/{handle}/** / **Sec-Fetch-Site|Mode|Dest**
+3) 之后每页只换 variables.after = 上一页 page_info.end_cursor
+```
 
-所以可靠路径仍然只有一条：用户在设置里贴 `sessionid` + `csrftoken` + `ds_user_id`（加密落库），
-然后打 `web_profile_info`（或 `api/v1/feed/user/{user_id}/`）。免登录在 11-04 复测里能拿到第一页，
-但翻页就 401/403 且状态随 IP 灰度浮动，只能当兜底（§15.11）：
+为什么换：2026-11-04 实测 `web_profile_info` 已经**全线 429**（带 Cookie、不带 Cookie、`i.` 与 `www.`
+两个主机都一样，回的是「找不到页面」的 HTML），而上面这条链路同一天同一出口 6/6 全通，
+一页 33 条（服务端上限，`count=50` 也只回 33），155 条全量 5 次请求 9.19 s（含 4×1.2 s 间隔）。
+事实细节与踩坑记录见 §15.14。
 
-- 取 `data.user.edge_owner_to_timeline_media.edges[]`：`shortcode`、`display_url`（1080 长边）、
-  `thumbnail_src`、`dimensions{width,height}`、`taken_at_timestamp`、`edge_media_to_caption`。
-  carousel 走 `edge_sidecar_to_children`，每个 child 都收。
-- 分页：`page_info.end_cursor` → 下次带 `max_id`，能真翻到 100 帖。
-- 图片 CDN 是 `*.cdninstagram.com` / `*.fbcdn.net`，要补进 `platform.ImageHostPlatform` 与
+- 取 `data.xdt_api__v1__feed__user_timeline_graphql_connection.edges[].node`：`code`（短码）、
+  `caption.text`、`taken_at`、`like_count`、`comment_count`、`carousel_media[]`、
+  `image_versions2.candidates[]`（**从大到小**，单图帖第一档就是 3072×4096 原图）、
+  `video_versions`（非空即视频，照片墙只放静态图，跳过）、`user{full_name,profile_pic_url,hd_profile_pic_url_info}`。
+- 资料也走这条：`count=1` 的那一页 `edges[].node.user` 里就有 `pk`/`full_name`/头像，
+  一次请求搞定。`PolarisProfilePageContentQuery` 只认数字 id（传 username 直接 1675012），
+  而 handle→id 没有免费入口（主页 HTML 里 0 处 pk），所以不用它。
+- 游标带前缀 `gql:{end_cursor}`；库里已有的老断点 `{userID}|{maxID}` 仍按旧路径跑完。
+- 降级：GraphQL 报 stale_parser（`doc_id` 过期 / 主页抠不到令牌）时才回退 `web_profile_info`，
+  两边都失败就把两边的真实原因一起写进错误里。
+- 图片 CDN 是 `*.cdninstagram.com` / `*.fbcdn.net`，已挂在 `platform.ImageHostPlatform` 与
   `imgcache.refererOverrides`（Referer 用 `https://www.instagram.com/`）。
-  11-04 复测：带 `Referer: https://www.instagram.com/` 直接 200（1080×1920 JPEG，113 KB，0.61 s）。
-- IG 对 IP 的评分比 X 严（本次已吃到 `429 spam`），间隔按 3s 起，Cookie 失效要给出明确提示而不是空列表。
+  实测 `/api/img` 代理 3072×4096 原图 667,900 B / 0.67 s，不降质。
+- Cookie 仍然必需：同样的 GraphQL 请求不带登录态直接回
+  `{"message":"Rate limit exceeded","code":1675004}`；带上就能翻完 155 条。间隔按 3 s 起。
 
 ### 5.3 凭证
 
@@ -512,7 +520,7 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
 |---|---|
 | `internal/social/social.go` | `Adapter` 接口、`Error`（`needs_auth` / `rate_limited` / `stale_parser` / `not_found` / `upstream`）、`Throttle`（串行 + 间隔 + 冷却）、`NormalizeHandle`、`Registry` |
 | `internal/social/xcom/` | X 免登录抓取：时间线 widget（历史）+ 主页 HTML 发现新帖（§15.10）+ 单帖 `tweet-result`（详情）、限流冷却、fixture 单测 |
-| `internal/social/igram/` | Instagram Cookie 抓取（`web_profile_info` 首屏 + `feed/user` 翻页）、carousel 拆图、Cookie 归一化（**Netscape cookies.txt / Cookie 头 / JSON 三种写法**）、fixture 单测 |
+| `internal/social/igram/` | Instagram Cookie 抓取：`graphql.go` 是主路径（主页抠 `lsd`/`fb_dtsg` → `POST /api/graphql` + doc_id，游标 `gql:…`），`igram.go` 留 `web_profile_info` / `feed/user` 作降级；carousel 拆图、Cookie 归一化（**Netscape cookies.txt / Cookie 头 / JSON 三种写法**）、fixture 单测 + `LIVE=1` 真实网络冒烟 |
 | `internal/store/social.go` + `migrations/0007_m5_social.sql` | 四张表与全部读写、照片墙 keyset 游标、计数、URL 反查艺人 |
 | `internal/jobs/social.go` | `social_sync`（每轮最多 5 页/账号，遇限流整轮停）/ `social_save`（下载入库 + `post.json`） |
 | `internal/httpapi/handlers_moments.go` | B1–B11 全部端点 + `writeSocialErr`（错误码 → 状态码的唯一出口） |
@@ -529,7 +537,8 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
 |---|---|
 | `internal/store/social_test.go` | 账号 upsert 摘要（不覆盖空字段）、帖子去重、照片墙顺序与游标、URL 反查艺人 + 按艺人过滤、删号级联 |
 | `internal/social/xcom/xcom_test.go` | 正常时间线、无 `__NEXT_DATA__`、`hasResults:false`、**0 条帖子必须报错（`not_found` / `stale_parser`）**、**主页 HTML 发现的新帖进结果且按时间倒序**、**主页被登录墙挡住时退回时间线**、token、真限流、**过期 `remaining:0` 头** |
-| `internal/social/igram/igram_test.go` | 首屏/第二页解析、carousel 拆图、Cookie 解析、无 Cookie → `needs_auth`、401 / 429 |
+| `internal/social/igram/igram_test.go` | 首屏/第二页解析、carousel 拆图、Cookie 解析、无 Cookie → `needs_auth`、401 / 429、GraphQL 断掉时回退 |
+| `internal/social/igram/graphql_test.go` | GraphQL 首屏/翻页（`after` 带上）、资料走 `node.user`、**少 `Referer`/`Sec-Fetch-*` 时被降级成网页壳 → 换令牌重试一次再报 blocked**、`1675004` 限流进冷却、`1675012` 回退旧接口、两边都失败时错误里写清两边原因、`jazoest` 对答案、令牌 TTL、**部分字段失败的响应当成功** |
 | `internal/imgcache/evict_test.go` | 超限时从最旧删到 90%、未设上限/未超限时不动、空目录 |
 | `internal/httpapi/social_err_test.go` | 五种 `social.Error` → 状态码/错误码映射、`rate_limited` 带 `details.resetAt`、超时不漏 Go 原始错误 |
 
@@ -599,6 +608,9 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
   小号试一条，确认能出图再挂大号。
 
 ### 15.11 Instagram 复测（2026-11-04）：免登录第一页又通了，但只能当机会主义路径
+
+> **已被 §15.14 取代**：当天稍后复测，`web_profile_info` 连第一页都 429 了，
+> 主页改成走网页版 GraphQL 端点（能翻完 155 条）。这一节保留作对照。
 
 §15.7「全线 401」的结论今天在本机复跑**不成立**：同一个 `web_profile_info` 返回了完整 JSON。
 出口 IP `35.74.232.211`（`curl https://api.ipify.org`），请求全部无 Cookie、无代理设置。
@@ -686,3 +698,72 @@ curl -s -H 'x-ig-app-id: 936619743392459' \
 顺手量了签名寿命：`display_url` 里的 `oe` 参数（十六进制 unix 时间）解出来是
 `2026-11-08 10:49:28 +08:00`，相对请求时刻 **105.5 小时 ≈ 4.4 天**。
 所以「同步时就把图落一份磁盘缓存」不是优化项而是必需项——等用户四天后再翻到那张图，签名早就过期了。
+
+### 15.14 Instagram 改用网页版 GraphQL（2026-11-04）：155 条全量通了
+
+§15.11 里「免登录能拿第一页、翻页死」的结论在今天连第一页都不成立了，
+但**网页版自己用的那条 GraphQL 端点**一直通。这条链路现在是 `internal/social/igram` 的主路径，
+`web_profile_info` 退成降级。下面全是本机直连（无代理）、用同一份用户 Cookie、
+纯 Go `net/http`（不起浏览器）量出来的。
+
+**旧路子当天已死**（这是换路的直接原因）：
+
+| 请求 | 结果 |
+|---|---|
+| `GET i.instagram.com/api/v1/users/web_profile_info/?username=kaedekaren0825`（带 Cookie） | `429` + 「Page Not Found」HTML |
+| 同上，`www.` 主机 / 不带 Cookie / `i.` 主机不带 Cookie | 三组全部 `429` + 同一张 HTML |
+| `GET i.instagram.com/api/v1/feed/user/{id}/username/` | `404` |
+| `GET i.instagram.com/api/v1/accounts/current_user/` | `302` |
+
+**新路子**（`POST https://www.instagram.com/api/graphql`）：
+
+| 指标 | 实测 |
+|---|---|
+| 全量帖子 | **155 条 / 5 次请求 / 9.19 s**（含 4×1.2 s 配合间隔，净 ~4.4 s），约 10.4 MB |
+| 一页条数 | **33**（传 `count=50` 也只回 33 个 edge，服务端硬上限） |
+| 博主资料 | `@kaedekaren0825` / 楓カレン，`is_verified=true`、`is_private=false`、667,632 粉丝、47 关注、155 帖；bio 为空，外链 `https://x.com/honmononokaren?s=21` |
+| 单帖字段 | 103 个（含 `code`/`pk`/`caption.text`/`taken_at`/`like_count`/`comment_count`/`carousel_media`/`image_versions2`/`video_versions`/`video_dash_manifest`/`user`） |
+| 内容构成 | carousel 112 帖、单图 40 帖、Reel 3 帖 |
+| 应用内实测 | 加博主 3.38 s（含 3 s 间隔）；全量回填 155 帖 / 737 张照片 / 约 31 s；再同步一次「第 1 页，新增 0 张照片」5 s 收工（`HasSocialPost` 短路） |
+| 图片（3072×4096） | 直连 667,900 B / 0.69 s；走 `/api/img` 代理 667,900 B / 0.67 s（不降质） |
+| 视频（720×1280 h264+aac） | 9.03 s，Range 请求 206 正常 |
+
+**四件不踩就做不成的事**（代码注释里也写了，这里给出证据）：
+
+1. **`Referer` + `Sec-Fetch-Site|Mode|Dest` 是硬要求。** 缺了它们，`POST /api/graphql` 回
+   `200` + **513 KB 的网页壳 HTML**，一行数据都没有——看起来像「解析失败」，其实是请求被降级。
+   实测：只带 `content-type/x-ig-app-id/x-fb-lsd/x-csrftoken/x-fb-friendly-name` → 网页壳 ×3；
+   补上 `Referer: https://www.instagram.com/{handle}/` 与三个 `Sec-Fetch-*` → 正常 JSON。
+   所以适配器里把「拿到 HTML」当成独立信号处理：换一对令牌重试一次，两次都是网页壳才报 blocked。
+2. **`lsd` / `fb_dtsg` 只能从页面 HTML 现拿**，`jazoest = "2" + fb_dtsg 字符码之和`
+   （本机算 26448，与 IG 页面自己写的 qm 参数逐位一致）。拿空 `lsd` 去 POST 只会拿到网页壳。
+3. **`variables.data` 里那 4 个布尔值是必填**：`include_reel_media_seen_timestamp` /
+   `include_relationship_info` / `latest_besties_reel_media` / `latest_reel_media`。
+   只传 `{"count":N}` 时首页能出来，**带 `after` 翻页立刻回 `field_exception`**（实测困惑了半天）。
+   另外 `variables` 里还有 5 个 `__relay_internal__pv__…relayprovider`，缺一个就是
+   `missing_required_variable_value`（code `1675012`），文案长得像服务端抽风。
+4. **GraphQL 会「部分成功」**：`data` 整页齐全，`errors[]` 里却挂着每个被 geotag 节点的
+   `edges[i].node.location.profile_pic_url` 的 `field_exception`（`severity: ERROR`）。
+   判定标准必须是「`data` 里有没有连接」，不是「errors 是否为空」——IG 自己的前端也是把
+   坏字段置空继续渲染。第一版按「有 errors 就失败」写，结果每翻到第二页就停住。
+
+**其他实测事实**：
+
+- **Cookie 身份与轮换**：这份 Cookie 属于 `@jinsfoni`（`ds_user_id=71414660670`，fbid
+  `17841471420116832`）；抓取过程中 IG 轮换过 `sessionid` 与 `rur`，**轮换前后两个值都能用**。
+- **匿名不等于不能用**：同一份请求去掉登录态，资料查询还回数据（但 `posts=0`、`following=42`），
+  帖子查询直接 `{"message":"Rate limit exceeded","code":1675004}`。所以 `NeedsCookie` 保持 true。
+- **curl 复刻同一个请求体反而不通**：三次回 `error:1357054`、一次 429，参数与头逐字节相同，
+  换成 Go 的 `net/http` 就连通 5 次。怀疑是 TLS/HTTP2 指纹（没有进一步隔离验证，先记作不确定）。
+  适配器里把 `1357054` 映射成 blocked，并明确写「换出口 IP/代理再试，别连着重试」。
+- **`doc_id` 会随发版变**：现在是 `29600383452901789`（`PolarisProfilePostsQuery`），
+  变了就报 stale_parser 并降级到 `web_profile_info`。它是从浏览器发出去的请求体里读出来的，
+  不是猜的；顺带确认 `PolarisProfilePageContentQuery`（`40158838120366999`）只认数字 id。
+- 图片签名 `oe` 寿命仍然是 ≈4.4 天（§15.13），磁盘缓存依旧是必需项。
+
+复跑：
+
+```bash
+LIVE=1 LIVE_IG_COOKIE=$PWD/.tmp/ig/cookies.txt LIVE_IG_HANDLE=kaedekaren0825 \
+  go test ./internal/social/igram -run TestLiveInstagram -v
+```

@@ -1,20 +1,24 @@
 // Package igram 抓 Instagram 博主的帖子照片。
 //
-// **Cookie 优先**：2026-10-28 复测里免登录是全线 401（docs/M5-SOCIAL.md §15.2 的表），
-// 但 2026-11-04 复测同一个 web_profile_info 又免登录 200 了：能拿到最新 12 条，
-// 只有翻页（feed/user/?max_id= → 403）和 GraphQL 老入口（query_id/query_hash → 401 require_login）
-// 还需要登录，属于 IG 自己的 igweb_rollout 灰度按 IP 浮动（§15.11 有逐条实测）。
-// 所以 Cookie 仍是必需：历史翻页只有带 sessionid 才通；免登录兜底（只抓最新 12 条）
-// 还没实现，NeedsCookie 暂时保持 true。拿不到 Cookie 明确报 needs_auth，绝不静默返回空列表。
+// **主路径是网页版的 GraphQL 端点**（`POST www.instagram.com/api/graphql` + doc_id 持久化查询），
+// 细节与实测数字写在 graphql.go 的文件头。旧的两条 REST 路径（`web_profile_info`、
+// `feed/user/{id}/?max_id=`）留着当降级：2026-11-04 实测它们已经全线 429（带 Cookie、
+// 不带 Cookie、`i.` 与 `www.` 两个主机一样，返回的是「找不到页面」的 HTML），但 IG 的
+// `igweb_rollout` 灰度按 IP 浮动，同一天别的 IP 上曾经 200 过（docs/M5-SOCIAL.md §15.11），
+// 所以 GraphQL 一旦因为 doc_id 过期报 stale_parser，就回退到 web_profile_info 再试一次。
 //
-// 两条请求：
-//  1. 第一页（顺带把博主资料取回来）：
-//     GET https://i.instagram.com/api/v1/users/web_profile_info/?username={handle}
-//  2. 后续页：
-//     GET https://i.instagram.com/api/v1/feed/user/{user_id}/?max_id={cursor}&count=12
+// Cookie 仍然是必需项：同样的 GraphQL 请求不带登录态直接回
+// `{"message":"Rate limit exceeded","code":1675004}`（匿名额度），带上就能翻完 155 条。
+// 拿不到 Cookie 明确报 needs_auth，绝不静默返回空列表。
 //
-// 已知限制：IG 的图片地址是**带签名的**，几小时后失效。抓过的图会进服务端磁盘缓存
-// （之后一直可用），但从没被抓过的老图会在签名过期后取不到 —— 界面上表现为占位图。
+// 三种请求（按顺序出现）：
+//  1. GET https://www.instagram.com/{handle}/     —— 只为拿 lsd / fb_dtsg 这对令牌
+//  2. POST https://www.instagram.com/api/graphql  —— doc_id=PolarisProfilePostsQuery，首页 33 条
+//  3. 同上，variables.after={上一页 end_cursor}   —— 后续页
+//
+// 已知限制：IG 的图片地址是**带签名的**（`oe` 参数实测 105.5 小时 ≈ 4.4 天），过期就取不到。
+// 抓过的图会进服务端磁盘缓存（之后一直可用），但从没被抓过的老图会在签名过期后取不到
+// —— 界面上表现为占位图。
 package igram
 
 import (
@@ -27,6 +31,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/JinsFoni/MyPorn/internal/social"
@@ -52,8 +57,14 @@ type Adapter struct {
 	client   *http.Client
 	throttle *social.Throttle
 	setting  social.SettingFunc
-	base     string
-	now      func() time.Time
+	// base 是旧 REST 路径的主机（降级用）；www 是网页版主机（GraphQL 与令牌）。
+	base string
+	www  string
+	now  func() time.Time
+	// tok 是 lsd/fb_dtsg 的短期缓存：一次同步的 3~7 个请求复用同一对，
+	// 跨轮次则重新抓（令牌跟着页面加载走，久放会被轮换掉）。
+	mu  sync.Mutex
+	tok tokenCache
 }
 
 func New(client *http.Client, setting social.SettingFunc) *Adapter {
@@ -65,6 +76,7 @@ func New(client *http.Client, setting social.SettingFunc) *Adapter {
 		throttle: social.NewThrottle(3 * time.Second),
 		setting:  setting,
 		base:     apiBase,
+		www:      wwwBase,
 		now:      time.Now,
 	}
 }
@@ -457,7 +469,27 @@ type feedResp struct {
 // ---- social.Adapter ----
 
 // GetProfile 抓博主资料。
+//
+// 先走 GraphQL（一次 count=1 的帖子查询就把 `node.user` 带回来了）；
+// 只有 GraphQL 报 stale_parser（doc_id / 令牌这一层变了）才回退到旧的 web_profile_info。
 func (a *Adapter) GetProfile(ctx context.Context, handle string) (*social.Account, error) {
+	acct, err := a.gqlProfile(ctx, handle)
+	if err == nil {
+		return acct, nil
+	}
+	if social.KindOf(err) != social.KindStaleParser {
+		return nil, err
+	}
+	acct, restErr := a.restProfile(ctx, handle)
+	if restErr == nil {
+		return acct, nil
+	}
+	return nil, social.StaleParser(fmt.Sprintf(
+		"Instagram 两条路都不通：GraphQL（doc_id=%s）%v；旧接口 web_profile_info %v", gqlDocID, err, restErr))
+}
+
+// restProfile 是旧的 web_profile_info 路径，只在 GraphQL 断掉时兜底。
+func (a *Adapter) restProfile(ctx context.Context, handle string) (*social.Account, error) {
 	var pr profileResp
 	if err := a.get(ctx, "/users/web_profile_info/?username="+url.QueryEscape(handle), &pr); err != nil {
 		return nil, err
@@ -482,8 +514,42 @@ func (a *Adapter) GetProfile(ctx context.Context, handle string) (*social.Accoun
 	}, nil
 }
 
-// ListPosts 抓一页帖子。cursor 形如 `{userID}|{nextMaxID}`，空表示第一页。
+// ListPosts 抓一页帖子。
+//
+// 游标有两种写法，按前缀分流（库里已有的老断点必须还能接着跑）：
+//   - `gql:{end_cursor}`：GraphQL 路径（当前主路径）
+//   - `{userID}|{nextMaxID}`：旧的 feed/user 路径，只在 GraphQL 断掉时才会产生
 func (a *Adapter) ListPosts(ctx context.Context, handle, cursor string) (*social.Page, error) {
+	if strings.HasPrefix(cursor, gqlCursorPrefix) {
+		p, err := a.gqlPosts(ctx, handle, strings.TrimPrefix(cursor, gqlCursorPrefix))
+		if err != nil {
+			return nil, err
+		}
+		return &social.Page{Posts: p.Posts, NextCursor: p.NextCursor}, nil
+	}
+	if cursor != "" {
+		// 老断点：继续用 REST 翻，翻完自然会回到 GraphQL（NextCursor 为空即结束）。
+		return a.restPosts(ctx, handle, cursor)
+	}
+
+	p, err := a.gqlPosts(ctx, handle, "")
+	if err == nil {
+		return &social.Page{Posts: p.Posts, NextCursor: p.NextCursor}, nil
+	}
+	if social.KindOf(err) != social.KindStaleParser {
+		return nil, err
+	}
+	page, restErr := a.restPosts(ctx, handle, "")
+	if restErr == nil {
+		return page, nil
+	}
+	return nil, social.StaleParser(fmt.Sprintf(
+		"Instagram 两条路都不通：GraphQL（doc_id=%s）%v；旧接口 web_profile_info %v", gqlDocID, err, restErr))
+}
+
+// restPosts 是旧的 web_profile_info / feed/user 路径，只在 GraphQL 断掉时兜底。
+// cursor 为空表示第一页；否则形如 `{userID}|{nextMaxID}`。
+func (a *Adapter) restPosts(ctx context.Context, handle, cursor string) (*social.Page, error) {
 	if cursor == "" {
 		// 第一页：顺带拿到 user id 与翻页游标。
 		var pr profileResp
@@ -609,18 +675,7 @@ type candidate struct {
 
 // bestCandidates 取一档可用尺寸：一般按从大到小给，取第一个带 url 且宽 > 0 的。
 func bestCandidates(n node) (candidate, bool) {
-	cands := n.ImageVersions.Candidates
-	for _, c := range cands {
-		if c.URL != "" && c.Width > 0 {
-			return c, true
-		}
-	}
-	for _, c := range cands {
-		if c.URL != "" {
-			return c, true
-		}
-	}
-	return candidate{}, false
+	return pickBest(n.ImageVersions.Candidates)
 }
 
 func caption(n node) string {

@@ -57,6 +57,7 @@ func newTestAdapter(t *testing.T, h http.HandlerFunc, cookie string) *Adapter {
 		return ""
 	})
 	a.base = srv.URL
+	a.www = srv.URL
 	a.throttle = social.NewThrottle(time.Millisecond)
 	return a
 }
@@ -95,10 +96,16 @@ func TestNeedsAuthWithoutCookie(t *testing.T) {
 	}
 }
 
-func TestListPostsFirstPage(t *testing.T) {
+// GraphQL 那条路断掉（主页里抠不到 lsd/fb_dtsg）时，第一页必须回退到 web_profile_info。
+func TestListPostsFirstPageFallsBackToREST(t *testing.T) {
 	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		// 主页：200 但没有任何令牌 —— 网页版改版/登录墙的样子。
+		if r.URL.Path == "/mini/" {
+			w.Write([]byte(`<html><body>没有令牌</body></html>`))
+			return
+		}
 		if !strings.Contains(r.URL.Path, "/users/web_profile_info/") {
-			t.Errorf("第一页应该打 web_profile_info，实际 %s", r.URL.Path)
+			t.Errorf("回退路径应该打 web_profile_info，实际 %s", r.URL.Path)
 		}
 		if q := r.URL.Query().Get("username"); q != "mini" {
 			t.Errorf("username 参数 = %q", q)

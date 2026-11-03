@@ -174,12 +174,15 @@ make backend           # 先编译
 | X 条数 | 固定 20 条、**没有游标**，翻页无从谈起；`?name=orig` 拿原图 | 想拿更多只能上 Cookie/GraphQL（本轮没做） |
 | X 限流 | 约 30 次/15 分钟（按 IP）。`remaining:0` 但 `reset` 已过期是缓存的旧头，不能当限流 | 冷却到点仍 429 → 可能配额被同 IP 的其它工具占满 |
 | X 转推 | 原帖在 `retweeted_status` 里，按原帖 id 去重 | 同一张照片入库两次 → 去重键失效 |
-| IG 免登录 | **已完全关闭**（`401 require_login` / `429 spam`），必须 Cookie（`sessionid` / `csrftoken` / `ds_user_id`） | 探测报 409 `needs_auth` 属正常 |
-| IG 429 二义 | `api/v1/users/web_profile_info` 对**有效 Cookie**回 429 + HTML 拦截页（`<title>Page Not Found</title>`，含 `logged-in` class）；对无 Cookie 请求回 JSON 401 `require_login`。**2026-10-28 实测**：换 UA / Origin / Sec-Fetch / priority 全一样，说明是会话或 IP 被标记 | 若某天拦截页消失、又能拿到 JSON，说明 IG 放松了该 IP；届时 `blocked` 分支自然不再触发，不必改代码 |
+| IG 免登录 | **GraphQL 的帖子查询需要登录**：同一份请求去掉 Cookie 直接回 `{"message":"Rate limit exceeded","code":1675004}`（资料查询还能回，但 `posts=0`）。必须 Cookie（`sessionid` / `csrftoken` / `ds_user_id`） | 探测报 409 `needs_auth` 属正常 |
+| IG 429 二义 | `api/v1/users/web_profile_info` 对**有效 Cookie**回 429 + HTML 拦截页（`<title>Page Not Found</title>`，含 `logged-in` class）；对无 Cookie 请求回 JSON 401 `require_login`。**2026-10-28 实测**：换 UA / Origin / Sec-Fetch / priority 全一样，说明是会话或 IP 被标记。**2026-11-04：这条路对任何 Cookie 都 429 了**，主页已改走 GraphQL（见下两行） | 若某天拦截页消失、又能拿到 JSON，说明 IG 放松了该 IP；届时回退分支自然不再触发，不必改代码 |
+| 🆕 IG 主路径 | `POST https://www.instagram.com/api/graphql`，`doc_id=29600383452901789`（`PolarisProfilePostsQuery`）+ 从主页 HTML 抠的 `lsd`/`fb_dtsg`。**必须带 `Referer: https://www.instagram.com/{handle}/` 与 `Sec-Fetch-Site/Mode/Dest`**，缺了会回 200 + 513 KB 网页壳 | 502 `stale_parser`「主页里没找到 lsd/fb_dtsg」或「响应里没有帖子连接」→ `doc_id` 随发版变了，去浏览器请求体里抄新的 |
+| 🆕 IG 网页壳 | GraphQL 回 `text/html`（513 KB、`<!DOCTYPE html>`）而不是 JSON：令牌和会话对不上，或这次请求被判自动化 | 适配器已经会换令牌重试一次，两次都是网页壳就报 `blocked`；此时换出口 IP，别连着重试 |
 | IG 出口 IP | 抓 IG 建议固定住宅代理：设置 → 网络与代理 → Instagram 专用代理（保存即生效，`proxy_instagram`），环境变量 `PLATFORM_PROXY_INSTAGRAM` / `GLOBAL_PROXY` 只作兜底。机房 IP 容易被直接拦 | 配了代理仍报 `blocked` → 该代理 IP 也脏，换一个（可在同一处直接改，不用重启） |
 | IG Cookie 写法 | 三种都认：Netscape cookies.txt（`# Netscape HTTP Cookie File`，7 个制表符字段，`#HttpOnly_` 前缀）、整段 Cookie 头、JSON。非 `instagram.com` 的行丢掉 | 贴上整份导出仍报「没找到 sessionid」→ 导出文件的列数/分隔符变了（应把原始行贴出来核对） |
-| IG 首屏 | `web_profile_info`（`?__a=1&__d=dis` 那套已废） | 502 `stale_parser` |
-| IG 翻页 | `feed/user/<id>/?max_id=`，`more_available` 决定是否继续 | 只抓到第一页 |
+| IG 首屏 | GraphQL `count=33`（服务端上限，传 50 也只回 33）。`variables.data` 里 4 个布尔值必填，只传 `count` 翻页会 `field_exception` | 502 `stale_parser` |
+| IG 翻页 | 换 `variables.after = page_info.end_cursor`；库里的游标形如 `gql:…`（旧断点 `{id}|{maxID}` 仍可跑完） | 只抓到第一页 → 多半是 `after` 没带上或 `data` 少参数 |
+| IG 部分失败 | `data` 整页齐全、`errors[]` 里挂着每个 geotag 节点的 `location.profile_pic_url` `field_exception` —— **当成功处理** | 每翻一页都报「服务端错误」→ 判定条件被写成了「errors 非空即失败」 |
 | IG 图片地址 | 带签名、**几小时内过期**。缓存过的照常显示，没缓存的过期就 404（走占位图） | 老照片成片变灰 → 正常现象，想要就点存库 |
 | 与艺人关联 | 只比对 `performers.social_json` 里已有链接的规范化 URL，命中才关联；绝不按名字猜 | 艺人页没有「社交动态」区块 → 要么没关联，要么艺人资料里没这条链接 |
 
