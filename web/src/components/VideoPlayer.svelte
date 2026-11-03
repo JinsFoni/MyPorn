@@ -169,6 +169,26 @@
   let barsPainted = $state(false);
   let barsEl = $state<HTMLDivElement | null>(null);
   let skinEl = $state<HTMLElement | null>(null);
+  /**
+   * 画面自身的宽高比（转 90/270 时对调）。
+   *
+   * 盒子以前写死 `aspect-video`（16:9）。横素材碰巧按自己的比例撑满，看不出问题；
+   * 竖屏的 2160×3840（B 站那批 `[세로룩북]` 就是）在里面既装不下也没有黑边——
+   * 详见 applyMediaFit。null = 还没有 metadata，先用 16:9 兜底，免得布局先跳一下。
+   */
+  let mediaAR = $state<{ w: number; h: number } | null>(null);
+  /**
+   * `video-skin` 的样式：皮肤的 `--media-*` 调色口 + 按画面比例算出来的盒子比例。
+   *
+   * `aspect-video` 那个 class 留着当兜底（metadata 还没来、或者拿不到尺寸时就是 16:9），
+   * 内联的 `aspect-ratio` 一旦有值就盖过它。高度上限按视口算，竖屏片子不会把标题挤出屏幕。
+   */
+  const skinStyle = $derived.by(() => {
+    const base =
+      '--media-accent-color:#f5faff;--media-accent-text-color:#020408;--media-border-radius:0;--media-border-color:transparent;--media-font-family:var(--font-sans)';
+    if (!mediaAR) return base;
+    return `${base};aspect-ratio:${String(mediaAR.w)} / ${String(mediaAR.h)};max-height:var(--player-box-max-h)`;
+  });
 
   /** 播放器 store：字段见 @videojs/html 的 player-store 参考（paused / currentTime / error …） */
   type Store = {
@@ -1102,10 +1122,14 @@
     if (!video || video === boundVideo) return;
     unbindMediaLoad();
     boundVideo = video;
-    // 换档 / 重建会把 <video> 换成新的一个，旋转得跟着套到新元素上
+    // 换档 / 重建会把 <video> 换成新的一个，旋转和「填满盒子」都得跟着套到新元素上
     applyRotate();
-    // 转 90/270 的缩放系数要用画面尺寸算，而它要等 metadata 才有
+    applyMediaFit(video);
+    // 转 90/270 的缩放系数要用画面尺寸算，而它要等 metadata 才有；
+    // 盒子比例（竖屏要长高）同样要等 metadata，`resize` 管运行中的画面尺寸变化
     video.addEventListener('loadedmetadata', applyRotate);
+    video.addEventListener('loadedmetadata', onMediaFit);
+    video.addEventListener('resize', onMediaFit);
     // 能放 / 正在放 / 有画面了 → 收掉；等数据 / 被清空 → 盖回来
     video.addEventListener('canplay', mediaReady);
     video.addEventListener('playing', mediaReady);
@@ -1135,6 +1159,9 @@
     video.removeEventListener('seeked', captureFrame);
     video.removeEventListener('emptied', mediaCleared);
     video.removeEventListener('loadstart', mediaCleared);
+    video.removeEventListener('loadedmetadata', applyRotate);
+    video.removeEventListener('loadedmetadata', onMediaFit);
+    video.removeEventListener('resize', onMediaFit);
   }
 
   /** 把当前 src/type 装进播放器；播放器还没挂上媒体（store.target 为空）时稍后重试 */
@@ -1340,6 +1367,7 @@
     void rotateDeg;
     void mediaEl;
     applyRotate();
+    applyMediaFit();
   });
 
   $effect(() => {
@@ -1349,6 +1377,42 @@
     ro.observe(el);
     return () => ro.disconnect();
   });
+
+  /**
+   * 让画面真的填满盒子，并且让盒子按画面比例长。
+   *
+   * **1. 画面必须填满盒子。** `<video>` 是 `video-skin` 的 light DOM 子元素、被 slot 进
+   * shadow 里的 `media-container`，而皮肤那几条 `…slot::slotted(video){width:100%;height:100%}`
+   * 在这版皮肤上**没落到它身上**。实测（video 2922，盒 952×536，素材 2160×3840）把内联宽高
+   * 去掉以后：`display` 仍是 block、宽度也还是 952，**高度却是 1692 = 952 × 3840 / 2160** ——
+   * 百分比的 `height` 没解析出来，它按素材自己的 9:16 比例把盒子撑开了。横素材碰巧算出来
+   * 正好等于盒高，所以这问题一直没露头；竖素材比盒子高一倍多，溢出部分被外层 `overflow-hidden`
+   * 裁掉，画面只剩最上面一截（截图里只有一面白墙，人整个在画外）。
+   * 内联的 `height: 100%` 是实测唯一压得住的一手（加回去当场从 1692 变 576）。
+   *
+   * **2. 盒子按素材比例长。** 竖屏塞在 16:9 盒子里时，画面宽度只有盒子高度的 9/16：
+   * 1280×720 的窗口里实际只有 302×536。按比例长之后是 324×576；1440p 那种高窗口收益更大
+   * （按 16:9 只有 443 宽，按 9:16 到 729 宽）。高度用 `max-height` 卡进视口（全屏时放开），
+   * 多出来的宽度交给 `measureBars` 算成左右黑边、由氛围光去填。
+   */
+  function applyMediaFit(video: HTMLVideoElement | null = innerVideo()): void {
+    if (!video) return;
+    // 只钉真正的 `<video>`：`<hlsjs-video>` 是 `display: contents`（见氛围模式那段注释），
+    // 给它设宽高会平白多出一个盒子、把里面那层的布局关系改掉
+    video.style.width = '100%';
+    video.style.height = '100%';
+    video.style.objectFit = 'contain';
+    video.style.display = 'block';
+    const deg = ((rotateDeg % 360) + 360) % 360;
+    const swap = deg === 90 || deg === 270;
+    const w = swap ? video.videoHeight : video.videoWidth;
+    const h = swap ? video.videoWidth : video.videoHeight;
+    if (w > 0 && h > 0) mediaAR = { w, h };
+    measureBars();
+  }
+
+  /** 事件监听要一个稳定引用 */
+  const onMediaFit = (): void => applyMediaFit();
 
   // ---------- 氛围模式 ----------
 
@@ -1879,7 +1943,7 @@
     aria-hidden="true"
   ></canvas>
 
-  <div class="relative overflow-hidden rounded-xl bg-black">
+  <div class="player-box relative overflow-hidden rounded-xl bg-black">
     <!-- 皮肤的 --media-* 是它的公开调色口：全部压到站点的单色冷调（纯白当强调色、Roboto、12px 圆角）。
          lang 从 <html lang="zh-CN"> 继承，控件文案走 @videojs/html 自带的 zh-CN 语言包。 -->
     <media-i18n>
@@ -1888,7 +1952,7 @@
           bind:this={skinEl}
           class="block aspect-video w-full bg-black"
           data-resuming={resuming ? 'true' : 'false'}
-          style="--media-accent-color:#f5faff;--media-accent-text-color:#020408;--media-border-radius:0;--media-border-color:transparent;--media-font-family:var(--font-sans)"
+          style={skinStyle}
         >
           {#if engine === 'hls'}
             <hlsjs-video bind:this={mediaEl} playsinline preload="metadata" aria-label={title}></hlsjs-video>
@@ -1935,6 +1999,29 @@
 </div>
 
 <style>
+  /*
+   * 播放器黑盒的高度上限（`video-skin` 的 max-height 取这个变量）。
+   *
+   * 竖屏片子的盒子按 9:16 长，得给下面标题那几行留位置：窗口只有 720 高的时候，
+   * 952 宽的 9:16 盒子要 1692，不留上限就把标题挤出屏幕。
+   * 全屏不用留（整块屏幕都是播放器），那一条见下面的 `video-skin:fullscreen`。
+   */
+  .player-box {
+    --player-box-max-h: calc(100dvh - 9rem);
+  }
+
+  /*
+   * 全屏本身长在 `video-skin` 上（`requestFullscreen` 的目标就是它），不是外面那个 `.player-box`，
+   * 所以这条必须打在 `video-skin` 上；而皮肤上的 `aspect-ratio` / `max-height` 是内联样式，
+   * 只有 `!important` 压得住。
+   */
+  video-skin:fullscreen {
+    width: 100% !important;
+    height: 100% !important;
+    aspect-ratio: auto !important;
+    max-height: none !important;
+  }
+
   /* ---------- 氛围模式：把 32×18 的画面拉满、放大、模糊，当播放器四周的光 ---------- */
   /* 手机上播放器已经是通栏，再往外扩就会撑出横向滚动条：靠 blur 自己往外晕就够了 */
   .ambient-glow {
