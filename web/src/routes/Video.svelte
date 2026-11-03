@@ -551,6 +551,9 @@
     return raw.startsWith('/') && !raw.startsWith('//') ? raw : '/';
   });
 
+  /** 关注流固定排掉的平台，和服务端 store.FeedExcludedPlatforms 一处一个口径 */
+  const FEED_EXCLUDED = 'bilibili,youtube';
+
   /**
    * 播放器「上一个 / 下一个」按哪份列表算：跟着 `?back=` 走——它记着用户是从哪一页点进来的。
    *
@@ -558,11 +561,12 @@
    * （后端用的就是同一套 FeedQuery 条件，见 store.AdjacentVideos）：
    *   · 艺人页     → 只要这位艺人的片；
    *   · 关注页按艺人筛（`/?performer=<id>`，点头像条筛出来的那种视角）
-   *                → 也是只要这位艺人的片，但**再排掉 B 站**——/api/videos 自己就带着
-   *                  ExcludePlatform: bilibili，不跟着排会切到关注流里根本不存在的投稿；
+   *                → 也是只要这位艺人的片，但**再排掉 B 站和 YouTube**——/api/videos 自己就带着
+   *                  FeedExcludedPlatforms（bilibili + youtube），不跟着排会切到关注流里
+   *                  根本不存在的投稿；
    *   · B 站墙     → platform=bilibili（可再按 UP 主 `?up=`、未看 `?mode=unseen` 过滤，
    *                 并且取消订阅的 UP 主不在墙上 → subscribedOnly）；
-   *   · 关注流/其它 → 和 /api/videos 一样排除 B 站（它有自己的页面）。
+   *   · 关注流/其它 → 和 /api/videos 一样排除 B 站与 YouTube（它们各自有页面）。
    * 从下载页、动态点进来的没有对应的「影片列表」，也按关注流那套算——总比跳到别的平台强。
    */
   const neighborScope = $derived.by((): AdjacentScope => {
@@ -574,7 +578,7 @@
     if (url.pathname === '/' && url.searchParams.has('performer')) {
       const pid = Number.parseInt(url.searchParams.get('performer') ?? '', 10);
       if (Number.isFinite(pid) && pid > 0)
-        return { performerId: pid, excludePlatform: 'bilibili', hideDownloaded: true };
+        return { performerId: pid, excludePlatform: FEED_EXCLUDED, hideDownloaded: true };
     }
     if (url.pathname === '/bilibili') {
       const up = Number.parseInt(url.searchParams.get('up') ?? '', 10);
@@ -586,8 +590,11 @@
       };
     }
     if (video?.platform === 'bilibili') return { platform: 'bilibili', subscribedOnly: true };
+    // YouTube 没有对应的「影片列表」可走：它的墙是 yt_videos（另一套 id），videos 里这十几行
+    // 只是下载/下载过留下的，拿来当邻居等于乱跳。back=/youtube 时下面那条分支会排掉 youtube，
+    // 于是邻居是 null、按钮置灰——这是诚实的答案。
     // 从「关注」流点进来的：上一条/下一条也按关注流的过滤条件算（已下载的片那一流里不出现）
-    return { excludePlatform: 'bilibili', hideDownloaded: true };
+    return { excludePlatform: FEED_EXCLUDED, hideDownloaded: true };
   });
 
   async function loadNeighbors(): Promise<void> {

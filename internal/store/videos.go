@@ -186,11 +186,12 @@ type FeedQuery struct {
 	Limit       int
 	OnlyNew     bool
 	Query       string
-	// Platform 只要这一个平台的影片；ExcludePlatform 反过来，把某个平台整体摘掉。
+	// Platform 只要这一个平台的影片；ExcludePlatforms 反过来，把这些平台整体摘掉。
 	// B 站用两者：自己的页面只取 platform='bilibili'，「关注」流则把它排除掉——
-	// 它有自己的页面（/bilibili），不该在追艺人的流里混着。
-	Platform        string
-	ExcludePlatform string
+	// 它有自己的页面（/bilibili），不该在追艺人的流里混着。YouTube 同理（它有 /youtube），
+	// 关注流固定排掉这两个平台，见 FeedExcludedPlatforms。
+	Platform         string
+	ExcludePlatforms []string
 	// SubscribedOnly 只出「所属艺人还在订阅里」的片，B 站墙用（见 liveSubFilter）。
 	SubscribedOnly bool
 	// HideDownloaded 把已经落到本地库里的片整个摘掉，「关注」流用（2026-11-03 用户要求：
@@ -198,6 +199,15 @@ type FeedQuery struct {
 	// 判据是 library_files 表里有没有这一行，跟 videoDTO.localLibraryIds 同一个事实来源。
 	HideDownloaded bool
 }
+
+// FeedExcludedPlatforms 是「关注」流固定不收的平台：它们各自有独立页面
+// （/bilibili、/youtube），那边的片子是 UP 主/频道投稿，和「追艺人新片」不是同一件事。
+//
+// YouTube 这条是 2026-11-03 补的：YouTube 的 videos 行只在**下载**时才建，媒体库里删掉下载
+// 之后按设计保留 videos 行（页面还能回落到在线播放），于是那 5 条（id 1/2/3/15/60）又从
+// 关注流里冒了出来——用户看到的就是「关注页出现了 YouTube 的视频」。根子上是这一流本来
+// 就不该收 YouTube，而不是删除逻辑漏了什么。
+var FeedExcludedPlatforms = []string{"bilibili", "youtube"}
 
 // liveSubFilter 生成「这条片所属的艺人里，至少还有一位在订阅里」这个条件；idExpr 是影片 id 的列（如 "v.id"）。
 //
@@ -233,9 +243,12 @@ func feedFilter(q FeedQuery) ([]string, []any) {
 		where = append(where, "v.platform = ?")
 		args = append(args, q.Platform)
 	}
-	if q.ExcludePlatform != "" {
-		where = append(where, "v.platform <> ?")
-		args = append(args, q.ExcludePlatform)
+	if len(q.ExcludePlatforms) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(q.ExcludePlatforms)), ",")
+		where = append(where, "v.platform NOT IN ("+placeholders+")")
+		for _, p := range q.ExcludePlatforms {
+			args = append(args, p)
+		}
 	}
 	if q.SubscribedOnly {
 		where = append(where, liveSubFilter("v.id"))
@@ -243,6 +256,8 @@ func feedFilter(q FeedQuery) ([]string, []any) {
 	if q.HideDownloaded {
 		// 走 library_files 的存在性判断（不是 videos 上的某个标记位）：媒体库里删掉文件之后，
 		// 那一行跟着消失，这条片就该重新回到关注流里。
+		// （YouTube 那种「删了下载、videos 行按设计留着」的片子会因此冒回来，所以关注流还
+		//   固定排掉 youtube —— 见 FeedExcludedPlatforms。）
 		where = append(where, "NOT EXISTS (SELECT 1 FROM library_files lf WHERE lf.video_id = v.id)")
 	}
 	return where, args
@@ -353,6 +368,15 @@ func (s *Store) AdjacentVideos(anchor *model.Video, q FeedQuery) (prev, next *mo
 	if anchor == nil {
 		return nil, nil, nil
 	}
+	// 上下家是「**在 q 描述的那份列表里**前后紧挨着的两条」。当前这条自己都不在那份列表里时，
+	// 按时间戳算出来的邻居就是编的：典型是 YouTube 的片子（关注流固定排掉 youtube），用户从
+	// /youtube 或历史记录点进来，算出来的「下一个」直接落进关注流第一条。2026-11-03 实测：
+	// /video/2913?back=/ 的 next 曾是 1025（关注流首条）。这种时候两边都给 null，按钮置灰。
+	if inList, err := s.videoInFeed(anchor.ID, q); err != nil {
+		return nil, nil, err
+	} else if !inList {
+		return nil, nil, nil
+	}
 	ts := ""
 	if anchor.PublishedAt != nil {
 		ts = fmtTime(*anchor.PublishedAt)
@@ -379,6 +403,22 @@ func (s *Store) AdjacentVideos(anchor *model.Video, q FeedQuery) (prev, next *mo
 		return nil, nil, err
 	}
 	return prev, next, nil
+}
+
+// videoInFeed 问一句「这条片本身还在 q 那份列表里吗」（过滤条件与列表同一个 feedFilter）。
+func (s *Store) videoInFeed(id int64, q FeedQuery) (bool, error) {
+	where, args := feedFilter(q)
+	where = append(where, "v.id = ?")
+	args = append(args, id)
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM videos v WHERE `+strings.Join(where, " AND ")+` LIMIT 1`, args...).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // neighborOf 取某个方向上紧挨着的那一行。newer=true 取更新的（列表上方），false 取更旧的。
@@ -501,10 +541,11 @@ func (s *Store) MarkVideoSeen(id int64) error {
 	return err
 }
 
-// CountNewVideos 数「关注」流里的新片；B 站不算在内（它有自己那条未看计数）。
+// CountNewVideos 数「关注」流里的新片；B 站和 YouTube 都不算（它们各有自己那条未看计数）。
+// 口径必须和 ListFeed 一致，否则侧边栏角标会比流里实际能看到的片多。
 func (s *Store) CountNewVideos() (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE is_new = 1 AND platform <> 'bilibili'`).Scan(&n)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE is_new = 1 AND platform NOT IN ('bilibili', 'youtube')`).Scan(&n)
 	return n, err
 }
 

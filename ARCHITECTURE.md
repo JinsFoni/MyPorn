@@ -238,7 +238,7 @@ UI 是一组自带 shadow DOM 的自定义元素，Svelte 直接当标签用，�
   最坏结果是这几个控件不出现。
   - **上一个 / 下一个**：竖条+三角（皮肤自带的图标里没有 skip 这一类，自己画）。片名取自后端
     `GET /api/videos/{id}/adjacent`（见 `docs/API.md` A4·补·2），列表口径跟着卡片链接上的 `?back=` 走：
-    关注流＝排除 B 站 + `hideDownloaded=1`（已经下到本地库的片不在这一流里重复出现，2026-11-03 用户要求；判据是 `library_files` 有没有这一行，媒体库里删掉文件这条片会自己回来）、艺人页＝那位艺人、B 站墙＝`platform=bilibili`（含 `?up=` / `?mode=unseen`）。
+    关注流＝排除 B 站与 YouTube + `hideDownloaded=1`（已经下到本地库的片不在这一流里重复出现，2026-11-03 用户要求；判据是 `library_files` 有没有这一行，媒体库里删掉文件这条片会自己回来）、艺人页＝那位艺人、B 站墙＝`platform=bilibili`（含 `?up=` / `?mode=unseen`）。
     到头那一侧按钮**留着位置但按不动**（`aria-disabled` + 我们自己补的 0.35 透明度，皮肤只在 neutral 主题里给 `aria-disabled` 上样式）；
     位置不能跳，否则控制条会随着「有没有下一部」一格格横移。切过去时 `?back=` 原样带着，连切几部后「返回」仍回原来那页。
   - **自动切换下一个**：挂在皮肤自带的齿轮菜单里（`settingsMenuContent()` 顺着 `.media-settings-menu-trigger` 的 `commandfor`
@@ -894,7 +894,10 @@ durl 只到 720P——**以实际返回为准**。1080P 以上要填 `SESSDATA`�
 bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源」，不是「追一个艺人」。所以两者
 都有自己的页面（`/bilibili`、`/youtube`）和管理页签，并且在 `/api/videos`（关注流）、
 `/api/videos/new`、`/api/performers`（艺人页）、`/api/subscriptions`（关注管理）里被排除，
-保证同一件事只有一处入口。
+保证同一件事只有一处入口。关注流这一条是 2026-11-03 补齐的（`store.FeedExcludedPlatforms`
+= bilibili + youtube，侧边栏未看角标 `CountNewVideos` 同口径）：YouTube 的 `videos` 行只在
+下载时才建，媒体库里删掉下载后行按设计留着（页面还能回落到在线播放），于是 1/2/3/15/60
+五条重新冒进了关注流——这一流本来就不该收 YouTube。
 
 但**没有为它另建 `bili_*` 表**。UP 主就是 `performers` 的一行（`platform='bilibili'`、
 `performer_id` = mid），投稿就是 `videos` 的一行；`internal/store/bilibili.go` 只是在

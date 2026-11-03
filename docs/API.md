@@ -119,10 +119,10 @@ type Video = {
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/videos?performerId=&cursor=&limit=30&q=&hideDownloaded=1` | 影片流，播放时间倒序，**keyset 游标**分页 → `{"items":Video[],"nextCursor":"..."\|null}`。`hideDownloaded=1` = 只出还没落到本地库的片（关注流用，判据是 `library_files` 里有没有这一行，删掉库文件后这条片会自己回来） |
+| GET | `/api/videos?performerId=&cursor=&limit=30&q=&hideDownloaded=1` | 影片流，播放时间倒序，**keyset 游标**分页 → `{"items":Video[],"nextCursor":"..."\|null}`。**固定排掉 `bilibili` 和 `youtube`**（`store.FeedExcludedPlatforms`，2026-11-03 补后者：两者各有自己的页面，投稿不是「追艺人的片」；YouTube 的 `videos` 行还只在下过载时才建，删掉下载后行按设计留着，于是 1/2/3/15/60 五条从关注流冒了回来）。`hideDownloaded=1` = 只出还没落到本地库的片（关注流用，判据是 `library_files` 里有没有这一行，删掉库文件后这条片会自己回来） |
 | GET | `/api/videos/new?performerId=&since=` | 新片（`isNew`）列表，同结构，首页角标用；`performerId` 只数这一位 |
 | GET | `/api/videos/{id}` | `Video` + `{"description":"...","related":Video[]}` |
-| GET | `/api/videos/{id}/adjacent` | 同一份列表里的上下家 → `{"prev":Video\|null,"next":Video\|null}`（见 A4·补·2）。参数与 `/api/videos` 同口径（`performerId` / `platform` / `excludePlatform` / `onlyNew` / `q` / `subscribedOnly` / `hideDownloaded`），**调用方要传跟原列表一样的值**，否则「下一个」会跳到原列表里根本没有的片上 |
+| GET | `/api/videos/{id}/adjacent` | 同一份列表里的上下家 → `{"prev":Video\|null,"next":Video\|null}`（见 A4·补·2）。参数与 `/api/videos` 同口径（`performerId` / `platform` / `excludePlatform`（逗号分隔可排多个，关注流是 `bilibili,youtube`）/ `onlyNew` / `q` / `subscribedOnly` / `hideDownloaded`），**调用方要传跟原列表一样的值**，否则「下一个」会跳到原列表里根本没有的片上 |
 | POST | `/api/videos/{id}/seen` | `204`，清除 isNew |
 | POST | `/api/videos/{id}/rotate` | `{"deg":90}` → `{"ok":true,"rotateDeg":90}`，角度记在 `videos.rotate_deg`（见 E3） |
 
@@ -384,7 +384,7 @@ type Video = {
 ### A4·补·2. 播放器「上一个/下一个」`GET /api/videos/{id}/adjacent`
 
 播放器控制条那一对切歌按钮问的就是这个。查询参数和 `GET /api/videos` **同一套**（`performerId` /
-`platform` / `excludePlatform` / `onlyNew=1` / `q` / `subscribedOnly=1`），返回的是「在这份列表里，
+`platform` / `excludePlatform`（逗号分隔可排多个平台）/ `onlyNew=1` / `q` / `subscribedOnly=1`），返回的是「在这份列表里，
 按列表顺序排在本片前后紧挨着的那两条」：
 
 ```json
@@ -397,9 +397,13 @@ type Video = {
   （`(ts < ? OR (ts = ? AND id < ?))` 这种 keyset 条件，和翻页游标同一个写法）。
 - `Video` 结构和列表项一致（带 `performers`、本地档标记）；共用 `store.feedFilter` / `store.scanVideo`，
   列表加过滤条件时这里不会漂。
-- 前端按卡片链接上的 `?back=` 决定口径（关注流＝`excludePlatform=bilibili`、关注页按艺人筛＝
-  `performerId` + `excludePlatform=bilibili`、艺人页＝`performerId`、
+- 前端按卡片链接上的 `?back=` 决定口径（关注流＝`excludePlatform=bilibili,youtube`、关注页按艺人筛＝
+  `performerId` + `excludePlatform=bilibili,youtube`、艺人页＝`performerId`、
   B 站墙＝`platform=bilibili` + `subscribedOnly=1`），切过去时把 `?back=` 原样带下去。
+- **当前这条自己不在那份列表里时，两边都是 `null`**（`store.videoInFeed` 先问一句再找邻居，2026-11-03 补）。
+  典型场景：YouTube 的片子被关注流排掉，用户从 `/youtube` 或历史记录点进来，按时间戳算出来的「下一个」
+  会直接落进关注流第一条（实测 `/video/2913?back=/` 的 `next` 是 1025）——那不是他正在看的列表。
+  按钮置灰比跳到别的列表上诚实。
 
 ### A5. SSE 新增事件
 

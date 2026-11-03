@@ -56,7 +56,7 @@ func TestAdjacentVideosFollowsFeedOrder(t *testing.T) {
 	st := newTestStore(t)
 	v := seedFeed(t, st)
 
-	prev, next, err := st.AdjacentVideos(mustGet(t, st, v["middle"].ID), FeedQuery{ExcludePlatform: "bilibili"})
+	prev, next, err := st.AdjacentVideos(mustGet(t, st, v["middle"].ID), FeedQuery{ExcludePlatforms: []string{"bilibili"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,12 +77,41 @@ func TestAdjacentVideosFollowsFeedOrder(t *testing.T) {
 	}
 }
 
+// 当前这条不在那份列表里时，上下家都是 null——不给编出来的邻居。
+// 复现的是 /video/2913?back=/：YouTube 的片子被关注流排掉了，next 却指向关注流第一条。
+func TestAdjacentVideosOutOfListReturnsNull(t *testing.T) {
+	st := newTestStore(t)
+	v := seedFeed(t, st)
+	feed := FeedQuery{ExcludePlatforms: []string{"bilibili"}}
+
+	// bili 那条不排除时在列表里、排掉之后不在列表里：同一条片，两种口径两种答案。
+	if prev, next, err := st.AdjacentVideos(mustGet(t, st, v["bili"].ID), feed); err != nil {
+		t.Fatal(err)
+	} else if prev != nil || next != nil {
+		t.Fatalf("bili 不在关注流里，不该有邻居：prev=%+v next=%+v", prev, next)
+	}
+
+	feedExcludingYt := FeedQuery{ExcludePlatforms: FeedExcludedPlatforms}
+	ytID, _, err := st.UpsertVideo(&model.Video{
+		Platform: "youtube", PlatformVideoID: "yt-1", Title: "yt-1",
+		URL: "https://example.invalid/yt-1", PublishedAt: v["newest"].PublishedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prev, next, err := st.AdjacentVideos(mustGet(t, st, ytID), feedExcludingYt); err != nil {
+		t.Fatal(err)
+	} else if prev != nil || next != nil {
+		t.Fatalf("YouTube 的片被关注流排掉了，不该有邻居：prev=%+v next=%+v", prev, next)
+	}
+}
+
 func TestAdjacentVideosEnds(t *testing.T) {
 	st := newTestStore(t)
 	v := seedFeed(t, st)
 
 	// 列表头：没有上一条，但不是错误。
-	prev, next, err := st.AdjacentVideos(mustGet(t, st, v["newest"].ID), FeedQuery{ExcludePlatform: "bilibili"})
+	prev, next, err := st.AdjacentVideos(mustGet(t, st, v["newest"].ID), FeedQuery{ExcludePlatforms: []string{"bilibili"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +123,7 @@ func TestAdjacentVideosEnds(t *testing.T) {
 	}
 
 	// 列表尾：只有上一条。
-	prev, next, err = st.AdjacentVideos(mustGet(t, st, v["oldest"].ID), FeedQuery{ExcludePlatform: "bilibili"})
+	prev, next, err = st.AdjacentVideos(mustGet(t, st, v["oldest"].ID), FeedQuery{ExcludePlatforms: []string{"bilibili"}})
 	if err != nil {
 		t.Fatal(err)
 	}

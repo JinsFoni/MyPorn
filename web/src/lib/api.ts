@@ -56,6 +56,7 @@ import type {
 export interface AdjacentScope {
   performerId?: number;
   platform?: string;
+  /** 逗号分隔可排多个平台（关注流是 `bilibili,youtube`），服务端按 NOT IN 处理 */
   excludePlatform?: string;
   onlyNew?: boolean;
   q?: string;

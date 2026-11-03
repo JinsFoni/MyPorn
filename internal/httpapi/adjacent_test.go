@@ -43,6 +43,7 @@ func TestVideoAdjacentHandler(t *testing.T) {
 		{"middle", "pornhub", 4},
 		{"oldest", "pornhub", 8},
 		{"bili", "bilibili", 2},
+		{"yt", "youtube", 1},
 	} {
 		pub := base.Add(-time.Duration(spec.agoHour) * time.Hour)
 		id, _, err := st.UpsertVideo(&model.Video{
@@ -90,8 +91,8 @@ func TestVideoAdjacentHandler(t *testing.T) {
 		return prev, next
 	}
 
-	// 关注流口径（排除 B 站）：middle 上面是 newest、下面是 oldest。
-	prev, next := get(ids["middle"], "?excludePlatform=bilibili")
+	// 关注流口径（排除 B 站 + YouTube，和 /api/videos 一致）：middle 上面是 newest、下面是 oldest。
+	prev, next := get(ids["middle"], "?excludePlatform=bilibili,youtube")
 	if prev == nil || *prev != ids["newest"] {
 		t.Errorf("上一条应为 newest(%d)，得到 %v", ids["newest"], prev)
 	}
@@ -99,10 +100,22 @@ func TestVideoAdjacentHandler(t *testing.T) {
 		t.Errorf("下一条应为 oldest(%d)，得到 %v", ids["oldest"], next)
 	}
 
-	// 不排除 B 站：bili 插在中间。
+	// 只排 B 站：YouTube 那条就插进来了（证明逗号分隔是两项都在生效，不是只认第一项）。
+	prev, next = get(ids["middle"], "?excludePlatform=bilibili")
+	if prev == nil || *prev != ids["yt"] {
+		t.Errorf("只排 B 站时上一条应为 yt(%d)，得到 %v", ids["yt"], prev)
+	}
+
+	// 不排除任何平台：bili 插在中间。
 	prev, next = get(ids["middle"], "")
 	if prev == nil || *prev != ids["bili"] {
 		t.Errorf("不排除 B 站时上一条应为 bili(%d)，得到 %v", ids["bili"], prev)
+	}
+
+	// 当前这条自己不在那份列表里（YouTube 被关注流排掉）：上下家都是 null，不给编出来的邻居。
+	prev, next = get(ids["yt"], "?excludePlatform=bilibili,youtube")
+	if prev != nil || next != nil {
+		t.Errorf("YouTube 片不在关注流里，两边都该是 null，得到 prev=%v next=%v", prev, next)
 	}
 
 	// B 站墙口径：只在自己的平台里找，bili 前后都空。

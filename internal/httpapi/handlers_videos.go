@@ -22,14 +22,14 @@ const variantCacheTTL = 5 * time.Minute
 func (s *Server) handleListVideos(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	performerID, _ := strconv.ParseInt(q.Get("performerId"), 10, 64)
-	// B 站有自己的页面（/bilibili），不混进「关注」流：那边的片子是 UP 主投稿，
-	// 和「追艺人的片」不是同一件事。它的接口是 /api/bilibili/videos。
+	// B 站和 YouTube 各有自己的页面（/bilibili、/youtube），不混进「关注」流：那边的片子是
+	// UP 主/频道投稿，和「追艺人的片」不是同一件事。它们的接口是 /api/bilibili/videos 与 /api/yt/*。
 	items, next, err := s.st.ListFeed(store.FeedQuery{
-		PerformerID:     performerID,
-		Cursor:          q.Get("cursor"),
-		Limit:           queryInt(r, "limit", 30),
-		Query:           q.Get("q"),
-		ExcludePlatform: platformBilibili,
+		PerformerID:      performerID,
+		Cursor:           q.Get("cursor"),
+		Limit:            queryInt(r, "limit", 30),
+		Query:            q.Get("q"),
+		ExcludePlatforms: store.FeedExcludedPlatforms,
 		// 「关注」流要的：已经下到本地库的片子不再出现（媒体库那一页才是它们的去处）
 		HideDownloaded: q.Get("hideDownloaded") == "1",
 	})
@@ -47,11 +47,11 @@ func (s *Server) handleListVideos(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListNewVideos(w http.ResponseWriter, r *http.Request) {
 	performerID, _ := strconv.ParseInt(r.URL.Query().Get("performerId"), 10, 64)
 	items, next, err := s.st.ListFeed(store.FeedQuery{
-		PerformerID:     performerID,
-		Cursor:          r.URL.Query().Get("cursor"),
-		Limit:           queryInt(r, "limit", 30),
-		OnlyNew:         true,
-		ExcludePlatform: platformBilibili,
+		PerformerID:      performerID,
+		Cursor:           r.URL.Query().Get("cursor"),
+		Limit:            queryInt(r, "limit", 30),
+		OnlyNew:          true,
+		ExcludePlatforms: store.FeedExcludedPlatforms,
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
@@ -63,6 +63,21 @@ func (s *Server) handleListNewVideos(w http.ResponseWriter, r *http.Request) {
 	}
 	total, _ := s.st.CountNewVideos()
 	writeJSON(w, http.StatusOK, map[string]any{"items": out, "nextCursor": nullableString(next), "total": total})
+}
+
+// splitList 把 `excludePlatform=bilibili,youtube` 这种逗号分隔的参数拆成列表（空项丢掉）。
+// 用逗号而不是重复参数：前端的 qs() 只写一层键值，重复键要另写一套序列化。
+func splitList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	out := make([]string, 0, 2)
+	for _, part := range strings.Split(raw, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func nullableString(s string) any {
@@ -116,12 +131,12 @@ func (s *Server) handleVideoAdjacent(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	performerID, _ := strconv.ParseInt(q.Get("performerId"), 10, 64)
 	prev, next, err := s.st.AdjacentVideos(v, store.FeedQuery{
-		PerformerID:     performerID,
-		Platform:        q.Get("platform"),
-		ExcludePlatform: q.Get("excludePlatform"),
-		OnlyNew:         q.Get("onlyNew") == "1",
-		Query:           q.Get("q"),
-		SubscribedOnly:  q.Get("subscribedOnly") == "1",
+		PerformerID:      performerID,
+		Platform:         q.Get("platform"),
+		ExcludePlatforms: splitList(q.Get("excludePlatform")),
+		OnlyNew:          q.Get("onlyNew") == "1",
+		Query:            q.Get("q"),
+		SubscribedOnly:   q.Get("subscribedOnly") == "1",
 		// 上一条/下一条必须和「刚才那份列表」同口径：关注流藏了已下载的片，这里也得藏，
 		// 否则「下一个」会跳到一张自己刚刚划走了的卡上。
 		HideDownloaded: q.Get("hideDownloaded") == "1",

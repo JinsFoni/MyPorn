@@ -104,20 +104,33 @@ func TestMarkBiliSeenScoped(t *testing.T) {
 	}
 }
 
-// 「关注」流要把 B 站摘掉，B 站墙上则只看得到 B 站。
+// 「关注」流要把 B 站和 YouTube 都摘掉，B 站墙上则只看得到 B 站。
 func TestFeedPlatformFilter(t *testing.T) {
 	st := newTestStore(t)
 	bili := mustPerformer(t, st, "bilibili", "946974", "影视飓风")
 	ph := mustPerformer(t, st, "pornhub", "mini-diva", "Mini Diva")
 	mustVideo(t, st, "bilibili", "BV1", bili)
 	mustVideo(t, st, "pornhub", "ph-1", ph)
+	// YouTube 的 videos 行是下载时才建的，媒体库里删掉下载之后行还在（2026-11-03 关注页
+	// 因此冒回 5 条：id 1/2/3/15/60）。关注流固定不收 YouTube，这条守着它。
+	if _, _, err := st.UpsertVideo(&model.Video{
+		Platform: "youtube", PlatformVideoID: "yt-1", Title: "yt-1", URL: "https://example.invalid/yt-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
-	feed, _, err := st.ListFeed(FeedQuery{ExcludePlatform: "bilibili", Limit: 10})
+	feed, _, err := st.ListFeed(FeedQuery{ExcludePlatforms: FeedExcludedPlatforms, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(feed) != 1 || feed[0].Platform != "pornhub" {
-		t.Fatalf("关注流里不该有 B 站：%+v", feed)
+		t.Fatalf("关注流里不该有 B 站/YouTube：%+v", feed)
+	}
+	// 侧边栏角标走的是另一个查询，口径必须一样（否则角标数得出来、流里看不到）
+	if n, err := st.CountNewVideos(); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatalf("关注流新片计数该只算 pornhub 那 1 条，实际 %d", n)
 	}
 
 	wall, _, err := st.ListFeed(FeedQuery{Platform: "bilibili", Limit: 10})
