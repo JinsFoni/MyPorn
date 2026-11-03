@@ -227,14 +227,15 @@ func TestParseInitialsToleratesListInfoValues(t *testing.T) {
 	}
 }
 
-// 列表路径必须带 `/newest`（sort=added）：默认序是 sort=rated，第 1 页最上面是老片，
-// 增量同步一撞上就停，新片永远发现不了（2026-10 实测 mysaaat 漏了最新 4 部）。
-// 也钉住「不回到 `/full-length`」：2026-11-04 试过，它会把 1126s 的正片一起剔掉（见 performerPath 注释）。
-func TestPerformerPathUsesNewestSort(t *testing.T) {
+// 列表路径钉两件事：
+//  1. 栏位是站点的 `/full-length`（「完整片」那一栏）——2026-11-04 最终决定，理由见 performerPath 注释；
+//  2. 排序必须带 `/newest`（sort=added）：默认序是 sort=rated，第 1 页最上面是老片，
+//     增量同步一撞上就停，新片永远发现不了（2026-10 实测 mysaaat 漏了最新 4 部）。
+func TestPerformerPathUsesFullLengthNewest(t *testing.T) {
 	cases := map[int]string{
-		1:  "/pornstars/riley-reid/newest",
-		2:  "/pornstars/riley-reid/newest/2",
-		34: "/pornstars/riley-reid/newest/34",
+		1:  "/pornstars/riley-reid/full-length/newest",
+		2:  "/pornstars/riley-reid/full-length/newest/2",
+		34: "/pornstars/riley-reid/full-length/newest/34",
 	}
 	for page, want := range cases {
 		if got := performerPath("riley-reid", page); got != want {

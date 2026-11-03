@@ -196,25 +196,29 @@ func (a *Adapter) ParsePerformerURL(raw string) (string, error) {
 
 // performerPath 返回艺人影片列表的路径（第 1 页与第 N 页）。
 //
-// **必须带 `/newest`**：不带时站点给的是默认序（`sort: "rated"`），而增量同步是「遇到已入库影片即停」——
+// **排序必须带 `/newest`**：不带时站点给的是默认序（`sort: "rated"`），而增量同步是「遇到已入库影片即停」——
 // 第 1 页最上面躺着一堆几年前的老片，一撞上就停，新上传的永远发现不了。2026-10 实测（`mysaaat`）：
 // 默认页只有 38 条按评分排的，最新那 4 条单独挂在 `newestVideoSectionComponent` 里；换 `/newest` 后
 // 42 条、`sort: "added"`、按 `created` 严格倒序，最新那条落在第一位。
 //
-// **不要改成 `/full-length/newest`**（2026-11-04 改过又撤了，证据留在这儿）。
-// 起因是 `hot-pearl` 的 `/newest` 第 1 页混着 8 条 60–163s 的片花，看着像「`full-length` 才是完整版」。
-// 把两边整份列表拉下来对照才发现它不是过滤器，而是个更小的子集：
-// 她 `/newest` 是 12 页 545 条（正好等于页面自称的 `videoCount`）、`/full-length/newest` 只有 5 页 200 条；
-// 545 条里 **345 条不在 full-length**——360–600s 145 条、600–1200s 139 条、≥1200s 10 条、
-// 180–360s 26 条、<180s 25 条。不是「只削短片」：抽被剔掉的 1126s 那条（xh2grDz）把 HLS 清单数了一遍，
-// **281 段、合计 1125.9 秒、带 `#EXT-X-ENDLIST`**，是完整的 18.8 分钟正片、没有付费墙。
-// 也就是说换成 `full-length` 会静默丢掉三分之二正片。
-// 片花改在入库时按 `minVideoDuration` 挡掉，见 ListPerformerVideos。
+// **列表栏用站点的 `/full-length`（「完整片」那一栏）**，2026-11-04 的最终决定。
+// 中间来回改过两次，把量到的东西都留在这儿，省得下次再走一遍：
+//   - `/newest` 是「该艺人所有新片」，混着付费片花：实测 `hot-pearl` 12 页 545 条里
+//     <180s 的 25 条是纯预告（`- Trailer`、`Private com -`、26s 的账号名垃圾），
+//     还有 372/492/582/612 秒这几档固定长度的「同名片花」（同一部片发两遍、标题一字不差）。
+//   - `/full-length/newest` 是站点自己按「有完整正片」筛过的一栏，同一天只有 5 页 200 条，最短 361 秒。
+//   - 但它**不是严格的时长过滤器**：被它剔掉的 345 条里 360–600s 只占 145 条，还有 600–1200s 139 条、
+//     ≥1200s 10 条（多是合集/付费片：6662s 的 MEGA 100X Cum Blasts、3708s 的 1 HOUR of DPs COMPILATION…），
+//     而且这些被剔的 1126s 那条 HLS 也是完整的 281 段/1125.9 秒/带 ENDLIST——
+//     也就是说这栏不是靠「有没有截断」判的，是站点的内容分类（完整单场景 vs 片花/合集/付费）。
+//   - 按用户 2026-11-04 的实际观看反馈：库里很多 >180s 的条目内容仍不是完整片
+//     （从中间开始、中间被剪、或是合集切片），所以最终按站点分类走这一栏，
+//     不再用「时长阈值」自己猜。`minVideoDuration` 保留当兜底（这栏里本来就没有 <180s 的）。
 func performerPath(slug string, page int) string {
 	if page <= 1 {
-		return "/pornstars/" + url.PathEscape(slug) + "/newest"
+		return "/pornstars/" + url.PathEscape(slug) + "/full-length/newest"
 	}
-	return fmt.Sprintf("/pornstars/%s/newest/%d", url.PathEscape(slug), page)
+	return fmt.Sprintf("/pornstars/%s/full-length/newest/%d", url.PathEscape(slug), page)
 }
 
 // performerURLPath 是给人看/存下来的艺人主页地址（不带排序）。
