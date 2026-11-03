@@ -2,10 +2,13 @@ package xcom
 
 import (
 	"context"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -397,5 +400,76 @@ func TestCleanCaption(t *testing.T) {
 		if got := cleanCaption(c.in); got != c.want {
 			t.Errorf("cleanCaption(%q)\n得到 %q\n期望 %q", c.in, got, c.want)
 		}
+	}
+}
+
+// countingTransport 记录「真正发出去几次」，并按需制造连接层失败。
+type countingTransport struct {
+	n     int
+	fail  error   // 非 nil：一律失败（模拟连不上）
+	reply *string // 非 nil：一律回这段 HTML
+}
+
+func (c *countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.n++
+	if c.fail != nil {
+		return nil, c.fail
+	}
+	body := ""
+	if c.reply != nil {
+		body = *c.reply
+	}
+	return &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Status:     "429 Too Many Requests",
+		Header:     http.Header{"X-Rate-Limit-Remaining": []string{"0"}, "X-Rate-Limit-Reset": []string{"9999999999"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}, nil
+}
+
+// 连接层失败（本机代理拒连）要重试，且文案要说人话。
+//
+// 2026-11-03 22:21 实测：三个账号在 45 秒内先后报 `dial tcp 198.18.7.255:443:
+// connect: connection refused`（Clash TUN 的 fake-IP），同一分钟 curl 同域名 200。
+// 那种抖动重试一次就活了，而一次失败会把账号标红到下一次成功同步（默认 6 小时）。
+func TestGetRetriesConnectionRefused(t *testing.T) {
+	tr := &countingTransport{fail: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}}
+	a := New(&http.Client{Transport: tr})
+	a.base = "http://x.test"
+	a.web = ""
+	a.throttle = social.NewThrottle(time.Millisecond)
+	a.retryWaits = []time.Duration{time.Millisecond, time.Millisecond}
+
+	_, err := a.ListPosts(context.Background(), "mini", "")
+	if k := social.KindOf(err); k != social.KindUpstream {
+		t.Fatalf("错误种类 = %s，期望 upstream（%v）", k, err)
+	}
+	if tr.n != 3 {
+		t.Errorf("发了 %d 次请求，期望 3 次（首发 + 两次重试）", tr.n)
+	}
+	if !strings.Contains(err.Error(), "连不上 X") {
+		t.Errorf("文案没说清是连不上：%v", err)
+	}
+	if strings.Contains(err.Error(), "请求 X 失败") {
+		t.Errorf("连接层失败不该说成「请求失败」：%v", err)
+	}
+}
+
+// 拿到响应就不重试：429 是上游在说话，重试只会把额度烧得更快。
+func TestNoRetryOnHTTPStatus(t *testing.T) {
+	body := `<!DOCTYPE html><html><body><div id="__next"><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"timeline":{"entries":[]}}}}</script></div></body></html>`
+	tr := &countingTransport{reply: &body}
+	a := New(&http.Client{Transport: tr})
+	a.base = "http://x.test"
+	a.web = ""
+	a.throttle = social.NewThrottle(time.Millisecond)
+	a.retryWaits = []time.Duration{time.Millisecond, time.Millisecond}
+
+	if _, err := a.ListPosts(context.Background(), "mini", ""); err == nil {
+		t.Fatal("429 应当报错")
+	}
+	if tr.n != 1 {
+		t.Errorf("发了 %d 次请求，期望 1 次（有响应就不重试）", tr.n)
 	}
 }

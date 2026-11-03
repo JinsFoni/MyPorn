@@ -27,16 +27,19 @@ package xcom
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/JinsFoni/MyPorn/internal/social"
@@ -65,6 +68,14 @@ type Adapter struct {
 	cdn      string // 单帖 tweet-result
 	web      string // 主页 HTML（发现新帖 id）；空 = 这条路关掉（单测里只量时间线那条路）
 	now      func() time.Time
+	// retryWaits 是「连不上」之后的重试间隔（空 = 不重试，只给测试用）。
+	// 为什么要有它：2026-11-03 22:21 实测三个账号在 45 秒内先后报
+	// `dial tcp 198.18.7.255:443: connect: connection refused`（这台机器走 Clash TUN，
+	// 出口节点抖了一下），同一分钟 curl 同一个域名是 200。而这种失败会把账号标红到
+	// 下一次成功同步（默认间隔 6 小时），界面上一直挂着一条「请求 X 失败」。
+	// 连接层抖动重试两次就够（1s + 3s），HTTP 状态码（429 / 403）一律不重试：
+	// 那些是上游在说话，重试只会把额度烧得更快。
+	retryWaits []time.Duration
 }
 
 func New(client *http.Client) *Adapter {
@@ -72,12 +83,13 @@ func New(client *http.Client) *Adapter {
 		client = &http.Client{Timeout: 25 * time.Second}
 	}
 	return &Adapter{
-		client:   client,
-		throttle: social.NewThrottle(1500 * time.Millisecond),
-		base:     baseURL,
-		cdn:      cdnURL,
-		web:      webURL,
-		now:      time.Now,
+		client:     client,
+		throttle:   social.NewThrottle(1500 * time.Millisecond),
+		base:       baseURL,
+		cdn:        cdnURL,
+		web:        webURL,
+		now:        time.Now,
+		retryWaits: []time.Duration{time.Second, 3 * time.Second},
 	}
 }
 
@@ -209,12 +221,12 @@ func (a *Adapter) fetch(ctx context.Context, handle string) (*nextData, error) {
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
-	resp, err := a.client.Do(req)
+	resp, err := a.do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, social.Upstream("请求 X 失败", err)
+		return nil, social.Upstream(transportMsg(err), err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
@@ -287,6 +299,51 @@ var profileStatusRe = regexp.MustCompile(`x\.com/[A-Za-z0-9_]+/status/(\d{15,})`
 // profileEditRe 从 edit_control.edit_tweet_ids 里取帖子 id（RSC 流里是 `\"edit_tweet_ids\":[\"123\"]`）。
 var profileEditRe = regexp.MustCompile(`edit_tweet_ids\\?"\s*:\s*\[\s*\\?"(\d{15,})`)
 
+// do 发请求，连接层失败按 `retryWaits` 重试。
+//
+// 只重试 `client.Do` 报错的那种失败（连不上、被对端切断、握手超时）——它们发生在
+// 「请求根本没到 X」的阶段，重试不消耗 X 的额度，也不会被当成刷接口。
+// 一旦拿到了响应（哪怕 429 / 403），立刻原样返回，交给上层按状态码分类。
+func (a *Adapter) do(req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		resp, err := a.client.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		lastErr = err
+		if attempt >= len(a.retryWaits) {
+			return nil, lastErr
+		}
+		t := time.NewTimer(a.retryWaits[attempt])
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, lastErr
+		case <-t.C:
+		}
+	}
+}
+
+// transportMsg 给连接层失败换个能看懂的说法。
+//
+// `dial tcp 198.18.7.255:443: connect: connection refused` 里的那个地址是本机代理的
+// fake-IP（这台机器走 Clash TUN），用户看到「198.18.x.x 拒绝连接」只会以为是我们的 bug；
+// 说成「连不上 X」＋保留底层细节，才能让人知道该去看代理。
+func transportMsg(err error) string {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) || errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETUNREACH) {
+		return "连不上 X（本机网络或代理不通）"
+	}
+	return "请求 X 失败"
+}
+
 // get 发一个 GET，返回响应体和状态码。限流/传输故障统一成 social.Error。
 func (a *Adapter) get(ctx context.Context, u, accept string) ([]byte, int, error) {
 	if err := a.throttle.Wait(ctx); err != nil {
@@ -299,12 +356,12 @@ func (a *Adapter) get(ctx context.Context, u, accept string) ([]byte, int, error
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", accept)
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	resp, err := a.client.Do(req)
+	resp, err := a.do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, 0, ctx.Err()
 		}
-		return nil, 0, social.Upstream("请求 X 失败", err)
+		return nil, 0, social.Upstream(transportMsg(err), err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))

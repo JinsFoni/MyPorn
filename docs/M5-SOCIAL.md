@@ -578,6 +578,16 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
   所以改完不用重启、不用重建客户端（有单测 `TestDynamicClientFollowsSettings` 守着）。
   优先级：设置里的平台代理 > 设置里的全局 > `PLATFORM_PROXY_*` 环境变量 > `GLOBAL_PROXY`。
   被拦时界面直接指到这块设置，不会让你干等 15 分钟。
+  **但「保存即生效」只对新建连接成立**：已经建好的 keep-alive / idle 连接会被复用，复用时
+  不再问一次代理。2026-11-03 实测：把 `proxy_x` 指成一个非法地址、不重启连打 4 次
+  `x.com/{handle}`，3 次仍 200（吃了旧连接）、1 次 502；重启进程后同一份设置立刻全 502。
+  要立刻换出口，重启一次最稳。
+- **连接层失败自动重试两次（1s + 3s），拿到响应就不重试**：`dial tcp 198.18.7.255:443:
+  connect: connection refused` 这类错误发生在请求还没到 X 的阶段（这台机器走 Clash TUN，
+  fake-IP 段），重试不消耗 X 的额度。2026-11-03 22:21 实测：出口节点抖了一下，三个账号在
+  45 秒内先后报连不上，而同一分钟 `curl https://x.com/...` 是 200——那时候没有任何重试，
+  账号就被标红到下一次成功同步（默认 6 小时）。现在文案也换了：「连不上 X（本机网络或代理不通）」，
+  不再拿代理的 fake-IP 当主语（单测 `TestGetRetriesConnectionRefused` / `TestNoRetryOnHTTPStatus` 守着）。
 - **Instagram Cookie 只要给得出就能用，但「给不出」的判断只看 sessionid**：缺 `sessionid` 一律当未配置；
   其余 Cookie（`mid` / `ig_did` / `datr` / `rur`）给了就原样带上，少这些时 IG 可能照样 401。
 - **Instagram 全链路没有在真实账号上跑过**：手上没有可用 Cookie，首屏 `web_profile_info`、翻页
