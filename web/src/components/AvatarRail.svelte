@@ -3,10 +3,11 @@
   import type { RailItem } from '../lib/rail';
 
   /**
-   * 头像条：横向滚动的圆头像＝**过滤器**（关注页 / B 站页 / YouTube 页共用一套）。
+   * 头像条：横向滚动的圆头像＝**过滤器**（关注页 / 动态页 / B 站页 / YouTube 页共用一套）。
    *
    * 尺寸（2026-11-02 按用户要求「头像改小一点」从 72px 缩到 56px）：**56px 圆头像**
-   * （`h-14 w-14`）+ 80px 宽的姓名（`w-20`，`text-meta` 12px，单行截断），**不显示任何计数**；
+   * （`h-14 w-14`）+ 80px 宽的姓名（`w-20`，`text-meta` 12px，默认单行截断；动态页用
+   * `multiLine` 折两行，见 Props 里的说明），**不显示任何计数**；
    * 点头像＝把 `id` 交回去，由页面写地址栏；选中态是头像外 2px 白环 + 姓名 `font-medium`，
    * 再点同一个取消（这是**唯一**的取消入口：下面那行筛选行不再有带 ✕ 的名字胶囊）。
    *
@@ -36,9 +37,17 @@
     onSelect?: (id: number | null) => void;
     /** 列表还在路上：画同样数量的灰圆占位 */
     loading?: boolean;
+    /**
+     * 姓名许折两行（默认单行截断）。
+     * 只有动态页打开：那一排写的是平台显示名，最长「金松季歩(kanematsu kiho)」22 字符，
+     * 80px 一列单行只装得下 6 个汉字或 13 个西文，截断后认不出是谁。
+     * 关注页 / B 站 / YouTube 的姓名本来就短，保持单行，版面高度一个像素不动。
+     */
+    multiLine?: boolean;
   }
 
-  let { items, label, selected = null, onSelect, loading = false }: Props = $props();
+  let { items, label, selected = null, onSelect, loading = false, multiLine = false }: Props =
+    $props();
 
   /** 头像会过期（平台 CDN 的签名/防盗链），失败的那一张退回首字母，别再反复拉 */
   let failed = $state<Record<number, boolean>>({});
@@ -79,7 +88,7 @@
             onclick={() => pick(item.id)}
             data-rail-id={item.id}
             aria-pressed={selected === item.id}
-            class="group flex w-20 flex-col items-start gap-1 text-left"
+            class="group flex flex-col items-start gap-1 text-left {multiLine ? 'w-28' : 'w-20'}"
             title={selected === item.id
               ? `${item.title ?? item.name}（再点一次看全部）`
               : (item.title ?? item.name)}
@@ -120,7 +129,9 @@
               {/if}
             </span>
             <span
-              class="w-full truncate text-meta transition-colors {selected === item.id
+              class="w-full text-meta transition-colors {multiLine
+                ? 'line-clamp-2 break-words'
+                : 'truncate'} {selected === item.id
                 ? 'font-medium text-fg'
                 : 'text-dim group-hover:text-fg'} {item.dimmed ? 'opacity-50' : ''}"
             >

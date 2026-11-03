@@ -73,15 +73,21 @@
   const activeAccounts = $derived(accounts.filter((a) => a.enabled));
 
   /**
-   * 头像条的条目：一位博主一颗。名字用 `@handle`（跟原来那排胶囊一致，`displayName`
-   * 里常带「| ONLYFANS」这类后缀，放 80px 宽的一列里更认不出是谁）；照片数只进 `title`。
+   * 头像条的条目：一位博主一颗。名字用平台的**显示名**（`displayName`），空着才退回 `@handle`。
+   *
+   * 2026-11-03 用户要求「头像下面不要显示 ID，显示名称」：原来这排写的是 `@handle`，
+   * @ 后面那串就是账号 ID，三位博主里只有一位认得出来。改显示名后实测是
+   * `香水じゅん` / `金松季歩(kanematsu kiho)` / `mysaaat | ONLYFANS`——最长 22 字符，
+   * 而 80px 一列按 12px 字号一行只装得下 6 个汉字或 13 个西文，所以**只有这一排**
+   * 许姓名折两行（`multiLine`；关注页 / B 站 / YouTube 那三排仍单行，一个像素不动）。
+   * `@handle` 和照片数都进 `title`，不占版面（悬停可见、读屏可读）。
    */
   const railItems = $derived<RailItem[]>(
     accounts.map((a) => ({
       id: a.id,
-      name: `@${a.handle}`,
+      name: a.displayName.trim() || `@${a.handle}`,
       avatarUrl: a.avatarUrl || null,
-      title: `@${a.handle} · ${String(a.photoCount)} 张`,
+      title: `${a.displayName.trim() || `@${a.handle}`} · @${a.handle} · ${String(a.photoCount)} 张`,
       dimmed: !a.enabled,
     })),
   );
@@ -346,6 +352,7 @@
   selected={filterAccount}
   onSelect={(id) => setFilter(id, null)}
   loading={!accountsLoaded}
+  multiLine
 />
 
 <div class="flex flex-col gap-4">
