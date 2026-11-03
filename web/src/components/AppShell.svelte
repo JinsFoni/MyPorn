@@ -38,11 +38,13 @@
 
   const NAV: readonly NavItem[] = [
     { href: '/', label: '关注', icon: 'feed', isActive: (p) => p === '/' || p.startsWith('/video') },
+    // 艺人紧跟关注（2026-11-03 用户要求）：两边看的是同一批东西——关注流按艺人筛出来的那种视角，
+    // 「动态」往后让一位。
+    { href: '/performers', label: '艺人', icon: 'performers', isActive: (p) => p.startsWith('/performer') },
     { href: '/moments', label: '动态', icon: 'moments', isActive: (p) => p.startsWith('/moments') },
     { href: '/youtube', label: 'YouTube', icon: 'youtube', isActive: (p) => p.startsWith('/youtube') },
     // B 站和 YouTube 是同一件事的两种形态：各自一页，管理里也各有一个页签。
     { href: '/bilibili', label: 'B 站', icon: 'bilibili', isActive: (p) => p.startsWith('/bilibili') },
-    { href: '/performers', label: '艺人', icon: 'performers', isActive: (p) => p.startsWith('/performer') },
     { href: '/discover', label: '发现', icon: 'discover', isActive: (p) => p.startsWith('/discover') },
     { href: '/downloads', label: '下载', icon: 'downloads', isActive: (p) => p.startsWith('/downloads') },
     // 媒体库：已经下到磁盘上的片子（下载页是任务队列，两件事分开放）
