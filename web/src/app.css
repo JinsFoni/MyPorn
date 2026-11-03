@@ -1,7 +1,8 @@
 @import 'tailwindcss';
 
 /* Roboto 只带三档（400 / 500 / 700）——正文与 UI 用 400/500（和 beeg 一样只这两档）；
-   700 只给「艺人卡姓名」用（对标 X 上的名字是粗体），woff2 单个 ~22KB。
+   700 只给「人名」用：艺人卡姓名 + 头像条下面的 13px 姓名（2026-11-04 用户要求名字加粗；
+   对标 X 上的名字是粗体），woff2 单个 ~22KB。
    CJK 走系统字体（PingFang SC / 微软雅黑），不额外打包中文字体。 */
 @font-face {
   font-family: 'Roboto';
@@ -17,7 +18,7 @@
   font-display: swap;
   src: url('@fontsource/roboto/files/roboto-latin-500-normal.woff2') format('woff2');
 }
-/* 700 只在「艺人」页的卡片姓名上用到，浏览器按需下载，关注/影片流首屏不会拉它。 */
+/* 700 只在「人名」上用到（艺人卡 + 头像条姓名），首屏有关注/动态页就会拉它，22KB 一次性。 */
 @font-face {
   font-family: 'Roboto';
   font-style: normal;

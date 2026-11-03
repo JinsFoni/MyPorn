@@ -7,14 +7,18 @@
    *
    * 尺寸：**72px 圆头像**（`h-18 w-18`，取 128px 的图按 2x 稍有余量），列宽就是头像宽（`w-18` = 72px），
    * 姓名 13px / 行高 18px（`text-[0.8125rem] leading-[1.125rem]`；2026-11-04 从 12px 加到 14px 后用户说太大，定在 13px）、
+   * **粗体 700**（`font-bold`，2026-11-04 用户要求「名字加粗」；和艺人卡姓名同一个字重，Roboto 只带 400/500/700 三档，
+   * 所以字重从 500 直接跨到 700、没有中间档可挑）、
    * **单行截断**、**居中在头像正下方**
    * （同日要求；此前是 80px 宽、左对齐）。
    * 历史：2026-11-02「头像改小一点」72 → 56；2026-11-04「再调大一点点」56 → 64 → 72 并要求名字居中。
    * **列宽与头像等宽（都 72px）是刻意的**：这样首列头像的左边仍落在内容左边缘（白环靠滚动盒 6px 内边距活着），
    * 名字居中不会把整列往右推 4px（若列宽 80 而头像 72，居中后头像会右移 4px）。
    * **不显示任何计数**；
-   * 点头像＝把 `id` 交回去，由页面写地址栏；选中态是头像外 2px 白环 + 姓名 `font-medium`，
+   * 点头像＝把 `id` 交回去，由页面写地址栏；选中态是头像外 2px 白环 + 姓名 `text-fg`，
    * 再点同一个取消（这是**唯一**的取消入口：下面那行筛选行不再有带 ✕ 的名字胶囊）。
+   * 2026-11-04 起姓名整排都是 700 粗体，选中不再靠字重区分（原来未选中 400 / 选中 500），
+   * 只靠白环 + 颜色（`text-dim` → `text-fg`）。
    *
    * 容器 `flex gap-4 overflow-x-auto no-scrollbar`（间距 12 → 16px，2026-11-04 用户要求「间距再宽一点点」），
    * 用「负外边距 + 等量内边距」做贴边滚动：
@@ -127,8 +131,9 @@
               {/if}
             </span>
             <span
-              class="w-full truncate text-center text-[0.8125rem] leading-[1.125rem] transition-colors {selected === item.id
-                ? 'font-medium text-fg'
+              class="w-full truncate text-center text-[0.8125rem] font-bold leading-[1.125rem] transition-colors {selected ===
+              item.id
+                ? 'text-fg'
                 : 'text-dim group-hover:text-fg'} {item.dimmed ? 'opacity-50' : ''}"
             >
               {item.name}
