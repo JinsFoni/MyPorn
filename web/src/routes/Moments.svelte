@@ -13,6 +13,7 @@
    */
   import { onMount, untrack } from 'svelte';
   import AvatarRail from '../components/AvatarRail.svelte';
+  import SocialBrandIcon from '../components/SocialBrandIcon.svelte';
   import InfiniteList from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import { ApiError, api, messageFor } from '../lib/api';
@@ -22,6 +23,7 @@
   import { patchQuery, router } from '../lib/router.svelte';
   import { ui } from '../lib/ui.svelte';
   import { formatDateTime } from '../lib/format';
+  import { socialBrandOfPlatform } from '../lib/socialBrand';
   import type { RailItem } from '../lib/rail';
   import type {
     Library,
@@ -417,19 +419,25 @@
       全部
     </button>
 
+    <!-- 平台筛选紧贴「全部」右边，用和艺人主页同一个品牌图标（`SocialBrandIcon`）：
+         32px 圆底座 + 22/26px 原色标，选中时底座亮起来。比原来那两颗文字胶囊省一半宽度，
+         所以手机上也不用再藏了。 -->
+    {#each platforms as p (p.key)}
+      <button
+        type="button"
+        onclick={() => setFilter(null, filterPlatform === p.key ? null : p.key)}
+        title={p.name}
+        aria-label={p.name}
+        aria-pressed={filterPlatform === p.key}
+        class="grid h-8 w-8 shrink-0 place-items-center rounded-full transition-colors {filterPlatform === p.key
+          ? 'bg-raise ring-1 ring-fg/15'
+          : 'hover:bg-panel'}"
+      >
+        <SocialBrandIcon kind={socialBrandOfPlatform(p.key)} />
+      </button>
+    {/each}
+
     <div class="ml-auto flex shrink-0 items-center gap-2">
-      <!-- 平台在手机上留给「艺人页」那种场景，这里 390px 一行塞不下，直接藏掉 -->
-      {#each platforms as p (p.key)}
-        <button
-          type="button"
-          onclick={() => setFilter(null, filterPlatform === p.key ? null : p.key)}
-          class="hidden rounded-full px-2.5 py-1.5 text-meta transition-colors sm:block {filterPlatform === p.key
-            ? 'bg-raise text-fg'
-            : 'text-dim hover:bg-panel hover:text-fg'}"
-        >
-          {p.name}
-        </button>
-      {/each}
       <button
         type="button"
         onclick={openAdd}
@@ -477,7 +485,7 @@
       keyOf={(photo: MomentPhoto) => photo.id}
       reloadKey={wallKey}
       maxLoadedPages={8}
-      gridClass="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
+      gridClass="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
       droppedKeys={droppedPhotos}
       onItems={(items: MomentPhoto[]) => {
         photos = items;
