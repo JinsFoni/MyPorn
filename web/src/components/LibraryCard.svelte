@@ -2,7 +2,7 @@
   /**
    * 媒体库的卡片：**和关注流 / B 站 / YouTube 那三条墙同一套模板**
    * （`CoverArt` 封面 + `CardDuration` 右下时长 + `CardByline` 圆头像/一行标题/副行
-   * + `CardDownloadButton` 右上角悬停动作）。要改卡片长相就改那几个组件，别在这里单独调。
+   * + `CardDownloadButton` 左下角悬停动作）。要改卡片长相就改那几个组件，别在这里单独调。
    *
    * 这张卡和三条墙的差别只有「它代表的是磁盘上的一个文件」：
    * - 圆头像和副行名字是**频道 / UP 主**（和三条墙同一位置放同一件事）：平台影片取第一位
@@ -12,7 +12,7 @@
    *   隐私模式下**必须**换回 /api/img 的小糊图——本地那张是按原尺寸发的，没有糊化那一层。
    * - 封面左上角是 `2160p`（落盘时 probe 的尺寸）：三条墙不知道分辨率所以没有这一格，
    *   而这一页的每一行都带着分辨率，是「值不值得留」的依据之一。
-   * - 右上角那颗按钮是**复制文件路径**（已经下到盘上了，再下一次没有意义），
+   * - 左下角那颗按钮是**复制文件路径**（已经下到盘上了，再下一次没有意义），
    *   用的还是 `CardDownloadButton`，只换图标。
    * - 文件被挪走 / 删掉时整条压暗、盖一条砖红色的「文件已不在磁盘上」（和 YouTube 卡的
    *   「直播」标同一个位置同一个做法），链接直接不渲染——点过去只会 404。
@@ -107,8 +107,9 @@
       <CardDuration seconds={item.durationSec} />
 
       {#if item.missing}
+        <!-- 左下角让给「复制路径」按钮（`CardDownloadButton`，`left-2` 起 28px）：右移 40px -->
         <span
-          class="absolute bottom-2 left-2 rounded bg-brick/90 px-1.5 py-0.5 text-[0.6875rem] font-medium text-fg"
+          class="absolute bottom-2 left-10 rounded bg-brick/90 px-1.5 py-0.5 text-[0.6875rem] font-medium text-fg"
         >
           文件已不在磁盘上
         </span>

@@ -89,7 +89,10 @@
     <CardDuration seconds={video.durationSec} />
 
     {#if video.isLive}
-      <span class="absolute bottom-2 left-2 rounded bg-brick/90 px-1.5 py-0.5 text-[0.6875rem] font-medium text-fg">
+      <!-- 左下角让给下载按钮（`CardDownloadButton`，`left-2` 起 28px）：有按钮时右移 40px -->
+      <span
+        class="absolute bottom-2 {onDownload ? 'left-10' : 'left-2'} rounded bg-brick/90 px-1.5 py-0.5 text-[0.6875rem] font-medium text-fg"
+      >
         直播
       </span>
     {/if}

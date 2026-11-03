@@ -112,7 +112,7 @@ INSERT OR IGNORE INTO platforms (key, name) VALUES ('youtube', 'YouTube');
 
 | 位置 | 内容 |
 |---|---|
-| 侧边栏「YouTube」（`/youtube`，`icon: 'youtube'`，紧跟「动态」之后） | 未看新视频混流，发布时间倒序；顶部一行频道筛选胶囊（头像 + 名字 + 未看数）；卡片右上角「下载」 |
+| 侧边栏「YouTube」（`/youtube`，`icon: 'youtube'`，紧跟「动态」之后） | 未看新视频混流，发布时间倒序；顶部一行频道筛选胶囊（头像 + 名字 + 未看数）；卡片左下角「下载」（2026-11-04 从右上角搬来） |
 | 动态页（`/moments`）顶部 | **不放**那排切换（2026-10-29 拆掉「动态 / YouTube / B 站」分段控件）：三个入口都在导航里，页面顶部只留筛选工具栏 |
 | YouTube 页（`/youtube`）顶部 | **不放**那条切换（2026-10-28 去掉）：进了某条流就只管这条流，换流走侧边栏 / 底栏 |
 | 管理页 → 新 tab「YouTube」 | 贴链接添加、启用开关、单独同步、深度回填、删除、看视频数/未看数/上次同步/错误；顶部四格总览（频道数 / 视频数 / 24h 新增 / 出错频道） |
@@ -284,7 +284,7 @@ yt-dlp --no-playlist --newline --socket-timeout 20 --retries 3 --concurrent-frag
 | 文件 | 内容 |
 |---|---|
 | `web/src/routes/Youtube.svelte` | 频道头像条（`AvatarRail`，和关注页同款）+ 16:9 网格 + `InfiniteList` + 嵌播弹层 |
-| `web/src/components/YtCard.svelte` | 封面（`hq720` 铺满 / `maxresdefault` 大图，均带 `f=` 兜底）、时长（右下角纯文字 + 三层 `text-shadow`，**不带黑色药丸底**）、**单行标题**（`truncate`，并把末尾那串 `#标签` 削掉——实测 `/youtube` 首屏 36 张卡里 21 张带，最长一条 54 字削完只剩 12 字的片名；原始标题仍在 `title` 提示和详情页上）、**36px 圆头像**、副行「频道 · ▷ 观看数 · 日期」（12px **空心**播放三角 + 数字，读屏走 `aria-label` 念「908 次观看」）、未看小圆点、右上角下载按钮、直播标记。**2026-11-02 起这张卡是三条墙的样式模板**：封面 / 时长 / 下载按钮 / 头像+标题+副行四块拆成共享组件（`CoverArt` / `CardDuration` / `CardDownloadButton` / `CardByline`），影片卡 `VideoCard` 用的是同一套，改样式改组件（见 `ARCHITECTURE.md`「卡片」行） |
+| `web/src/components/YtCard.svelte` | 封面（`hq720` 铺满 / `maxresdefault` 大图，均带 `f=` 兜底）、时长（右下角纯文字 + 三层 `text-shadow`，**不带黑色药丸底**）、**单行标题**（`truncate`，并把末尾那串 `#标签` 削掉——实测 `/youtube` 首屏 36 张卡里 21 张带，最长一条 54 字削完只剩 12 字的片名；原始标题仍在 `title` 提示和详情页上）、**36px 圆头像**、副行「频道 · ▷ 观看数 · 日期」（12px **空心**播放三角 + 数字，读屏走 `aria-label` 念「908 次观看」）、未看小圆点、封面左下角下载按钮（2026-11-04 从右上角搬来）、直播标记（有下载按钮时右移到 `left-10` 让位）。**2026-11-02 起这张卡是三条墙的样式模板**：封面 / 时长 / 下载按钮 / 头像+标题+副行四块拆成共享组件（`CoverArt` / `CardDuration` / `CardDownloadButton` / `CardByline`），影片卡 `VideoCard` 用的是同一套，改样式改组件（见 `ARCHITECTURE.md`「卡片」行） |
 | `web/src/routes/Manage.svelte` | 新 tab `youtube`（结构照抄 moments 那块）+ 顶部四格总览 |
 | `web/src/routes/Moments.svelte` | 页顶加「动态 / YouTube」切换 |
 | `web/src/components/AppShell.svelte` | `NAV` 加一项 + `navIcon` 加 `youtube` + 未看角标 + `JOB_LABEL` 加 `yt_sync` / `yt_download` |

@@ -4,7 +4,7 @@
    *
    * 样式以 YouTube 卡（YtCard）为模板，两边共用同一套原子组件：
    * `CoverArt`（封面 + 悬停放大 + 竖屏两侧虚化）、`CardDuration`（右下角时长）、
-   * `CardDownloadButton`（右上角下载按钮）、`CardByline`（36px 头像 / 单行标题 / 副行）。
+   * `CardDownloadButton`（封面左下角下载按钮）、`CardByline`（36px 头像 / 单行标题 / 副行）。
    * 要改卡片长相就改那几个组件，别在这张卡里单独调——2026-11 之前三条墙各写一份，
    * 时长一半在左上、一半在右下，黑度还不一样，一换页就跳。
    *
