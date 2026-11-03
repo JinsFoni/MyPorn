@@ -170,7 +170,7 @@ make backend           # 先编译
 | 点 | 现状（2026-10 实测） | 改版后怎么发现 |
 |---|---|---|
 | X 抓取入口 | `syndication.twitter.com/srv/timeline-profile/screen-name/<handle>`，数据在 `__NEXT_DATA__.props.pageProps.timeline.entries[]` | 502 `stale_parser`「页面结构变了」，或 `hasResults:false` |
-| X 协议版本 | **必须 HTTP/2**：同一地址 HTTP/1.1 一律 429（还带假的 `x-rate-limit-reset`），HTTP/2 才 200。`platform.NewHTTPClient` 里 `ForceAttemptHTTP2: true` 是硬要求 | 突然持续 429 而 curl 正常 → 先查协议版本 |
+| X 协议版本 | ~~必须 HTTP/2~~ **2026-11-04 复测推翻**：同一秒同一 URL，`curl --http1.1` 200（`remaining:27`）、`curl` h2 429（`remaining:0`）、Go h2 200（`remaining:12`）、Go h1.1 429 —— 是**按「IP+客户端指纹」分桶**的 30 次/15 分钟，不是协议歧视（§15.15）。`ForceAttemptHTTP2: true` 仍留着，但 429 只说明「这个指纹的桶空了」 | 429 时别拿「浏览器能打开」证明 IP 干净，也别拿 curl 正常证明不是我们这侧的问题；看 `remaining`/`reset` 属于哪个桶 |
 | X 条数 | 固定 20 条、**没有游标**，翻页无从谈起；`?name=orig` 拿原图 | 想拿更多只能上 Cookie/GraphQL（本轮没做） |
 | X 限流 | 约 30 次/15 分钟（按 IP）。`remaining:0` 但 `reset` 已过期是缓存的旧头，不能当限流 | 冷却到点仍 429 → 可能配额被同 IP 的其它工具占满 |
 | X 转推 | 原帖在 `retweeted_status` 里，按原帖 id 去重 | 同一张照片入库两次 → 去重键失效 |

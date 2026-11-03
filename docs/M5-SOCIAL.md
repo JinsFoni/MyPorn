@@ -767,3 +767,77 @@ curl -s -H 'x-ig-app-id: 936619743392459' \
 LIVE=1 LIVE_IG_COOKIE=$PWD/.tmp/ig/cookies.txt LIVE_IG_HANDLE=kaedekaren0825 \
   go test ./internal/social/igram -run TestLiveInstagram -v
 ```
+
+### 15.15 免登录抓 X 的现状复核（2026-11-04 04:10–04:25，本机直连）
+
+§15.1–15.10 的结论有两条今天不再成立，另外量到几件新的。四个在库账号
+（`@mysaaat` / `@jun_kasui` / `@kiho_kanematsu` / `@sanoyumasan_gao`）逐个打了一遍。
+
+**1) 「widget 一页固定 20 条」不对，是 21–65 条且没有翻页。**
+
+| 账号 | widget entries | widget 给的最新一条 | 主页 HTML 能看到的真实最新 | 滞后 |
+|---|---|---|---|---|
+| `@natgeo`（大号，对照） | 21 | 2026-11-02 | — | — |
+| `@mysaaat` | 32 | 2025-07-04 | 2026-07-02 | **11.9 个月** |
+| `@jun_kasui` | 41 | 2026-08-31 | 2026-11-02 | 2.1 个月 |
+| `@sanoyumasan_gao` | 64 | 2025-10-08 | 2026-11-03 | **12.8 个月** |
+| `@kiho_kanematsu` | 65 | 2026-10-04 | 2026-11-03 | 1.0 个月 |
+
+翻页参数全是空炮：`?maxPosition=<id>` / `?cursor=<id>` / `?lang=ja` 都回**逐字节同样的 64 条**
+（337,321 B vs 337,357 B，只差 URL 参数被回显的长度）；`?showReplies=true` 直接回 2,260 B 的空壳。
+所以「widget 负责历史」这句要打折：它给的是一份**过期快照**，四个账号全部落后真实最新帖 1.0–12.8 个月。
+
+**2) 主页发现每轮只给 5–8 个 id，`/media` 之类子页匿名一律 307 跳登录。**
+`x.com/{handle}` 匿名 200（141–167 KB），六次连抓字节级一致、id 集合完全相同（`@sanoyumasan_gao` 稳定 6 个）；
+`/media`、`/with_replies`、`/photo` 全部 `307` → `/i/jf/onboarding/web?redirect_after_login=…`。
+
+后果已经能看见——库里两段空洞正好夹在「widget 停下的那天」和「发现路径够得到的最早一条」之间：
+
+- `@sanoyumasan_gao`：2025-10-08 之后 0 条，直到 2026-10-22 才接上（**12.5 个月空白**）
+- `@mysaaat`：2025-10-25 之后 0 条，直到 2026-07-02（8 个月空白）
+
+只要博主两轮同步（默认 6 小时）之间发帖超过页面能给的 ~6 条，中间那些就**永久抓不到**（没有翻页可以往回补）。
+
+**3) 429 不是「这台机器被限」，而是按客户端指纹分桶的额度。** 同一个 IP、同一秒、同一个 URL：
+
+| 客户端 | 结果 | `x-rate-limit-remaining` | `reset` |
+|---|---|---|---|
+| `curl --http1.1` | **200** | 27 | 04:28:25 |
+| `curl`（默认 HTTP/2） | **429** | 0 | 04:23:58 |
+| Go `net/http`（HTTP/2） | **200** | 12 | 04:19:11 |
+| Go（强制 HTTP/1.1） | **429** | 0 | 04:16:41 |
+
+四个桶、四个 reset，互不影响：`x-rate-limit-limit` 一律 30，窗口 15 分钟。
+所以 `docs/NEEDS-VERIFICATION.md` 里「HTTP/1.1 一律 429、必须 HTTP/2」是**误诊**——
+当时看到的 429 是那个指纹的桶被刷空了。顺带说明两件事：浏览器打得开**不能**证明我们的抓取应该能用；
+我们 429 **也不**等于 IP 脏。`ForceAttemptHTTP2: true` 继续留着（Go 的 h2 桶实测稳定），但别再拿协议版本当诊断结论。
+
+**4) 冷却的作用域写错了：一个宿主的 429 会冻住整个 X 适配器。**
+`social.Throttle` 是适配器级、只有一个 `until`；而三个宿主是三份独立额度：
+
+| 宿主 | 用途 | 实测限流 |
+|---|---|---|
+| `syndication.twitter.com` | 时间线 widget（历史） | 30 次 / 15 分钟，头里带 `x-rate-limit-*` |
+| `x.com` | 主页 HTML 发现新帖 | 连打 6 次全 200，**没有限流头** |
+| `cdn.syndication.twimg.com` | 单帖 `tweet-result` | 连打 6 次全 200，无头 |
+
+今天 widget 桶被刷空（Go h2 那桶 429）时，应用照样同步成功：`@sanoyumasan_gao` 13 s、
+`@jun_kasui` 16 s，都报「第 1 页，新增 0 张照片」。但同一轮里若某个账号先被 widget 429 设了冷却，
+`jobs/social.go:105` 遇到 `rate_limited` 就直接 `return`，**这一轮剩下的 X 账号全跳过、等 6 小时后再说**。
+
+**5) 内容面：视频/纯文字/转推帖在照片墙上是空的。**
+实测无图帖：`@jun_kasui` 6 条、`@kiho_kanematsu` 3 条、`@sanoyumasan_gao` 6 条（`collectPhotos` 只收 `type=photo`）。
+
+**6) 仍然好用的部分**（别一起否掉）：`?name=orig` 原图可拿（实测 92,772 B JPEG）、
+`pbs.twimg.com` 不校验 Referer、**图片签名不过期**（比 IG 那 4.4 天强）；
+`tweet-result` 单帖稳定（连打 6 次全 200 / 2,297 B，`token` 只校验存在性）；
+受保护/不存在的账号仍是 `200 + hasResults:false`，判空只能看字段。
+
+复跑方式（本机直连，无代理）：
+
+```bash
+# 时间线 widget + 主页发现 + 单帖 + HTTP/1.1 对照
+go run .tmp/x/probe/main.go        # 输出各账号 entries 数、最新/最旧、id 数
+# 分桶对照
+go run .tmp/x/bucket/main.go
+```
