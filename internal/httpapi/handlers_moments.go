@@ -54,9 +54,12 @@ type momentPhotoDTO struct {
 	Saved     bool   `json:"saved"`
 	AccountID int64  `json:"accountId"`
 	Handle    string `json:"handle"`
-	Platform  string `json:"platform"`
-	PostURL   string `json:"postUrl"`
-	Caption   string `json:"caption"`
+	// DisplayName 是博主自己写的名字，悬停/灯箱上显示它（2026-11-04 用户要求：
+	// 「悬浮时左下角显示名字，不要显示 X 的 ID」）；空着才回退 @handle。
+	DisplayName string `json:"displayName"`
+	Platform    string `json:"platform"`
+	PostURL     string `json:"postUrl"`
+	Caption     string `json:"caption"`
 }
 
 type momentsPageDTO struct {
@@ -84,8 +87,8 @@ func (s *Server) photoDTO(r *store.SocialPhotoRow) momentPhotoDTO {
 	return momentPhotoDTO{
 		ID: r.ID, URL: imgProxy(r.Platform, r.URL), ThumbURL: imgProxy(r.Platform, r.URL),
 		Width: r.Width, Height: r.Height, Seq: r.Seq, PostedAt: rfc3339(r.PostedAt), Saved: r.Saved > 0,
-		AccountID: r.Account.ID, Handle: r.Account.Handle, Platform: r.Platform,
-		PostURL: r.Post.URL, Caption: r.Post.Caption,
+		AccountID: r.Account.ID, Handle: r.Account.Handle, DisplayName: r.Account.DisplayName,
+		Platform: r.Platform, PostURL: r.Post.URL, Caption: r.Post.Caption,
 	}
 }
 

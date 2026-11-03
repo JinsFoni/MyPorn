@@ -834,6 +834,8 @@ export interface MomentPhoto {
   saved: boolean;
   accountId: number;
   handle: string;
+  /** 博主自己写的名字（空串＝没给），照片墙的悬停浮层与灯箱显示它而不是 @handle */
+  displayName: string;
   platform: string;
   postUrl: string;
   caption: string;

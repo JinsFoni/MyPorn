@@ -499,21 +499,26 @@ type Video = {
 ```json
 {
   "items": [{
-    "id": 12, "postId": "2113776971603689874", "platform": "x",
-    "handle": "nasa", "displayName": "NASA", "avatarUrl": "https://pbs.twimg.com/…",
-    "url": "https://pbs.twimg.com/media/…?name=orig",
-    "thumbUrl": "/api/img?u=…&w=640",
+    "id": 12, "platform": "x",
+    "url": "/api/img?p=x&u=…", "thumbUrl": "/api/img?p=x&u=…",
     "width": 1200, "height": 800, "seq": 1,
-    "caption": "…", "postUrl": "https://x.com/nasa/status/2113776971603689874",
     "postedAt": "2026-10-23T23:05:00Z",
-    "saved": false, "performerId": 7
+    "saved": false,
+    "accountId": 3, "handle": "kiho_kanematsu", "displayName": "金松季歩(kanematsu kiho)",
+    "postUrl": "https://x.com/kiho_kanematsu/status/2113776971603689874",
+    "caption": "…"
   }],
-  "nextCursor": "MjAyNi0xMC0yM3wyMTEzNzc2OTcxNjAzNjg5ODc0fDE"
+  "nextCursor": "MjAyNi0xMS0wM1QwODo0MToyNFp8MjExNzUzNzYxNTI2ODQyMjEwNnwx"
 }
 ```
 
 排序固定为 `posted_at DESC, post_id DESC, seq ASC`：同一条帖子的几张图永远相邻且按原始顺序，
 灯箱「下一张」因此天然是「先把这个帖子看完再进下一条」。
+
+`displayName` 是博主自己写的名字（空串＝没给）。照片格子的悬停浮层、灯箱标题行都显示它，
+空着才回退 `@handle`——2026-11-04 用户要求「悬浮时左下角显示名字，不要显示 X 的 ID」，
+和头像条同一口径；想知道 ID 看 `title` / `handle` 字段。（这一版之前 `displayName` 只在
+这份文档的示例里出现过，DTO 里其实没有，是 2026-11-04 补上的。）
 
 ### B2. `GET /api/moments/accounts`
 

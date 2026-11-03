@@ -71,6 +71,18 @@
   let addBlocked = $state(false);
   let preview = $state<MomentResolve | null>(null);
 
+  /**
+   * 照片上写谁的名字：博主自己写的 displayName，空着才回退 @handle。
+   *
+   * 和头像条（`Moments.svelte` 里那排 rail 项的 `name`）同一条口径，2026-11-03 用户要求
+   * 头像下显示名字、2026-11-04 又要求悬停浮层也别写 ID，两处必须一致，
+   * 不然同一个博主在图上是名字、在浮层里又变回 `@kiho_kanematsu`。
+   */
+  function photoName(photo: MomentPhoto): string {
+    const name = photo.displayName.trim();
+    return name === '' ? `@${photo.handle}` : name;
+  }
+
   const selectionCount = $derived(selection.size);
 
   const activeAccounts = $derived(accounts.filter((a) => a.enabled));
@@ -495,7 +507,7 @@
             onclick={() => {
               lightboxAt = photos.findIndex((p) => p.id === photo.id);
             }}
-            aria-label={`查看 @${photo.handle} 的照片`}
+            aria-label={`查看 ${photoName(photo)} 的照片`}
           >
             <!-- 垫底：同一张图的糊版小图（后端缩到一百多像素再糊，6–12 KB）铺满格子， -->
             <!-- 留白处不是一块死板的面板色，而是这张照片自己的虚影。 -->
@@ -515,7 +527,7 @@
             <!-- 主体：原比例居中，比例不合的留白正好落在上面那层糊影里 -->
             <img
               src={imageUrl(photo.thumbUrl, 480) ?? ''}
-              alt={photo.caption ? photo.caption.slice(0, 80) : `@${photo.handle} 的照片`}
+              alt={photo.caption ? photo.caption.slice(0, 80) : `${photoName(photo)} 的照片`}
               class="relative h-full w-full object-contain transition-opacity duration-200 group-hover:opacity-90"
               loading="lazy"
               decoding="async"
@@ -548,10 +560,14 @@
             </span>
           {/if}
 
+          <!-- 悬停浮层写博主名字，不写 @handle（2026-11-04 用户要求：「悬浮时左下角显示名字，
+               不要显示 X 的 ID」）。和头像条同一条口径：displayName 空着才回退 @handle；
+               号码本身还在 title 里，想知道 ID 悬停一下就有，读屏也念得到。 -->
           <div
             class="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-ink/80 to-transparent px-2 pb-1.5 pt-6 text-[0.6875rem] text-white/85 opacity-0 transition-opacity group-hover:opacity-100"
+            title={`${photoName(photo)} · @${photo.handle}`}
           >
-            <span class="block truncate">@{photo.handle}</span>
+            <span class="block truncate">{photoName(photo)}</span>
           </div>
 
           <!-- 删除：右下角。桌面端跟着悬停出现（不给版面添常驻控件），
@@ -649,8 +665,9 @@
 
     <div class="flex items-start gap-3 px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-2">
       <div class="min-w-0 flex-1">
-        <p class="truncate text-ui text-fg">
-          <span class="text-dim">{platformName(current.platform)}</span> · @{current.handle}
+        <!-- 灯箱里同一件事也写名字（同一张照片，没理由换个说法）；@handle 进 title -->
+        <p class="truncate text-ui text-fg" title={photoName(current) + ' · @' + current.handle}>
+          <span class="text-dim">{platformName(current.platform)}</span> · {photoName(current)}
         </p>
         {#if current.caption}
           <p class="mt-0.5 line-clamp-2 whitespace-pre-line text-meta text-muted">{current.caption}</p>
