@@ -852,7 +852,10 @@ export interface MomentPhoto {
   width: number;
   height: number;
   postedAt: string | null;
-  /** 是否已存进某个本地库 */
+  /**
+   * 是否已经下载进图片库。服务端仍会返回（照片是自动落盘的，几乎总是 true），
+   * 但**墙上不画任何「已存 / 待存」角标**（2026-11-04 用户要求），前端不读它。
+   */
   saved: boolean;
   accountId: number;
   handle: string;

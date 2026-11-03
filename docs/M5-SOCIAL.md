@@ -42,7 +42,7 @@
 | 设置弹窗 → 新分类「动态」 | 抓取总开关、同步间隔、回填上限、X / Instagram Cookie、Instagram 代理、图片缓存上限 |
 | 艺人 page（`/performer/:id`） | 已关联的话多一块「社交动态」：最近 12 张缩略图，点开进灯箱 |
 | 灯箱（`/moments?p=<photoId>` 可深链） | 大图 + 博主 + 时间 + 正文（超 3 行折叠）+「原帖」+「删除这张」 |
-| 照片墙多选 | 格子上角「勾选」进入多选 → 底部浮条「已选 N 张 / 取消 / 删除」（2026-11-04 用户要求：原来这里是「存进本地库」，自动落盘之后改成批量删除）；未落盘的照片左上角一枚「待存」小角标，落盘后自动消失 |
+| 照片墙多选 | 格子上角「勾选」进入多选 → 底部浮条「已选 N 张 / 取消 / 删除」（2026-11-04 用户要求：原来这里是「存进本地库」，自动落盘之后改成批量删除）。**照片格子上不画任何「已存 / 待存」角标**（2026-11-04 用户要求「不要显示已存标识」）：自动落盘之后落没落盘是后台的事，每格都挂一枚状态只是噪音，要看进度去「下载」页看任务 |
 
 **移动端底栏**：现有 6 项加「动态」变成 7 项，375px 宽度会挤到截断。方案：底栏固定 5 项
 （关注 / 动态 / 艺人 / 下载 / 管理），设置走顶栏图标（已有），「发现」并入「艺人」页的搜索入口。
@@ -328,9 +328,9 @@ type Adapter interface {
 - **续排**：一轮 200 张跑完若还有存量、且这一轮**确实下成功了**，就再排一个任务接着下
   （存量上千张时分批跑，单个任务不会一跑几十分钟）。下不动时 `saved = 0`，队列自然停，不会空转。
 - 落盘走「先写 `.part` 再 rename」，中断不留半个文件；`(photo_id, library_id)` 唯一，重复存直接跳过。
-- 一批下完广播 `photo.saved {ids, count}`：照片墙据此把「待存」角标当场清掉，不重拉整条墙
-  （重拉会把人弹回第一屏，这正是当初 A1 里那条「新图不自动插到墙顶」的同一个理由）。
-- 失败只影响这一张，记 warn 日志，任务里不中断；照片墙上那张左上角仍标「待存」，下一轮再试。
+- 一批下完广播 `photo.saved {ids, count}`（`internal/jobs/social.go`）。前端**不消费**它——
+  墙上没有任何「存/未存」角标（用户要求），留着是给外部订阅方和以后的提示用的。
+- 失败只影响这一张，记 warn 日志，任务里不中断；下一轮补漏会再试，墙上不做任何标记。
 
 ### 9.3 删除
 
@@ -573,7 +573,7 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
 | `internal/store/social.go` + `migrations/0007_m5_social.sql` | 四张表与全部读写、照片墙 keyset 游标、计数、URL 反查艺人；`migrations/0014_photo_root.sql` 把 `social_photo_files.library_id` 的库外键拆掉（`0` = 图片库根），并补 `HideSocialPhotos`（批量软删）/ `PhotoSaved` / `ListUnsavedSocialPhotos`（补漏查询）/ `PostSavedPhotoPaths` |
 | `internal/jobs/social.go` | `social_sync`（每轮最多 5 页/账号；`mode=auto/full/discover`，遇 `needs_auth` 整轮停、遇 `rate_limited` 只跳过该账号，§15.16）/ `social_save`（下载入库到 `photo_root/{名字}/{年}/{月}/` + `.post.json`，每轮 200 张上限、自愈、成功即续排，§9） |
 | `internal/httpapi/handlers_moments.go` | B1–B11 全部端点（含批量删除 `POST /api/moments/photos/delete`）+ `writeSocialErr`（错误码 → 状态码的唯一出口） |
-| `web/src/routes/Moments.svelte` | 照片墙（`InfiniteList` 复用 + 灯箱 + 多选删除 + 添加博主；未落盘的照片标「待存」） |
+| `web/src/routes/Moments.svelte` | 照片墙（`InfiniteList` 复用 + 灯箱 + 多选删除 + 添加博主；格子上不画存/未存角标） |
 | `web/src/routes/Manage.svelte` | 「动态管理」页签：博主列表 / 同步 / 重填 / 启停 / 删除 |
 | `web/src/components/SettingsDialog.svelte` | 「动态」分类：抓取间隔 + **图片库根目录（`photo_root`，保存后立刻补一轮存量）** + Instagram Cookie |
 | `web/src/routes/Performer.svelte` | 艺人页「社交动态」区块（12 张，6 列两行，点图跳带 `account` 筛选的照片墙） |

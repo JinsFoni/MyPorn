@@ -652,7 +652,7 @@ type Video = {
 |---|---|---|
 | `photo.new` | `{photoId, accountId, platform, handle}` | 照片墙增量刷新 + 侧边栏未读 +1 |
 | `social.progress` | `{accountId, handle, page, newPhotos, backfilling}` | 抓取过程中的进度（一次同步可能连着好几页） |
-| `photo.saved` | `{ids, count}` | 一批照片已下载进图片库（自动落盘，§9）；照片墙据此把「待存」角标当场清掉，不用重拉整条墙 |
+| `photo.saved` | `{ids, count}` | 一批照片已下载进图片库（自动落盘，§9）。**前端目前不消费**：照片墙不画任何「已存/待存」角标（2026-11-04 用户要求），留这条事件是给外部订阅方/以后的提示用 |
 
 ### B14. 任务类型
 

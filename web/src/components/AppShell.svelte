@@ -130,10 +130,6 @@
           live.bumpMoments();
           live.setMomentsUnseen(live.momentsUnseen + 1);
         },
-        'photo.saved': (data) => {
-          // 照片是自动下载入库的：落盘完就报一次，墙上的「待存」角标据此当场消失（不重拉整条墙）。
-          live.markPhotosSaved(Array.isArray(data?.ids) ? (data.ids as number[]) : []);
-        },
         'yt.new': (data) => {
           // 只有「有新视频」时才刷：一轮同步会连着报好几个频道，别每个都重拉一次
           const count = typeof data?.count === 'number' ? data.count : 1;
