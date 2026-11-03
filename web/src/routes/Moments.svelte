@@ -676,9 +676,9 @@
         <p class="truncate text-ui text-fg" title={photoName(current) + ' · @' + current.handle}>
           <span class="text-dim">{platformName(current.platform)}</span> · {photoName(current)}
         </p>
-        {#if current.caption}
-          <p class="mt-0.5 line-clamp-2 whitespace-pre-line text-meta text-muted">{current.caption}</p>
-        {/if}
+        <!-- 不显示原帖正文（2026-11-04 用户要求「不要显示原贴内容」）：灯箱是看图的地方，
+             正文一多就把图挤小；要读原文点右下角「原帖」过去看。caption 仍留着——给 <img> 的
+             alt 用（读屏和「图片加载失败」时的文字），只是不上屏。 -->
         {#if current.postedAt}
           <p class="mt-1 text-meta text-dim">{formatDateTime(current.postedAt)}</p>
         {/if}
