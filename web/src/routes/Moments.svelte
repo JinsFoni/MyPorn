@@ -576,9 +576,13 @@
 
           <!-- 悬停浮层写博主名字，不写 @handle（2026-11-04 用户要求：「悬浮时左下角显示名字，
                不要显示 X 的 ID」）。和头像条同一条口径：displayName 空着才回退 @handle；
-               号码本身还在 title 里，想知道 ID 悬停一下就有，读屏也念得到。 -->
+               号码本身还在 title 里，想知道 ID 悬停一下就有，读屏也念得到。
+
+               只留字，不要那层从下往上压的黑晕（2026-11-04 用户要求：「不要显示图片下面的那层
+               黑晕」——原来这里是 `bg-linear-to-t from-ink/80 to-transparent` + `pt-6`，一整条
+               渐变横在照片下沿）。字压在白底照片上也认得出，靠的是文字自己的投影，不是一块底。 -->
           <div
-            class="pointer-events-none absolute inset-x-0 bottom-0 bg-linear-to-t from-ink/80 to-transparent px-2 pb-1.5 pt-6 text-[0.6875rem] text-white/85 opacity-0 transition-opacity group-hover:opacity-100"
+            class="pointer-events-none absolute inset-x-0 bottom-0 px-2 pb-1.5 text-[0.6875rem] text-white/90 [text-shadow:0_1px_3px_rgb(0_0_0_/_0.95),0_0_2px_rgb(0_0_0_/_0.7)] opacity-0 transition-opacity group-hover:opacity-100"
             title={`${photoName(photo)} · @${photo.handle}`}
           >
             <span class="block truncate">{photoName(photo)}</span>
