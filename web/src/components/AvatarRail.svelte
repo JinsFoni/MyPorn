@@ -14,7 +14,8 @@
    * 点头像＝把 `id` 交回去，由页面写地址栏；选中态是头像外 2px 白环 + 姓名 `font-medium`，
    * 再点同一个取消（这是**唯一**的取消入口：下面那行筛选行不再有带 ✕ 的名字胶囊）。
    *
-   * 容器 `flex gap-3 overflow-x-auto no-scrollbar`，用「负外边距 + 等量内边距」做贴边滚动：
+   * 容器 `flex gap-4 overflow-x-auto no-scrollbar`（间距 12 → 16px，2026-11-04 用户要求「间距再宽一点点」），
+   * 用「负外边距 + 等量内边距」做贴边滚动：
    * 首列头像永远与内容左边缘（桌面 296 / 移动 12px）对齐，滚动盒自己往两侧多伸出去同样多。
    *
    * **白环画在头像盒子外面，所以滚动盒必须留出 6px 内边距，否则会被自己裁掉**
@@ -74,7 +75,7 @@
   <nav class="mb-4 lg:mb-5" aria-label={label}>
     <ul
       bind:this={listEl}
-      class="no-scrollbar -mx-3 -mt-1.5 flex gap-3 overflow-x-auto px-3 pb-1 pt-1.5 sm:-mx-4 sm:px-4 lg:-mx-1.5 lg:px-1.5"
+      class="no-scrollbar -mx-3 -mt-1.5 flex gap-4 overflow-x-auto px-3 pb-1 pt-1.5 sm:-mx-4 sm:px-4 lg:-mx-1.5 lg:px-1.5"
     >
       {#each items as item (item.id)}
         <li class="shrink-0">
@@ -137,10 +138,10 @@
   </nav>
 {:else if loading}
   <!-- 占位行跟真身用同一套外框（等量负边距 + 内边距 + 横向滚动）：6 颗 72px 圆
-       在 390 宽的手机上装不下（6×72 + 5×12 = 492 > 366 可用），不加滚动会把整页顶出横向滚动条。 -->
+       在 390 宽的手机上装不下（6×72 + 5×16 = 512 > 366 可用），不加滚动会把整页顶出横向滚动条。 -->
   <div class="mb-4 lg:mb-5" aria-hidden="true">
     <div
-      class="no-scrollbar -mx-3 -mt-1.5 flex gap-3 overflow-x-auto px-3 pb-1 pt-1.5 sm:-mx-4 sm:px-4 lg:-mx-1.5 lg:px-1.5"
+      class="no-scrollbar -mx-3 -mt-1.5 flex gap-4 overflow-x-auto px-3 pb-1 pt-1.5 sm:-mx-4 sm:px-4 lg:-mx-1.5 lg:px-1.5"
     >
       {#each Array.from({ length: 6 }, (_, i) => i) as i (i)}
         <div class="flex w-18 shrink-0 flex-col items-center gap-1">
