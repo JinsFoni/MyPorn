@@ -350,6 +350,8 @@ export interface OpenListSettings {
 export interface SocialSettings {
   /** 多久抓一轮（小时） */
   syncHours: number;
+  /** 「只发现最新几条」那一轮的间隔（分钟，0 = 关） */
+  discoverMinutes: number;
   /** Instagram 是否已配 Cookie（Cookie 本身不回显） */
   hasInstagramCookie: boolean;
 }
@@ -426,7 +428,7 @@ export interface SettingsPatch {
   downloadRateKb?: number;
   openlist?: { baseUrl?: string; root?: string; token?: string };
   /** instagramCookie 传空串表示清除 */
-  social?: { syncHours?: number; instagramCookie?: string };
+  social?: { syncHours?: number; discoverMinutes?: number; instagramCookie?: string };
   /** cookies 传空串表示清除 */
   youtube?: {
     syncHours?: number;

@@ -209,10 +209,11 @@ var nextDataRe = regexp.MustCompile(`(?s)<script id="__NEXT_DATA__"[^>]*>(.*?)</
 
 // fetch 抓一页时间线并解析成 nextData。
 func (a *Adapter) fetch(ctx context.Context, handle string) (*nextData, error) {
-	if err := a.throttle.Wait(ctx); err != nil {
+	u := a.base + "/srv/timeline-profile/screen-name/" + url.PathEscape(handle)
+	// 冷却只压这个宿主：widget 被限流时主页发现（另一个宿主）还得能跑。
+	if err := a.throttle.WaitHost(ctx, hostOf(u)); err != nil {
 		return nil, err
 	}
-	u := a.base + "/srv/timeline-profile/screen-name/" + url.PathEscape(handle)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, social.Upstream("构造请求失败", err)
@@ -249,7 +250,7 @@ func (a *Adapter) fetch(ctx context.Context, handle string) (*nextData, error) {
 		}
 	}
 	if !until.IsZero() {
-		a.throttle.CoolUntil(until)
+		a.throttle.CoolUntilHost(hostOf(u), until)
 		return nil, social.RateLimited(
 			fmt.Sprintf("X 限流（%d 次/窗口已用尽），冷却到 %s",
 				limitOf(resp.Header.Get("x-rate-limit-limit")), until.Format("15:04")), until)
@@ -344,9 +345,17 @@ func transportMsg(err error) string {
 	return "请求 X 失败"
 }
 
+// hostOf 取 URL 的 host，用作「按宿主冷却」的 key。解析不出来就原样返回。
+func hostOf(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return raw
+}
+
 // get 发一个 GET，返回响应体和状态码。限流/传输故障统一成 social.Error。
 func (a *Adapter) get(ctx context.Context, u, accept string) ([]byte, int, error) {
-	if err := a.throttle.Wait(ctx); err != nil {
+	if err := a.throttle.WaitHost(ctx, hostOf(u)); err != nil {
 		return nil, 0, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -543,6 +552,52 @@ func (a *Adapter) profileAccount(ctx context.Context, handle string) (*social.Ac
 	}, nil
 }
 
+// Discover 只跑「主页 HTML 发现 + 单帖详情」这一条便宜的路子，不碰时间线 widget。
+//
+// 存在的理由：主页 HTML 一页只有 5–8 个帖子 id，两轮之间发超过这个数就滑走了（§15.15），
+// 而这条路每个账号只花 1 次主页请求 + 每条 1 次单帖请求，比完整同步便宜一半、也不占
+// widget 那个 30 次/15 分钟的额度。所以它适合按更短的周期单独跑。
+func (a *Adapter) Discover(ctx context.Context, handle string) (*social.Page, error) {
+	page := &social.Page{Posts: []social.Post{}}
+	profErr := a.discoverInto(ctx, page, handle)
+	page.Posts = dedupePosts(page.Posts)
+	if len(page.Posts) > 0 {
+		return page, nil
+	}
+	if profErr != nil {
+		return nil, profErr
+	}
+	return nil, social.StaleParser(fmt.Sprintf("@%s 的主页这一页没有解析出帖子", handle))
+}
+
+// discoverInto 把主页 HTML 里那几个 id 的详情追加进 page，返回第一个错误（不影响别的 id）。
+func (a *Adapter) discoverInto(ctx context.Context, page *social.Page, handle string) error {
+	if a.web == "" {
+		return nil
+	}
+	ids, err := a.profileIDs(ctx, handle)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, id := range ids {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		t, err := a.tweetByID(ctx, id)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if p, ok := toPost(t); ok {
+			page.Posts = append(page.Posts, p)
+		}
+	}
+	return firstErr
+}
+
 // ListPosts 抓一页帖子。cursor 无意义（X 免登录路径没有翻页），传什么都忽略。
 //
 // 两个来源合并：主页 HTML 发现的最新帖（含时间线 widget 不返回的那些）+ 时间线 widget 的历史。
@@ -550,28 +605,7 @@ func (a *Adapter) profileAccount(ctx context.Context, handle string) (*social.Ac
 func (a *Adapter) ListPosts(ctx context.Context, handle, cursor string) (*social.Page, error) {
 	page := &social.Page{Posts: []social.Post{}}
 
-	var profErr error
-	if a.web != "" {
-		ids, err := a.profileIDs(ctx, handle)
-		if err != nil {
-			profErr = err
-		}
-		for _, id := range ids {
-			if cerr := ctx.Err(); cerr != nil {
-				return nil, cerr
-			}
-			t, err := a.tweetByID(ctx, id)
-			if err != nil {
-				if profErr == nil {
-					profErr = err
-				}
-				continue
-			}
-			if p, ok := toPost(t); ok {
-				page.Posts = append(page.Posts, p)
-			}
-		}
-	}
+	profErr := a.discoverInto(ctx, page, handle)
 	nd, tlErr := a.fetch(ctx, handle)
 	if tlErr == nil {
 		for _, e := range nd.Props.PageProps.Timeline.Entries {

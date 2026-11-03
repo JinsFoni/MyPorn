@@ -27,7 +27,7 @@
     libraryRoot: './media',
     ffmpegAvailable: true,
     openlist: { baseUrl: 'http://192.168.0.108:5244', root: '/123云盘/资源目录/MyPorn', hasToken: true },
-    social: { syncHours: 6, hasInstagramCookie: false },
+    social: { syncHours: 6, discoverMinutes: 60, hasInstagramCookie: false },
     youtube: {
       syncHours: 6,
       backfillLimit: 200,
@@ -86,6 +86,7 @@
   let openlistRoot = $state('');
   let openlistToken = $state('');
   let socialSyncHours = $state(6);
+  let socialDiscoverMinutes = $state(60);
   let instagramCookie = $state('');
   let youtubeProxy = $state('');
   let ytSyncHours = $state(6);
@@ -119,6 +120,7 @@
     openlistRoot = value.openlist.root;
     openlistToken = '';
     socialSyncHours = value.social.syncHours;
+    socialDiscoverMinutes = value.social.discoverMinutes ?? 60;
     instagramCookie = '';
     youtubeProxy = value.platformProxy.youtube ?? '';
     ytSyncHours = value.youtube.syncHours;
@@ -184,7 +186,7 @@
     };
     const token = openlistToken.trim();
     if (token.length > 0) patch.openlist = { ...patch.openlist, token };
-    patch.social = { syncHours: socialSyncHours };
+    patch.social = { syncHours: socialSyncHours, discoverMinutes: socialDiscoverMinutes };
     // Cookie 只在用户真的粘了新内容时才提交：留空 = 不动（服务端把它当"清除"，
     // 所以这里必须"没填就不带这个字段"）。
     const cookie = instagramCookie.trim();
@@ -944,7 +946,8 @@
                 {:else}
                   <section>
                     <p class="text-meta text-dim">
-                      两个站的抓取都是按 IP 限流的，所以同一时刻只跑一个同步任务，撞到限流会直接停下来等冷却。
+                      两个站的抓取都是按 IP 限流的，所以同一时刻只跑一个同步任务。
+                      X 的额度按宿主分开记（时间线 / 主页 / 单帖各一份），一个宿主撞限流不会连带整轮停下。
                     </p>
                     <div class="mt-3 grid gap-3 sm:grid-cols-2">
                       <div>
@@ -959,7 +962,25 @@
                           bind:value={socialSyncHours}
                           disabled={saving}
                         />
-                        <p class="mt-1.5 text-meta text-dim">每轮抓一次；X 免登录一次只有 20 帖，靠多轮慢慢累积。</p>
+                        <p class="mt-1.5 text-meta text-dim">
+                          完整同步的间隔；X 免登录翻不了页，历史靠每轮累积。
+                        </p>
+                      </div>
+                      <div>
+                        <label for="social-discover" class="label-meta mb-1.5">发现间隔（分钟）</label>
+                        <input
+                          id="social-discover"
+                          class="field tabular-nums"
+                          type="number"
+                          min="0"
+                          max="720"
+                          step="5"
+                          bind:value={socialDiscoverMinutes}
+                          disabled={saving}
+                        />
+                        <p class="mt-1.5 text-meta text-dim">
+                          只翻 X 主页上最新那几条的轻量轮次（不碰时间线 widget）；0 = 关。调小能少漏掉两轮之间发的帖。
+                        </p>
                       </div>
                       <div>
                         <p class="label-meta mb-1.5">X</p>

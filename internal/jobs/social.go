@@ -89,6 +89,7 @@ func (r *Runner) runSocialSyncJob(ctx context.Context, j *model.Job, c *Ctl) err
 	}
 
 	failed := 0
+	discovered, skipped := 0, 0 // 仅 discover 轮用：真跑了几个 / 跳过了几个不支持发现轮的
 	for i, acc := range accounts {
 		if err := c.Check(); err != nil {
 			return err
@@ -97,12 +98,30 @@ func (r *Runner) runSocialSyncJob(ctx context.Context, j *model.Job, c *Ctl) err
 		c.Progress(float64(i)/float64(len(accounts))*100,
 			fmt.Sprintf("同步 %s @%s（%s）", platformName(acc.Platform), acc.Handle, label), 0, 0, 0)
 
-		err := r.syncSocialAccount(ctx, c, acc, p.Mode)
+		var err error
+		if p.Mode == "discover" {
+			// discover 轮只跑便宜的那条路子，且只跑支持它的平台（目前是 X）。
+			ad, ok := r.social.Get(acc.Platform)
+			if !ok {
+				continue
+			}
+			if _, can := ad.(social.Discoverer); !can {
+				skipped++
+				continue
+			}
+			discovered++
+			err = r.discoverSocialAccount(ctx, c, acc)
+		} else {
+			err = r.syncSocialAccount(ctx, c, acc, p.Mode)
+		}
 		if err != nil {
 			failed++
 			r.recordSocialError(acc.ID, err)
-			// 限流和未登录会持续影响后面的博主，直接收工，别把配额浪费在必然失败的请求上。
-			if k := social.KindOf(err); k == social.KindRateLimited || k == social.KindNeedsAuth {
+			// 未登录会让整轮都白跑，直接收工；限流不再收工——X 的额度是按宿主分的
+			// （widget / 主页 / 单帖各一份，§15.15），一个账号撞上的往往只挡住它自己，
+			// 后面的账号换个宿主照样能抓到新帖。真的整站限流时，Throttle 会让后续请求
+			// 立刻失败、不产生流量，继续跑也没有代价。
+			if social.KindOf(err) == social.KindNeedsAuth {
 				c.Progress(100, fmt.Sprintf("@%s 失败：%v", acc.Handle, err), 0, 0, 0)
 				return nil
 			}
@@ -113,6 +132,11 @@ func (r *Runner) runSocialSyncJob(ctx context.Context, j *model.Job, c *Ctl) err
 
 	if failed > 0 {
 		c.Progress(100, fmt.Sprintf("同步完成，%d 个博主失败", failed), 0, 0, 0)
+		return nil
+	}
+	if p.Mode == "discover" {
+		// 跳过的是「没有便宜发现路径」的平台（Instagram），它们归完整同步管，别说成失败。
+		c.Progress(100, fmt.Sprintf("发现轮完成：%d 个博主（跳过 %d 个）", discovered, skipped), 0, 0, 0)
 		return nil
 	}
 	c.Progress(100, fmt.Sprintf("同步完成，共 %d 个博主", len(accounts)), 0, 0, 0)
@@ -138,6 +162,82 @@ func (r *Runner) recordSocialError(accountID int64, err error) {
 	if err := r.st.SetSocialAccountError(accountID, msg); err != nil {
 		r.log.Warn("记录博主同步错误失败", "account", accountID, "err", err)
 	}
+}
+
+// storeSocialPage 把一页帖子写进库，返回新增照片数、以及「这一页有没有已入库的帖子」。
+//
+// skipKnown=true 时遇到已入库的帖子就跳过并标记 known（增量同步靠它提前收手）；
+// false 用于回填，重复的帖子照样重写一遍（幂等，顺手补全缺失字段）。
+func (r *Runner) storeSocialPage(acc *store.SocialAccount, page *social.Page, skipKnown bool) (int, bool, error) {
+	inputs := make([]store.SocialPostInput, 0, len(page.Posts))
+	known := false
+	for _, p := range page.Posts {
+		if exists, err := r.st.HasSocialPost(acc.Platform, p.PostID); err == nil && exists && skipKnown {
+			known = true
+			continue
+		}
+		photos := make([]store.SocialPhotoInput, 0, len(p.Photos))
+		for _, ph := range p.Photos {
+			photos = append(photos, store.SocialPhotoInput{URL: ph.URL, Width: ph.Width, Height: ph.Height, Seq: ph.Seq})
+		}
+		inputs = append(inputs, store.SocialPostInput{
+			PostID: p.PostID, URL: p.URL, Caption: p.Caption, PostedAt: p.PostedAt, Photos: photos,
+		})
+	}
+	ids, err := r.st.InsertSocialPosts(acc.ID, acc.Platform, inputs)
+	if err != nil {
+		return 0, known, fmt.Errorf("写入帖子失败: %w", err)
+	}
+	for _, id := range ids {
+		r.hub.Publish("photo.new", map[string]any{
+			"photoId":   id,
+			"accountId": acc.ID,
+			"platform":  acc.Platform,
+			"handle":    acc.Handle,
+		})
+	}
+	return len(ids), known, nil
+}
+
+// discoverSocialAccount 只跑便宜的那条发现路子（social.Discoverer），不刷资料、不碰 widget。
+//
+// 它跟完整同步的区别就是「多久跑一次」：X 主页 HTML 一页只给 5–8 个帖子 id，完整同步
+// 6 小时一轮，两轮之间发超过这个数就滑走了（2026-11-04 实测，§15.15）。这条路每账号只花
+// 1 次主页请求 + 每条 1 次单帖请求，也不占 widget 的 30 次/15 分钟额度，所以单独按小时跑。
+// 不动回填游标（sync_cursor / backfill_done）——那是完整同步的进度；last_synced_at 由轮次
+// 收尾的 recordSocialError(nil) 统一刷新（界面上的「上次同步」应当反映最近一次成功）。
+func (r *Runner) discoverSocialAccount(ctx context.Context, c *Ctl, acc *store.SocialAccount) error {
+	ad, ok := r.social.Get(acc.Platform)
+	if !ok {
+		return fmt.Errorf("平台未注册: %s", acc.Platform)
+	}
+	disc, ok := ad.(social.Discoverer)
+	if !ok {
+		return nil
+	}
+	page, err := disc.Discover(ctx, acc.Handle)
+	if err != nil {
+		return err
+	}
+	n, _, err := r.storeSocialPage(acc, page, false)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		// 发现轮不走 SaveSocialSync（那会动回填游标），所以计数得自己刷，否则界面上
+		// 「37 帖 / 52 图」会一直停在完整同步那一刻。
+		if err := r.st.RefreshSocialCounts(acc.ID); err != nil {
+			r.log.Warn("刷新博主计数失败", "account", acc.ID, "err", err)
+		}
+		c.Progress(0, fmt.Sprintf("@%s 发现轮新增 %d 张照片", acc.Handle, n), 0, 0, 0)
+		r.hub.Publish("social.progress", map[string]any{
+			"accountId": acc.ID,
+			"handle":    acc.Handle,
+			"page":      1,
+			"newPhotos": n,
+		})
+	}
+	return nil
 }
 
 // syncSocialAccount 同步一个博主：先刷资料，再翻页抓帖子。
@@ -201,35 +301,11 @@ func (r *Runner) syncSocialAccount(ctx context.Context, c *Ctl, acc *store.Socia
 			break
 		}
 
-		inputs := make([]store.SocialPostInput, 0, len(page.Posts))
-		known := false
-		for _, p := range page.Posts {
-			if exists, err := r.st.HasSocialPost(acc.Platform, p.PostID); err == nil && exists && !full {
-				known = true
-				continue
-			}
-			photos := make([]store.SocialPhotoInput, 0, len(p.Photos))
-			for _, ph := range p.Photos {
-				photos = append(photos, store.SocialPhotoInput{URL: ph.URL, Width: ph.Width, Height: ph.Height, Seq: ph.Seq})
-			}
-			inputs = append(inputs, store.SocialPostInput{
-				PostID: p.PostID, URL: p.URL, Caption: p.Caption, PostedAt: p.PostedAt, Photos: photos,
-			})
-		}
-
-		ids, err := r.st.InsertSocialPosts(acc.ID, acc.Platform, inputs)
+		n, known, err := r.storeSocialPage(acc, page, !full)
 		if err != nil {
-			return fmt.Errorf("写入帖子失败: %w", err)
+			return err
 		}
-		newPhotos += len(ids)
-		for _, id := range ids {
-			r.hub.Publish("photo.new", map[string]any{
-				"photoId":   id,
-				"accountId": acc.ID,
-				"platform":  acc.Platform,
-				"handle":    acc.Handle,
-			})
-		}
+		newPhotos += n
 
 		pages++
 		cursor = page.NextCursor

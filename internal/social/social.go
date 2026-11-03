@@ -141,6 +141,16 @@ type Adapter interface {
 	Throttle() *Throttle
 }
 
+// Discoverer 是可选能力：只「发现最新几条」，成本必须极低（1 次请求量级）。
+//
+// 加它的原因：X 的免登录路径没有翻页，主页 HTML 一页只给 5–8 个帖子 id，超出的就滑走了
+// （docs/M5-SOCIAL.md §15.15）。能拿到的只有「最近这一页」，所以唯一的办法是把这一页
+// **打得更勤**——但完整同步要点 widget、抓资料、翻页，每 6 小时才做一次。
+// 支持这个接口的适配器可以按更短的周期只跑这一条便宜的路子。
+type Discoverer interface {
+	Discover(ctx context.Context, handle string) (*Page, error)
+}
+
 // SettingFunc 读取一个设置值（已解密）。适配器不自持配置，避免重启才生效。
 type SettingFunc func(key string) string
 
@@ -183,11 +193,16 @@ func (r *Registry) All() []Adapter {
 // 为什么要冷却而不是直接重试：X 的 429 是**按 IP** 计数的公开配额
 // （实测 30 次 / 15 分钟，docs/M5-SOCIAL.md §15.3），越重试越晚恢复；
 // Instagram 更狠，会升级成风控。所以撞到限流就停到 reset，不试探。
+//
+// 冷却有两种作用域：`until` 是整站（一个站只有一个配额时用它），`hosts` 是**按宿主**的。
+// 后者是 2026-11-04 加的：X 的额度按宿主分开记（widget 30 次/15 分钟；x.com 与
+// cdn.syndication.twimg.com 各有一份，实测互不影响），一个宿主的 429 不该连带冻住另外两个。
 type Throttle struct {
 	mu    sync.Mutex
 	every time.Duration
 	last  time.Time
-	until time.Time // 冷却截止
+	until time.Time            // 整站冷却截止
+	hosts map[string]time.Time // 按宿主的冷却截止，key 是 URL 的 host
 }
 
 func NewThrottle(every time.Duration) *Throttle {
@@ -206,6 +221,28 @@ func (t *Throttle) CoolUntil(until time.Time) {
 	}
 }
 
+// CoolUntilHost 只冻结某一个宿主（key 用 URL 的 host）。
+func (t *Throttle) CoolUntilHost(host string, until time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.hosts == nil {
+		t.hosts = make(map[string]time.Time, 4)
+	}
+	if until.After(t.hosts[host]) {
+		t.hosts[host] = until
+	}
+}
+
+// HostCooldown 返回某个宿主还在冷却中的剩余时间（0 = 可以请求）。
+func (t *Throttle) HostCooldown(host string) time.Duration {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if d := time.Until(t.hosts[host]); d > 0 {
+		return d
+	}
+	return 0
+}
+
 // Clear 立刻解除冷却。
 //
 // 用在「用户自己动手了」的场景：换了 Cookie、换了出口 IP 之后，没有理由还让他干等
@@ -213,6 +250,7 @@ func (t *Throttle) CoolUntil(until time.Time) {
 func (t *Throttle) Clear() {
 	t.mu.Lock()
 	t.until = time.Time{}
+	t.hosts = nil
 	t.mu.Unlock()
 }
 
@@ -224,6 +262,21 @@ func (t *Throttle) CooldownRemaining() time.Duration {
 		return d
 	}
 	return 0
+}
+
+// WaitHost 和 Wait 一样让路，但同时检查这个宿主的冷却。
+//
+// 用它而不是整站冷却，是为了让「一个宿主被限流」只挡住那个宿主：X 的 widget 429 之后
+// 主页发现（另一个宿主）照常能跑，2026-11-04 实测过（docs/M5-SOCIAL.md §15.15）。
+func (t *Throttle) WaitHost(ctx context.Context, host string) error {
+	t.mu.Lock()
+	d := time.Until(t.hosts[host])
+	until := t.hosts[host]
+	t.mu.Unlock()
+	if d > 0 {
+		return RateLimited(fmt.Sprintf("%s 限流冷却中，还需 %s", host, d.Round(time.Second)), until)
+	}
+	return t.Wait(ctx)
 }
 
 // Wait 按间隔让路；还在冷却期就返回限流错误。

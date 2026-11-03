@@ -170,6 +170,8 @@ make backend           # 先编译
 | 点 | 现状（2026-10 实测） | 改版后怎么发现 |
 |---|---|---|
 | X 抓取入口 | `syndication.twitter.com/srv/timeline-profile/screen-name/<handle>`，数据在 `__NEXT_DATA__.props.pageProps.timeline.entries[]` | 502 `stale_parser`「页面结构变了」，或 `hasResults:false` |
+| X 冷却作用域 | ✅ 2026-11-04 改成按宿主（`CoolUntilHost`/`WaitHost`），并有单测锁住「widget 429 不冻主页发现」 | 若又出现「一个账号限流、后面全跳过」→ 先看是不是 `needs_auth`（那个仍然整轮停） |
+| X 发现轮节奏 | 默认 60 分钟（`social_discover_minutes`，0 = 关）。实测 4 个 X 账号一轮 42 s；间隔设 1 分钟时 ticker 自动投递正常 | 想验证是否真在跑：`select message from jobs where type='social_sync' order by id desc`，找「发现轮完成」 |
 | X 协议版本 | ~~必须 HTTP/2~~ **2026-11-04 复测推翻**：同一秒同一 URL，`curl --http1.1` 200（`remaining:27`）、`curl` h2 429（`remaining:0`）、Go h2 200（`remaining:12`）、Go h1.1 429 —— 是**按「IP+客户端指纹」分桶**的 30 次/15 分钟，不是协议歧视（§15.15）。`ForceAttemptHTTP2: true` 仍留着，但 429 只说明「这个指纹的桶空了」 | 429 时别拿「浏览器能打开」证明 IP 干净，也别拿 curl 正常证明不是我们这侧的问题；看 `remaining`/`reset` 属于哪个桶 |
 | X 条数 | 固定 20 条、**没有游标**，翻页无从谈起；`?name=orig` 拿原图 | 想拿更多只能上 Cookie/GraphQL（本轮没做） |
 | X 限流 | 约 30 次/15 分钟（按 IP）。`remaining:0` 但 `reset` 已过期是缓存的旧头，不能当限流 | 冷却到点仍 429 → 可能配额被同 IP 的其它工具占满 |

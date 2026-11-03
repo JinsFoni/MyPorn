@@ -518,11 +518,11 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
 
 | 位置 | 内容 |
 |---|---|
-| `internal/social/social.go` | `Adapter` 接口、`Error`（`needs_auth` / `rate_limited` / `stale_parser` / `not_found` / `upstream`）、`Throttle`（串行 + 间隔 + 冷却）、`NormalizeHandle`、`Registry` |
+| `internal/social/social.go` | `Adapter` 接口、可选接口 `Discoverer`（便宜的「只发现最新几条」，§15.16）、`Error`（`needs_auth` / `rate_limited` / `stale_parser` / `not_found` / `upstream`）、`Throttle`（串行 + 间隔 + **整站冷却 `CoolUntil` / 按宿主冷却 `CoolUntilHost`**）、`NormalizeHandle`、`Registry` |
 | `internal/social/xcom/` | X 免登录抓取：时间线 widget（历史）+ 主页 HTML 发现新帖（§15.10）+ 单帖 `tweet-result`（详情）、限流冷却、fixture 单测 |
 | `internal/social/igram/` | Instagram Cookie 抓取：`graphql.go` 是主路径（主页抠 `lsd`/`fb_dtsg` → `POST /api/graphql` + doc_id，游标 `gql:…`），`igram.go` 留 `web_profile_info` / `feed/user` 作降级；carousel 拆图、Cookie 归一化（**Netscape cookies.txt / Cookie 头 / JSON 三种写法**）、fixture 单测 + `LIVE=1` 真实网络冒烟 |
 | `internal/store/social.go` + `migrations/0007_m5_social.sql` | 四张表与全部读写、照片墙 keyset 游标、计数、URL 反查艺人 |
-| `internal/jobs/social.go` | `social_sync`（每轮最多 5 页/账号，遇限流整轮停）/ `social_save`（下载入库 + `post.json`） |
+| `internal/jobs/social.go` | `social_sync`（每轮最多 5 页/账号；`mode=auto/full/discover`，遇 `needs_auth` 整轮停、遇 `rate_limited` 只跳过该账号，§15.16）/ `social_save`（下载入库 + `post.json`） |
 | `internal/httpapi/handlers_moments.go` | B1–B11 全部端点 + `writeSocialErr`（错误码 → 状态码的唯一出口） |
 | `web/src/routes/Moments.svelte` | 照片墙（`InfiniteList` 复用 + 灯箱 + 多选存档 + 添加博主） |
 | `web/src/routes/Manage.svelte` | 「动态管理」页签：博主列表 / 同步 / 重填 / 启停 / 删除 |
@@ -841,3 +841,54 @@ go run .tmp/x/probe/main.go        # 输出各账号 entries 数、最新/最旧
 # 分桶对照
 go run .tmp/x/bucket/main.go
 ```
+
+### 15.16 修掉限流作用域，并给 X 加一条按小时的「发现轮」（2026-11-04）
+
+§15.15 量出来的两个毛病，这次都改了。
+
+**1) 冷却从「整站」拆到「按宿主」。**
+
+`social.Throttle` 原来只有一个 `until`，可 X 的三个宿主是三份独立额度（§15.15 实测）。于是 widget
+一 429，主页发现和单帖详情也一起被冻 15 分钟。现在加了 `CoolUntilHost(host, until)` /
+`WaitHost(ctx, host)` / `HostCooldown(host)`，X 的 `get`/`fetch` 都按 URL 的 host 取键；
+`CoolUntil`/`Wait` 原样保留，Instagram 那种「一个站一个配额」的仍走整站冷却。
+
+顺带把 `jobs/social.go` 的轮次语义改对：`needs_auth` 仍然整轮收工（后面的必然也失败），
+`rate_limited` 只记在该账号行上、**继续抓下一个**。依据是 §15.15 那次观测——widget 桶被刷空的
+时候，同一个进程同步两个账号其实都成功了（13 s / 16 s），只是当时代码先 return 了。
+
+**2) 新增 `social.Discoverer`，X 走一条按小时的轻量发现轮。**
+
+X 免登录翻不了页，主页 HTML 一页只给 5–8 个帖子 id（§15.15）；完整同步 6 小时一轮，两轮之间
+发超过这个数就永久滑走。所以给适配器加了个可选接口：
+
+```go
+type Discoverer interface {
+    Discover(ctx context.Context, handle string) (*Page, error) // 只走便宜的那条路
+}
+```
+
+`xcom.Discover` = 主页 HTML 抠 id + 每条一次 `tweet-result`，**不碰时间线 widget**——既不占那
+30 次/15 分钟的额度，请求量也比完整同步少一半。调度器新开一条 `runSocialDiscoverScheduler`，
+按 `social_discover_minutes`（默认 60，`0` = 关）投递 `mode=discover` 的轮次；没有实现
+`Discoverer` 的平台（Instagram）在这一轮里被跳过，仍由完整同步管。
+
+**3) 实测（本机 `:18081`，改完的二进制）**
+
+| 项目 | 结果 |
+|---|---|
+| 发现轮（4 个 X 账号，跳过 1 个 IG） | **42.0 s**，消息「发现轮完成：4 个博主（跳过 1 个）」，0 失败 |
+| 完整 `auto` 同步（单个账号） | 14.0 s，「第 1 页，新增 0 张照片」（widget 与主页两条路都正常） |
+| 删掉库里一条带图帖子再跑发现轮 | 10.0 s 后帖子与照片都回来了 |
+| 自动投递 | 把 `social_discover_minutes` 设成 1，5 分钟一跳的 ticker 到点自动投递，任务消息带「发现轮新增 N 张照片」 |
+
+单测：`internal/social/throttle_test.go`（按宿主冷却 / 整站冷却仍管所有宿主 / `Clear` 清干净 /
+宿主冷却不影响串行间隔）、`xcom.TestRateLimitOnlyFreezesItsOwnHost`（widget 429 之后主页发现
+照常出帖，且第二轮不再去敲 widget）、`xcom.TestDiscoverUsesOnlyProfilePath`（发现轮路径里
+没有 `screen-name`）、`jobs.TestSocialRoundContinuesAfterRateLimit`（第一个账号限流，第二个
+仍被抓到并入库，限流原因写在行上）、`jobs.TestSocialDiscoverRoundUsesDiscover`。
+
+**4) 配置口径**
+
+设置里「动态 → 发现间隔（分钟）」，键 `social_discover_minutes`（0–720，0 = 关）。
+改小能少漏帖，代价是每小时多几打请求；账号多时按「每账号每轮约 1 + ≤8 次请求」估。

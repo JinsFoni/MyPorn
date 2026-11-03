@@ -473,3 +473,90 @@ func TestNoRetryOnHTTPStatus(t *testing.T) {
 		t.Errorf("发了 %d 次请求，期望 1 次（有响应就不重试）", tr.n)
 	}
 }
+
+// widget 宿主的 429 只该冻住 widget，主页发现（另一个宿主）必须照常工作。
+//
+// 2026-11-04 实测：X 的额度是按宿主分开记的——widget 30 次/15 分钟，x.com 与
+// cdn.syndication.twimg.com 各有一份、互不影响（docs/M5-SOCIAL.md §15.15）。
+// 改之前 Throttle 只有一个全局 until，widget 一 429 就把主页发现一起冻住，
+// 整轮同步还会当场收工。
+func TestRateLimitOnlyFreezesItsOwnHost(t *testing.T) {
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/mysaaat":
+			w.Write([]byte(profileFixture))
+		case r.URL.Path == "/tweet-result":
+			w.Write([]byte(tweetResultFixture))
+		default:
+			t.Errorf("主页宿主不该收到这个请求: %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(web.Close)
+
+	widgetCalls := 0
+	widget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		widgetCalls++
+		w.Header().Set("x-rate-limit-limit", "30")
+		w.Header().Set("x-rate-limit-remaining", "0")
+		w.Header().Set("x-rate-limit-reset", strconv.FormatInt(time.Now().Add(15*time.Minute).Unix(), 10))
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(widget.Close)
+
+	a := New(widget.Client())
+	a.base = widget.URL // 时间线 widget 在另一个宿主上
+	a.cdn = web.URL
+	a.web = web.URL
+	a.throttle = social.NewThrottle(time.Millisecond)
+
+	page, err := a.ListPosts(context.Background(), "mysaaat", "")
+	if err != nil {
+		t.Fatalf("widget 429 不该让整页失败: %v", err)
+	}
+	if len(page.Posts) != 1 || page.Posts[0].PostID != "2072599171006104014" {
+		t.Fatalf("主页那条新帖没抓到: %+v", page.Posts)
+	}
+	if d := a.throttle.HostCooldown(hostOf(widget.URL)); d <= 0 {
+		t.Error("widget 宿主应该在冷却")
+	}
+	if d := a.throttle.HostCooldown(hostOf(web.URL)); d != 0 {
+		t.Errorf("主页宿主不该被连坐，却在冷却 %s", d)
+	}
+
+	// 冷却期内再来一轮：照样能拿到帖子，且不该再去敲 widget（省一次 429）。
+	again, err := a.ListPosts(context.Background(), "mysaaat", "")
+	if err != nil || len(again.Posts) != 1 {
+		t.Fatalf("冷却期内的第二轮失败: %v %d", err, len(again.Posts))
+	}
+	if widgetCalls != 1 {
+		t.Errorf("widget 冷却期内不该再发请求，实际 %d 次", widgetCalls)
+	}
+}
+
+// Discover 只走主页发现这条路：1 次主页 + 每条 1 次单帖，不碰时间线 widget。
+func TestDiscoverUsesOnlyProfilePath(t *testing.T) {
+	var paths []string
+	a := newProfileAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch {
+		case r.URL.Path == "/mysaaat":
+			w.Write([]byte(profileFixture))
+		case r.URL.Path == "/tweet-result":
+			w.Write([]byte(tweetResultFixture))
+		default:
+			t.Errorf("发现轮不该请求这个路径: %s", r.URL.Path)
+		}
+	})
+	page, err := a.Discover(context.Background(), "mysaaat")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(page.Posts) != 1 || page.Posts[0].PostID != "2072599171006104014" {
+		t.Fatalf("发现结果不对: %+v", page.Posts)
+	}
+	for _, p := range paths {
+		if strings.Contains(p, "/screen-name/") {
+			t.Errorf("发现轮不该碰时间线 widget，却请求了 %s", p)
+		}
+	}
+}

@@ -235,6 +235,7 @@ func main() {
 	go runner.Start(ctx)
 	go runScheduler(ctx, st, runner, logger)
 	go runSocialScheduler(ctx, st, runner, logger)
+	go runSocialDiscoverScheduler(ctx, st, runner, logger)
 	go runYtScheduler(ctx, st, runner, logger)
 	// 启动后补一轮封面（历史数据里可能存着带签名、早就过期的封面地址）。
 	go func() {
@@ -331,6 +332,49 @@ func runSocialScheduler(ctx context.Context, st *store.Store, runner *jobs.Runne
 		}
 		if _, err := runner.EnqueueSocialSync(0, "auto"); err != nil {
 			log.Warn("投递社交动态同步失败", "err", err)
+			continue
+		}
+		lastRun = time.Now()
+	}
+}
+
+// runSocialDiscoverScheduler 按 social_discover_minutes（默认 60 分钟，0 = 关）投递一轮
+// 「只发现最新几条」。
+//
+// 为什么单开一条：X 的免登录路径没有翻页，主页 HTML 一页只给 5–8 个帖子 id
+// （docs/M5-SOCIAL.md §15.15）——完整同步 6 小时一轮，两轮之间发超过这个数，中间的就
+// 永久滑走了。这条轮次每账号只花 1 次主页请求 + 每条 1 次单帖请求，不占 widget 那个
+// 30 次/15 分钟 的额度，所以可以打得比完整同步勤。
+// 没有实现 social.Discoverer 的平台（Instagram）在这一轮里被跳过，完整同步照旧管它们。
+func runSocialDiscoverScheduler(ctx context.Context, st *store.Store, runner *jobs.Runner, log *slog.Logger) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	var lastRun time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		minutes := 60
+		if v, err := st.GetSetting("social_discover_minutes"); err == nil {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				minutes = n
+			}
+		}
+		if minutes <= 0 {
+			continue
+		}
+		if time.Since(lastRun) < time.Duration(minutes)*time.Minute {
+			continue
+		}
+		accounts, err := st.ListSocialAccounts(true)
+		if err != nil || len(accounts) == 0 {
+			lastRun = time.Now()
+			continue
+		}
+		if _, err := runner.EnqueueSocialSync(0, "discover"); err != nil {
+			log.Warn("投递社交发现轮失败", "err", err)
 			continue
 		}
 		lastRun = time.Now()

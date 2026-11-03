@@ -18,6 +18,17 @@ import (
 )
 
 // socialSyncHours 把设置里的字符串夹到合理区间（1–48 小时）。
+func socialDiscoverMinutes(v string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return 60
+	}
+	if n > 720 {
+		return 720
+	}
+	return n
+}
+
 func socialSyncHours(v string) int {
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 1 {
@@ -360,7 +371,11 @@ type youtubePatch struct {
 // InstagramCookie 只写不读：Cookie 是登录凭证，前端只需要知道「有没有配」，
 // 每次把明文回传给浏览器等于白白多一处泄漏面。
 type socialDTO struct {
-	SyncHours          int    `json:"syncHours"`
+	SyncHours int `json:"syncHours"`
+	// DiscoverMinutes 是「只发现最新几条」那一轮的间隔（分钟，0 = 关）。
+	// X 的主页 HTML 一页只给 5–8 个帖子 id，完整同步 6 小时一轮会把中间的发帖滑走，
+	// 所以单独按分钟级跑一条便宜的路子（docs/M5-SOCIAL.md §15.15）。
+	DiscoverMinutes    int    `json:"discoverMinutes"`
 	HasInstagramCookie bool   `json:"hasInstagramCookie"`
 	InstagramCookie    string `json:"instagramCookie,omitempty"`
 }
@@ -368,6 +383,7 @@ type socialDTO struct {
 // socialPatch 是设置里可以改的社交项；InstagramCookie 传 "" 表示清空。
 type socialPatch struct {
 	SyncHours       *int    `json:"syncHours"`
+	DiscoverMinutes *int    `json:"discoverMinutes"`
 	InstagramCookie *string `json:"instagramCookie"`
 }
 
@@ -462,6 +478,7 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 		},
 		Social: socialDTO{
 			SyncHours:          socialSyncHours(get("social_sync_hours", "6")),
+			DiscoverMinutes:    socialDiscoverMinutes(get("social_discover_minutes", "60")),
 			HasInstagramCookie: s.hasInstagramCookie(),
 		},
 		YouTube: youtubeDTO{
@@ -555,6 +572,9 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 				v = 48
 			}
 			set("social_sync_hours", fmt.Sprint(v))
+		}
+		if p.Social.DiscoverMinutes != nil {
+			set("social_discover_minutes", fmt.Sprint(socialDiscoverMinutes(fmt.Sprint(*p.Social.DiscoverMinutes))))
 		}
 		if p.Social.InstagramCookie != nil {
 			raw := strings.TrimSpace(*p.Social.InstagramCookie)
