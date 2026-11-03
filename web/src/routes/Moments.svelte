@@ -77,10 +77,11 @@
    *
    * 2026-11-03 用户要求「头像下面不要显示 ID，显示名称」：原来这排写的是 `@handle`，
    * @ 后面那串就是账号 ID，三位博主里只有一位认得出来。改显示名后实测是
-   * `香水じゅん` / `金松季歩(kanematsu kiho)` / `mysaaat | ONLYFANS`——最长 22 字符，
-   * 而 80px 一列按 12px 字号一行只装得下 6 个汉字或 13 个西文，所以**只有这一排**
-   * 许姓名折两行（`multiLine`；关注页 / B 站 / YouTube 那三排仍单行，一个像素不动）。
-   * `@handle` 和照片数都进 `title`，不占版面（悬停可见、读屏可读）。
+   * `香水じゅん` / `金松季歩(kanematsu kiho)` / `mysaaat | ONLYFANS`。
+   * 同一天用户又要求「名字限制一行」：80px 一列按 12px 字号一行只装得下 6 个汉字或
+   * 13 个西文，所以后两位会截断成 `金松季歩(kanem…` / `mysaaat | O…`——完整名字在
+   * `title` 里（和 `@handle`、照片数一样，悬停与读屏拿得到）。**不再折两行**：
+   * 折行会把这条头像条的整体高度撑高 16px，三排头像也不再一条水平线。
    */
   const railItems = $derived<RailItem[]>(
     accounts.map((a) => ({
@@ -352,7 +353,6 @@
   selected={filterAccount}
   onSelect={(id) => setFilter(id, null)}
   loading={!accountsLoaded}
-  multiLine
 />
 
 <div class="flex flex-col gap-4">
