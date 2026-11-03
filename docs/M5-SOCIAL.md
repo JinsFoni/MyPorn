@@ -458,9 +458,44 @@ GET …/screen-name/NASA (对照)     → 200, entries=20, 最新 2026-11-02T22:
 现在 0 条会分流成 `not_found`（`hasResults:false`）或 `stale_parser`（有结果但解析不出帖子），
 写进 `social_accounts.last_error`，见 `TestListPostsEmpty`。
 
-如果哪天这条公开时间线**真的**开始落后于登录后看到的页面（敏感媒体/受保护帖不发给匿名访客），
+**注意**：§15.9 说的「这条公开路径上确实没有更新的帖子」只对**时间线 widget** 成立。同一个号的主页 HTML
+里其实有更新的帖子（2025-10、2026-07 都有），只是 widget 不给——发现这条路见 §15.10。
+
+如果哪天主页 HTML 也开始落后于登录后看到的页面（敏感媒体/受保护帖不发给匿名访客），
 唯一的解法是把 X 适配器改成带 Cookie 的登录抓取（现在 `xcom` 一行 cookie 都没用，设置里也没有
 `x_cookie`），代价是要跟 X 的 GraphQL `queryId` 走，隔一阵就会失效一次。
+
+### 15.10 widget 里没有的新帖，主页 HTML 里有（2026-11-03）
+
+用户丢来 `https://x.com/mysaaat/status/2072599171006104014`（雪花 id 解出来是 2026-07-02T08:32:04Z），
+问「免登录抓不到吗」。当天读数：
+
+```
+GET https://x.com/mysaaat                 → 200, 142173 B（桌面浏览器 UA）
+                                            里面有 5 条帖子 id：2025-10-08 / 10-09 / 10-20 / 10-25 / 2026-07-02
+同一 URL 换 Googlebot UA                  → 403, 0 B（所以必须用桌面 UA）
+GET cdn.syndication.twimg.com/tweet-result?id=2072599171006104014&lang=en
+                                          → 200 但只有 2 字节 `{}`（缺 token 就是空壳）
+   同上 + &token=<算出来的>                → 200, 2022 B：created_at / text / mediaDetails（含 960×1280 原图）全在
+   同上但 token=abc123                    → 200, 2022 B ← **服务端只校验「有没有 token 参数」，不校验值**
+GET …/screen-name/mysaaat（时间线 widget） → 200, entries 还是停在 2025-07-04 的那 32 条，一条新的都没有
+```
+
+token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去掉小数点和 0（照算，但不指望它被校验）。
+
+主页 HTML 是 RSC 流（`$R[21].next($R[23]=…{"tweet_results":…})`，字符串里的 JSON 被转义成 `\"`），
+所以只抠 id、不解整棵对象——两种写法都认：media 的 `…/status/{id}/photo/1` expanded_url，
+以及 `edit_tweet_ids":[ "{id}" ]`。
+
+效果（一次手动同步，job 412；job 413 是另一个号，验证没把正常的号弄坏）：
+
+| 账号 | 之前 | 之后 | 补进来的 |
+|---|---|---|---|
+| @mysaaat | 33 帖 / 33 图，最新 2025-07-04 | 38 / 38，最新 2026-07-02 | 5 条：2025-10-08、10-09、10-20、10-25、2026-07-02（全带图） |
+| @jun_kasui | 最新 2026-10-21 | 最新 2026-11-02 | 时间线本来就新鲜，主页那条路只是补充 |
+
+局限：主页 HTML 一次只给 5 条 id，6 小时一轮的增量能把「最新」补上，中间若真漏掉若干条补不齐；
+要全量还是得登录抓取（Cookie + GraphQL `UserMedia`）。
 
 
 ---
@@ -472,7 +507,7 @@ GET …/screen-name/NASA (对照)     → 200, entries=20, 最新 2026-11-02T22:
 | 位置 | 内容 |
 |---|---|
 | `internal/social/social.go` | `Adapter` 接口、`Error`（`needs_auth` / `rate_limited` / `stale_parser` / `not_found` / `upstream`）、`Throttle`（串行 + 间隔 + 冷却）、`NormalizeHandle`、`Registry` |
-| `internal/social/xcom/` | X 免登录抓取（syndication 时间线 / `__NEXT_DATA__`）、限流冷却、fixture 单测 |
+| `internal/social/xcom/` | X 免登录抓取：时间线 widget（历史）+ 主页 HTML 发现新帖（§15.10）+ 单帖 `tweet-result`（详情）、限流冷却、fixture 单测 |
 | `internal/social/igram/` | Instagram Cookie 抓取（`web_profile_info` 首屏 + `feed/user` 翻页）、carousel 拆图、Cookie 归一化（**Netscape cookies.txt / Cookie 头 / JSON 三种写法**）、fixture 单测 |
 | `internal/store/social.go` + `migrations/0007_m5_social.sql` | 四张表与全部读写、照片墙 keyset 游标、计数、URL 反查艺人 |
 | `internal/jobs/social.go` | `social_sync`（每轮最多 5 页/账号，遇限流整轮停）/ `social_save`（下载入库 + `post.json`） |
@@ -489,7 +524,7 @@ GET …/screen-name/NASA (对照)     → 200, entries=20, 最新 2026-11-02T22:
 | 文件 | 覆盖 |
 |---|---|
 | `internal/store/social_test.go` | 账号 upsert 摘要（不覆盖空字段）、帖子去重、照片墙顺序与游标、URL 反查艺人 + 按艺人过滤、删号级联 |
-| `internal/social/xcom/xcom_test.go` | 正常时间线、无 `__NEXT_DATA__`、`hasResults:false`、**0 条帖子必须报错（`not_found` / `stale_parser`）**、真限流、**过期 `remaining:0` 头** |
+| `internal/social/xcom/xcom_test.go` | 正常时间线、无 `__NEXT_DATA__`、`hasResults:false`、**0 条帖子必须报错（`not_found` / `stale_parser`）**、**主页 HTML 发现的新帖进结果且按时间倒序**、**主页被登录墙挡住时退回时间线**、token、真限流、**过期 `remaining:0` 头** |
 | `internal/social/igram/igram_test.go` | 首屏/第二页解析、carousel 拆图、Cookie 解析、无 Cookie → `needs_auth`、401 / 429 |
 | `internal/imgcache/evict_test.go` | 超限时从最旧删到 90%、未设上限/未超限时不动、空目录 |
 | `internal/httpapi/social_err_test.go` | 五种 `social.Error` → 状态码/错误码映射、`rate_limited` 带 `details.resetAt`、超时不漏 Go 原始错误 |

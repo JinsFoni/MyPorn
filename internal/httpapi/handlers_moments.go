@@ -127,7 +127,7 @@ func (s *Server) handleListMomentAccounts(w http.ResponseWriter, r *http.Request
 		"unseen": unseen,
 		"platforms": []map[string]any{
 			{"key": "x", "name": "X", "needsCookie": false,
-				"hasCookie": true, "hint": "免登录可用，但一次只能取到最近 20 帖"},
+				"hasCookie": true, "hint": "免登录可用：新帖从主页发现，历史每次 20 帖（越同步越全）"},
 			{"key": "instagram", "name": "Instagram", "needsCookie": true,
 				"hasCookie": s.hasInstagramCookie(), "hint": "必须先在设置 → 动态里粘贴 Cookie"},
 		},

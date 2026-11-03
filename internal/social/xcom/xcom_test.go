@@ -58,7 +58,17 @@ func newTestAdapter(t *testing.T, h http.HandlerFunc) *Adapter {
 	t.Cleanup(srv.Close)
 	a := New(srv.Client())
 	a.base = srv.URL
+	a.cdn = srv.URL
+	a.web = "" // 默认只量时间线那条路；要量主页发现用 newProfileAdapter
 	a.throttle = social.NewThrottle(time.Millisecond)
+	return a
+}
+
+// newProfileAdapter 三条路都指向同一个测试服务器（主页发现 / 单帖详情 / 时间线）。
+func newProfileAdapter(t *testing.T, h http.HandlerFunc) *Adapter {
+	t.Helper()
+	a := newTestAdapter(t, h)
+	a.web = a.base
 	return a
 }
 
@@ -168,6 +178,111 @@ func TestGetProfileEmpty(t *testing.T) {
 	}
 	if k := social.KindOf(err); k != social.KindNotFound {
 		t.Errorf("错误种类 = %s，期望 not_found（%v）", k, err)
+	}
+}
+
+// profileFixture 是 x.com/{handle} 匿名 HTML 的裁片（2026-11-03 实抓 @mysaaat，
+// 只留两条 id + 一段 edit_control，验证两种抠 id 的正则都认）。
+const profileFixture = `<html><body><script nonce="x">($R=>$R[21].next($R[23]={kind:1},
+{"tweet_results":[{"expanded_url":"https://x.com/mysaaat/status/2072599171006104014/photo/1",
+"media_url_https":"https://pbs.twimg.com/media/HMNZ9ELWUAAkK9l.jpg"},` +
+	`{"edit_control":{"edit_tweet_ids":[\"1982155480265785498\"]}}]})</script></body></html>`
+
+// 单帖接口的响应裁片：created_at 是 ISO，图在 mediaDetails 里。
+const tweetResultFixture = `{"__typename":"Tweet","id_str":"2072599171006104014",
+"created_at":"2026-07-02T08:32:04.000Z","text":"(&gt;.&lt;) https://t.co/t0JGxb63Uk",
+"user":{"id_str":"1591758744001593345","name":"mysaaat | ONLYFANS","screen_name":"mysaaat",
+ "profile_image_url_https":"https://pbs.twimg.com/profile_images/1/63Rnu8e-_normal.jpg"},
+"mediaDetails":[{"type":"photo","media_url_https":"https://pbs.twimg.com/media/HMNZ9ELWUAAkK9l.jpg",
+ "original_info":{"width":960,"height":1280},
+ "expanded_url":"https://x.com/mysaaat/status/2072599171006104014/photo/1"}]}`
+
+// 时间线 widget 停在老帖子上、主页 HTML 里有新帖时，新帖必须能从主页那条路进来。
+// 这是 2026-11-03 用户报「动态里没有最新的推特照片」的直接修法。
+func TestListPostsFromProfile(t *testing.T) {
+	var token string
+	a := newProfileAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/mysaaat":
+			w.Write([]byte(profileFixture))
+		case r.URL.Path == "/tweet-result":
+			token = r.URL.Query().Get("token")
+			w.Write([]byte(tweetResultFixture))
+		case strings.Contains(r.URL.Path, "/screen-name/mysaaat"):
+			w.Write([]byte(fixture))
+		default:
+			t.Errorf("意料之外的请求: %s", r.URL.Path)
+		}
+	})
+	page, err := a.ListPosts(context.Background(), "mysaaat", "")
+	if err != nil {
+		t.Fatalf("ListPosts: %v", err)
+	}
+	if token == "" {
+		t.Error("请求里没带 token（不带 token 上游只回 {}）")
+	}
+	var got *social.Post
+	for i := range page.Posts {
+		if page.Posts[i].PostID == "2072599171006104014" {
+			got = &page.Posts[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("主页里的新帖没进结果: %+v", page.Posts)
+	}
+	if len(got.Photos) != 1 || got.Photos[0].Width != 960 || got.Photos[0].Height != 1280 {
+		t.Errorf("照片不对: %+v", got.Photos)
+	}
+	if !strings.Contains(got.Photos[0].URL, "name=orig") {
+		t.Errorf("图片不是原图后缀: %s", got.Photos[0].URL)
+	}
+	if got.PostedAt.UTC().Format(time.RFC3339) != "2026-07-02T08:32:04Z" {
+		t.Errorf("时间不对（ISO 没解析？）: %v", got.PostedAt)
+	}
+	// 时间线那 3 条也在（fixture 里是 2026-10，比主页那条 2026-07 新，所以排在前面）。
+	if len(page.Posts) != 4 {
+		t.Fatalf("帖子数 = %d，期望 4（1 新 + 3 时间线）: %+v", len(page.Posts), page.Posts)
+	}
+	for i := 1; i < len(page.Posts); i++ {
+		if page.Posts[i].PostedAt.After(page.Posts[i-1].PostedAt) {
+			t.Errorf("没按时间倒序: %v 在 %v 后面", page.Posts[i].PostedAt, page.Posts[i-1].PostedAt)
+		}
+	}
+}
+
+// 主页被登录墙挡住（200 但没有 id）时，退回时间线照样能出结果，别整轮失败。
+func TestListPostsProfileBlockedFallsBack(t *testing.T) {
+	a := newProfileAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mysaaat" {
+			w.Write([]byte(`<html><body>log in to continue</body></html>`))
+			return
+		}
+		if strings.Contains(r.URL.Path, "/screen-name/mysaaat") {
+			w.Write([]byte(fixture))
+			return
+		}
+		t.Errorf("意料之外的请求: %s", r.URL.Path)
+	})
+	page, err := a.ListPosts(context.Background(), "mysaaat", "")
+	if err != nil {
+		t.Fatalf("主页没内容时不该失败: %v", err)
+	}
+	if len(page.Posts) != 3 {
+		t.Errorf("帖子数 = %d，期望时间线那 3 条", len(page.Posts))
+	}
+}
+
+// token 只要非空就行（实测 abc123 也能拿到完整 JSON），这里只锁「空 id 给空串、不同帖不同值」。
+func TestTweetToken(t *testing.T) {
+	if got := tweetToken(""); got != "" {
+		t.Errorf("空 id 应该给空串，得到 %q", got)
+	}
+	a, b := tweetToken("2072599171006104014"), tweetToken("1982155480265785498")
+	if a == "" || b == "" {
+		t.Fatalf("token 不该为空: %q %q", a, b)
+	}
+	if a == b {
+		t.Errorf("不同帖子算出了同一个 token: %q", a)
 	}
 }
 

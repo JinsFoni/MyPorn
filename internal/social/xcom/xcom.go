@@ -1,15 +1,26 @@
 // Package xcom 抓 X（Twitter）博主的帖子照片。
 //
-// **不需要登录**：X 给第三方网站嵌时间线用的公开端点会直接吐一段 JSON 出来：
+// **不需要登录**，两条互补的公开路子：
 //
-//	GET https://syndication.twitter.com/srv/timeline-profile/screen-name/{handle}
-//	→ HTML 里的 <script id="__NEXT_DATA__"> 就是 props.pageProps.timeline.entries
+//  1. 主页 HTML（拿来「发现」新帖，2026-11-03 加的）：GET https://x.com/{handle}
+//     匿名就能拿到 200 + 约 140 KB，里头有一段 RSC 流（`$R[21].next(...)`），
+//     带着 5 条帖子的完整对象（正文 / media_url_https / original_info / 尺寸）；
+//     我们只从里面抠帖子 id，详情走 (2)。
+//  2. 单帖：GET https://cdn.syndication.twimg.com/tweet-result?id={id}&lang=en&token={token}
+//     官方嵌推 widget 用的那个接口，返回干净的 JSON（created_at / text / mediaDetails）。
+//     token 是 id 算出来的：((id / 1e15) * π) 转 36 进制、去掉小数点与 0。**实测服务端只校验
+//     「有没有这个参数」不校验值**（`token=abc123` 照样 200 + 完整 JSON），不带才是 `{}`。
+//  3. 时间线 widget（老路子，负责「历史」）：GET https://syndication.twitter.com/srv/
+//     timeline-profile/screen-name/{handle} → HTML 里的 __NEXT_DATA__ 就是 entries。
 //
 // 实测结论（docs/M5-SOCIAL.md §15）：
-//   - 一页固定 20 条，**没有任何翻页游标**，加 ?cursor= / ?max_id= / ?page= 反而会让响应变成错误壳
-//     → 免登录路径 20 帖封顶，历史靠 6 小时一轮的增量慢慢累积；
+//   - 时间线 widget 一页固定 20 条，**没有任何翻页游标**，加 ?cursor= / ?max_id= / ?page= 反而会让响应
+//     变成错误壳；而且它**会停在某个时间点不再前进**：@mysaaat 的 widget 到 2026-11-03 仍然只给到
+//     2025-07-04 那 32 条（换来换 UA / 语言 / no-cache 都是同一份字节），可主页 HTML 里明摆着有
+//     2025-10 和 2026-07 的帖子 —— 所以「最新帖」只能靠主页那条路发现，见 §15.10；
 //   - 账号不存在/受保护时是 **HTTP 200 + hasResults:false**，不是 404，判空必须看这个字段；
-//   - 限流是 **按 IP** 的 30 次 / 15 分钟，429 之后必须停到 x-rate-limit-reset，别重试；
+//   - 时间线端点限流是 **按 IP** 的 30 次 / 15 分钟，429 之后必须停到 x-rate-limit-reset，别重试
+//     （tweet-result 在另一个域名上，额度另算，实测连打 6 次没问题）；
 //   - 原图后缀 `?name=orig` 可用，且 pbs.twimg.com 不校验 Referer。
 package xcom
 
@@ -19,9 +30,11 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -30,19 +43,27 @@ import (
 )
 
 const (
-	baseURL   = "https://syndication.twitter.com"
+	baseURL = "https://syndication.twitter.com" // 时间线 widget（历史）
+	cdnURL  = "https://cdn.syndication.twimg.com"
+	webURL  = "https://x.com"
+	// userAgent 用桌面 Chrome：x.com 对 Googlebot 直接 403（实测），对浏览器 UA 才给主页 HTML。
 	userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-	// maxBody 是响应体上限：一页 20 条带图 JSON 实测约 150 KB，8 MB 足够宽松。
+	// maxBody 是响应体上限：一页 20 条带图 JSON 实测约 150 KB，主页 HTML 140 KB，8 MB 足够宽松。
 	maxBody = 8 << 20
 	// defaultCooldown 是没有 reset 头时的保守冷却。
 	defaultCooldown = 15 * time.Minute
+	// maxProfilePosts 是每轮从主页 HTML 里最多取几条帖子的详情：主页天生只给 5 条 id，
+	// 这里留点余量；每条详情一次 tweet-result 请求，别让配额被一个号吃光。
+	maxProfilePosts = 10
 )
 
 // Adapter 实现 social.Adapter。
 type Adapter struct {
 	client   *http.Client
 	throttle *social.Throttle
-	base     string // 可替换，便于测试
+	base     string // 时间线 widget，可替换，便于测试
+	cdn      string // 单帖 tweet-result
+	web      string // 主页 HTML（发现新帖 id）；空 = 这条路关掉（单测里只量时间线那条路）
 	now      func() time.Time
 }
 
@@ -54,6 +75,8 @@ func New(client *http.Client) *Adapter {
 		client:   client,
 		throttle: social.NewThrottle(1500 * time.Millisecond),
 		base:     baseURL,
+		cdn:      cdnURL,
+		web:      webURL,
 		now:      time.Now,
 	}
 }
@@ -252,12 +275,173 @@ func (a *Adapter) resetAt(v string) time.Time {
 	return a.now().Add(defaultCooldown)
 }
 
+// ---- 主页 HTML 发现 + 单帖详情（2026-11-03 加）----
+//
+// 为什么加这条路：时间线 widget 会「停在某个时间点」。@mysaaat 的 widget 到 2026-11-03 仍然
+// 只给到 2025-07-04 那 32 条，可主页 HTML 里明摆着有 2025-10-08 / 2026-07-02 的帖子，
+// 用户在页面上看到的就是「关注了但墙上没有最新照片」。主页 HTML 匿名可取，所以新帖从这儿发现。
+
+// profileStatusRe 从 media 的 expanded_url（https://x.com/{handle}/status/{id}/photo/1）里取帖子 id。
+var profileStatusRe = regexp.MustCompile(`x\.com/[A-Za-z0-9_]+/status/(\d{15,})`)
+
+// profileEditRe 从 edit_control.edit_tweet_ids 里取帖子 id（RSC 流里是 `\"edit_tweet_ids\":[\"123\"]`）。
+var profileEditRe = regexp.MustCompile(`edit_tweet_ids\\?"\s*:\s*\[\s*\\?"(\d{15,})`)
+
+// get 发一个 GET，返回响应体和状态码。限流/传输故障统一成 social.Error。
+func (a *Adapter) get(ctx context.Context, u, accept string) ([]byte, int, error) {
+	if err := a.throttle.Wait(ctx); err != nil {
+		return nil, 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, 0, social.Upstream("构造请求失败", err)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", accept)
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
+		return nil, 0, social.Upstream("请求 X 失败", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if err != nil {
+		return nil, 0, social.Upstream("读取 X 响应失败", err)
+	}
+	return body, resp.StatusCode, nil
+}
+
+// profileIDs 从主页 HTML 里抠帖子 id，新到旧，最多 maxProfilePosts 条。
+//
+// 实测（2026-11-03，@mysaaat）：x.com/{handle} 匿名 200 / 142 KB，里面有 5 条帖子
+// （2025-10-08、2025-10-09、2025-10-20、2025-10-25、2026-07-02），而时间线 widget 一条都没给。
+// Googlebot UA 直接 403，所以必须用桌面浏览器 UA。
+func (a *Adapter) profileIDs(ctx context.Context, handle string) ([]string, error) {
+	if a.web == "" {
+		return nil, social.StaleParser("主页发现路径未启用")
+	}
+	body, status, err := a.get(ctx, a.web+"/"+url.PathEscape(handle), "text/html,application/xhtml+xml")
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusTooManyRequests {
+		// 主页这条路的限流头没实测过，保守起见别在这儿下判断，交给上层换源。
+		return nil, social.RateLimited("X 主页返回 429", a.now().Add(defaultCooldown))
+	}
+	if status != http.StatusOK {
+		return nil, social.Upstream(fmt.Sprintf("X 主页返回 %d", status), nil)
+	}
+	seen := make(map[string]struct{}, 8)
+	ids := make([]string, 0, 8)
+	for _, re := range []*regexp.Regexp{profileStatusRe, profileEditRe} {
+		for _, m := range re.FindAllSubmatch(body, -1) {
+			id := string(m[1])
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		// 登录墙/风控页也会是 200，别当「这个号没帖」。
+		return nil, social.StaleParser(fmt.Sprintf("@%s 的主页 HTML 里没有帖子 id（可能遇到登录墙或改版）", handle))
+	}
+	sort.Slice(ids, func(i, j int) bool { return idLess(ids[j], ids[i]) })
+	if len(ids) > maxProfilePosts {
+		ids = ids[:maxProfilePosts]
+	}
+	return ids, nil
+}
+
+// idLess 按雪花 id 的数值比大小（id 里编着时间戳，但全局唯一，只有同账号之间比才有意义）。
+func idLess(a, b string) bool {
+	na, ea := strconv.ParseInt(a, 10, 64)
+	nb, eb := strconv.ParseInt(b, 10, 64)
+	if ea != nil || eb != nil {
+		return a < b
+	}
+	return na < nb
+}
+
+// tweetResult 是 cdn.syndication.twimg.com/tweet-result 的响应：字段比时间线那份少，
+// 但 created_at 是 ISO（`2026-07-02T08:32:04.000Z`），图和尺寸在 mediaDetails 里。
+type tweetResult struct {
+	IDStr        string  `json:"id_str"`
+	CreatedAt    string  `json:"created_at"`
+	Text         string  `json:"text"`
+	User         user    `json:"user"`
+	MediaDetails []media `json:"mediaDetails"`
+}
+
+// toTweet 折回统一的 tweet 结构，后面的 toPost / collectPhotos 就不用管来源差异。
+func (r *tweetResult) toTweet() *tweet {
+	t := &tweet{IDStr: r.IDStr, CreatedAt: r.CreatedAt, FullText: r.Text, User: r.User}
+	t.ExtendedEntities.Media = r.MediaDetails
+	return t
+}
+
+// tweetByID 抓单帖详情。token 是官方 widget 那套算法，不带它只回 `{}`（实测 2 字节）。
+func (a *Adapter) tweetByID(ctx context.Context, id string) (*tweet, error) {
+	u := fmt.Sprintf("%s/tweet-result?id=%s&lang=en&token=%s",
+		a.cdn, url.QueryEscape(id), url.QueryEscape(tweetToken(id)))
+	body, status, err := a.get(ctx, u, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, social.Upstream(fmt.Sprintf("X 单帖接口返回 %d", status), nil)
+	}
+	var r tweetResult
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, social.StaleParser("X 单帖 JSON 解析失败")
+	}
+	if r.IDStr == "" {
+		return nil, social.NotFound(fmt.Sprintf("帖子 %s 读不到（可能已删除或需要登录）", id))
+	}
+	return r.toTweet(), nil
+}
+
+// tweetToken 复刻官方嵌推 widget 的 token：((id / 1e15) * π) 的 36 进制，去掉小数点和 0。
+// 值不参与校验（实测 `token=abc123` 也返回完整 JSON，不带才是 `{}`），但保持和官方一致，
+// 哪天上游真校验了也不用改。
+func tweetToken(id string) string {
+	n, err := strconv.ParseFloat(id, 64)
+	if err != nil || n <= 0 {
+		return ""
+	}
+	v := n / 1e15 * math.Pi
+	const digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+	var out strings.Builder
+	out.WriteString(strconv.FormatInt(int64(v), 36))
+	out.WriteByte('.')
+	frac := v - math.Floor(v)
+	for i := 0; i < 12 && frac > 0; i++ {
+		frac *= 36
+		d := int(frac)
+		out.WriteByte(digits[d])
+		frac -= float64(d)
+	}
+	// 官方实现就是「去掉小数点和所有 0」。
+	return strings.NewReplacer(".", "", "0", "").Replace(out.String())
+}
+
 // ---- social.Adapter ----
 
 // GetProfile 抓博主资料。X 的时间线里每条帖子都带完整的 user 对象，取第一条就够。
 func (a *Adapter) GetProfile(ctx context.Context, handle string) (*social.Account, error) {
 	nd, err := a.fetch(ctx, handle)
 	if err != nil {
+		// 时间线 widget 被限流时，主页那条路照样能拿到头像和名字——别让整轮同步白跑
+		// （用户看到的只是「同步成功」但一直没动静，正是 §15.9 里那个假象）。
+		if social.KindOf(err) == social.KindRateLimited {
+			if acc, err2 := a.profileAccount(ctx, handle); err2 == nil {
+				return acc, nil
+			}
+		}
 		return nil, err
 	}
 	for _, e := range nd.Props.PageProps.Timeline.Entries {
@@ -280,31 +464,110 @@ func (a *Adapter) GetProfile(ctx context.Context, handle string) (*social.Accoun
 	return nil, social.StaleParser(fmt.Sprintf("@%s 的页面没有可取的用户信息", handle))
 }
 
-// ListPosts 抓一页帖子。cursor 无意义（X 免登录路径没有翻页），传什么都忽略。
-func (a *Adapter) ListPosts(ctx context.Context, handle, cursor string) (*social.Page, error) {
-	nd, err := a.fetch(ctx, handle)
+// profileAccount 拿最新一条帖子的作者信息当资料（主页 HTML 本身不带头像字段）。
+func (a *Adapter) profileAccount(ctx context.Context, handle string) (*social.Account, error) {
+	ids, err := a.profileIDs(ctx, handle)
 	if err != nil {
 		return nil, err
 	}
+	t, err := a.tweetByID(ctx, ids[0])
+	if err != nil {
+		return nil, err
+	}
+	if t.User.Name == "" {
+		return nil, social.StaleParser(fmt.Sprintf("@%s 的帖子作者信息是空的", handle))
+	}
+	return &social.Account{
+		Platform:    a.Key(),
+		Handle:      social.NormalizeHandle(handle),
+		DisplayName: t.User.Name,
+		AvatarURL:   avatarFrom(t.User.AvatarURL),
+		ProfileURL:  "https://x.com/" + social.NormalizeHandle(handle),
+	}, nil
+}
+
+// ListPosts 抓一页帖子。cursor 无意义（X 免登录路径没有翻页），传什么都忽略。
+//
+// 两个来源合并：主页 HTML 发现的最新帖（含时间线 widget 不返回的那些）+ 时间线 widget 的历史。
+// 只要有一边拿到东西就算成功——另一边限流不该把已经抓到的帖子扔掉，6 小时后下一轮再补。
+func (a *Adapter) ListPosts(ctx context.Context, handle, cursor string) (*social.Page, error) {
 	page := &social.Page{Posts: []social.Post{}}
-	for _, e := range nd.Props.PageProps.Timeline.Entries {
-		if e.Content.Tweet == nil {
-			continue
+
+	var profErr error
+	if a.web != "" {
+		ids, err := a.profileIDs(ctx, handle)
+		if err != nil {
+			profErr = err
 		}
-		if p, ok := toPost(e.Content.Tweet); ok {
-			page.Posts = append(page.Posts, p)
+		for _, id := range ids {
+			if cerr := ctx.Err(); cerr != nil {
+				return nil, cerr
+			}
+			t, err := a.tweetByID(ctx, id)
+			if err != nil {
+				if profErr == nil {
+					profErr = err
+				}
+				continue
+			}
+			if p, ok := toPost(t); ok {
+				page.Posts = append(page.Posts, p)
+			}
 		}
 	}
-	// 一页解析不出任何帖子时不能当「同步成功、没有新帖」交差：那会把「账号不存在/设了保护」
+	nd, tlErr := a.fetch(ctx, handle)
+	if tlErr == nil {
+		for _, e := range nd.Props.PageProps.Timeline.Entries {
+			if e.Content.Tweet == nil {
+				continue
+			}
+			if p, ok := toPost(e.Content.Tweet); ok {
+				page.Posts = append(page.Posts, p)
+			}
+		}
+	}
+
+	page.Posts = dedupePosts(page.Posts)
+	if len(page.Posts) > 0 {
+		return page, nil
+	}
+	// 一条都没抓到：优先把限流抛上去（上层要据此整轮停手），其次才是解析/不存在。
+	if tlErr != nil && social.KindOf(tlErr) == social.KindRateLimited {
+		return nil, tlErr
+	}
+	if profErr != nil {
+		return nil, profErr
+	}
+	if tlErr != nil {
+		return nil, tlErr
+	}
+	// 两个来源都「成功但没有帖子」：不能当「同步成功、没有新帖」交差，那会把「账号不存在/设了保护」
 	// 和「X 又改了页面结构」一起咽下去，界面只显示「同步成功」但墙上一年没动静——2026-11-03
 	// 排查「动态里好像没有抓取最新的推特照片」时就差点被这条静默路径骗过去。
-	if len(page.Posts) == 0 {
-		if !nd.Props.PageProps.ContextProvider.HasResults {
-			return nil, social.NotFound(fmt.Sprintf("X 上没有 @%s，或对方设了保护", handle))
-		}
-		return nil, social.StaleParser(fmt.Sprintf("@%s 的时间线有结果但解析不出帖子（页面结构可能又变了）", handle))
+	if nd != nil && !nd.Props.PageProps.ContextProvider.HasResults {
+		return nil, social.NotFound(fmt.Sprintf("X 上没有 @%s，或对方设了保护", handle))
 	}
-	return page, nil
+	return nil, social.StaleParser(fmt.Sprintf("@%s 的页面有结果但解析不出帖子（页面结构可能又变了）", handle))
+}
+
+// dedupePosts 按 post_id 去重（同一帖子两个来源都可能给到），再按发布时间倒序。
+// 重复时留信息更全的那份：有正文、有图。
+func dedupePosts(in []social.Post) []social.Post {
+	idx := make(map[string]int, len(in))
+	out := make([]social.Post, 0, len(in))
+	for _, p := range in {
+		if i, ok := idx[p.PostID]; ok {
+			cur := out[i]
+			if len(p.Photos) > len(cur.Photos) || (cur.Caption == "" && p.Caption != "") {
+				out[i] = p
+			}
+			continue
+		}
+		idx[p.PostID] = len(out)
+		out = append(out, p)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].PostedAt.After(out[j].PostedAt) })
+	return out
 }
 
 // toPost 把一条 tweet 转成统一的帖子；转推取原帖（照片属于原帖）。
@@ -416,11 +679,15 @@ func avatarFrom(raw string) string {
 const createdAtLayout = "Mon Jan 02 15:04:05 -0700 2006"
 
 func parseTime(s string) time.Time {
-	t, err := time.Parse(createdAtLayout, strings.TrimSpace(s))
-	if err != nil {
-		return time.Time{}
+	s = strings.TrimSpace(s)
+	if t, err := time.Parse(createdAtLayout, s); err == nil {
+		return t
 	}
-	return t
+	// 单帖接口给的是 ISO（`2026-07-02T08:32:04.000Z`），时间线给的是上面那种。
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 // 编译期检查。
