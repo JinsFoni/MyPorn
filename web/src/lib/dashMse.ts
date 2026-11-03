@@ -111,9 +111,19 @@ function once(target: EventTarget, event: string, timeoutMs: number): Promise<vo
   });
 }
 
-/** 按字节区间取一段（必须 206：如果上游把 Range 当耳边风、回了 200 整条文件，宁可失败） */
-async function rangeFetch(url: string, start: number, end: number): Promise<ArrayBuffer> {
-  const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
+/**
+ * 按字节区间取一段（必须 206：如果上游把 Range 当耳边风、回了 200 整条文件，宁可失败）。
+ *
+ * `signal` 是拖动进度条时的那把刹车：4K 一片 1~1.4 MB，用户拖到别处以后这一片已经没有用了，
+ * 让它拉完再丢掉，等于每拖一次都要先白等一秒多（实测见 #seeked 的注释）。
+ */
+async function rangeFetch(
+  url: string,
+  start: number,
+  end: number,
+  signal?: AbortSignal,
+): Promise<ArrayBuffer> {
+  const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` }, signal });
   if (res.status !== 206) {
     throw new Error(`上游不支持 Range（HTTP ${String(res.status)}）`);
   }
@@ -240,7 +250,18 @@ interface TrackState {
   sb: SourceBuffer | null;
   /** 下一个要 append 的分片序号 */
   next: number;
-  busy: boolean;
+  /**
+   * 取片代次。每次 seek/换档 +1。
+   *
+   * 它治的是「拖动进度条把播放拖死」那个 bug：`#appendOne` 先读 `next` 再 await 取分片，
+   * 回来以后无条件 `next += 1`。用户在这段等待里拖了进度条，`#seeked` 刚把 `next` 摆到
+   * 目标那一片，飞在半路的旧请求一回手就把它加过一位——**覆盖播放位置的那一片从此没人取**，
+   * 缓冲从目标点往后 5 秒才开始，`seeking` 永远不结束（实测 30 秒仍 rs=1、currentTime 不动，
+   * 只能刷新页面）。带上代次以后，回来的旧分片直接丢掉，不碰 `next`。
+   */
+  gen: number;
+  /** 正在飞的取片请求（seek 时 abort 掉，不用等它把 1.4 MB 拉完） */
+  abort: AbortController | null;
   appended: number;
 }
 
@@ -257,6 +278,8 @@ export class DashMsePlayer {
   #audio: TrackState | null = null;
   #destroyed = false;
   #pumping = false;
+  /** 泵在跑的时候又被叫了一次（seek/换档），收尾后补跑一轮 */
+  #pumpAgain = false;
   #starting: Promise<void> | null = null;
   #onSeeking = (): void => this.#seeked();
   #onTimeUpdate = (): void => this.#pump();
@@ -299,7 +322,8 @@ export class DashMsePlayer {
       index: videoIndex,
       sb: ms.addSourceBuffer(this.#spec.video.mime),
       next: segmentAt(videoIndex.segments, atSec),
-      busy: false,
+      gen: 0,
+      abort: null,
       appended: 0,
     };
     const aState: TrackState = {
@@ -308,7 +332,8 @@ export class DashMsePlayer {
       index: audioIndex,
       sb: ms.addSourceBuffer(this.#spec.audio.mime),
       next: segmentAt(audioIndex.segments, atSec),
-      busy: false,
+      gen: 0,
+      abort: null,
       appended: 0,
     };
     this.#video = vState;
@@ -352,6 +377,12 @@ export class DashMsePlayer {
     // 先把旧 SourceBuffer 从状态里摘干净（pump 手里那份引用也要跟着失效），再去动它
     const oldSb = old.sb;
     old.sb = null;
+    // 旧档位还在飞的那一片一并作废：换档多半是「画面卡了，换一档试试」，
+    // 让它把上一条流剩下的字节拉完纯属白等
+    old.gen += 1;
+    const pending = old.abort;
+    old.abort = null;
+    pending?.abort();
     let sb = oldSb;
     if (sb !== null && family(old.track.mime) !== family(track.mime)) {
       // 跨编码族（AV1↔H.264）：只能摘掉重建，重建失败就让上层回退合流
@@ -398,7 +429,8 @@ export class DashMsePlayer {
       index,
       sb,
       next: segmentAt(index.segments, at),
-      busy: false,
+      gen: 0,
+      abort: null,
       appended: 0,
     };
     this.#video = state;
@@ -458,10 +490,25 @@ export class DashMsePlayer {
       t.next += 1;
       return true;
     }
-    const buf = await rangeFetch(t.track.url, seg.offset, seg.offset + seg.size - 1);
-    // 字节还没到手时轨道可能已经换了（用户点了别的清晰度）：别再往旧 SourceBuffer 里塞
-    if (this.#destroyed || t.sb !== sb) return false;
+    const gen = t.gen;
+    const ctrl = new AbortController();
+    t.abort = ctrl;
+    let buf: ArrayBuffer;
+    try {
+      buf = await rangeFetch(t.track.url, seg.offset, seg.offset + seg.size - 1, ctrl.signal);
+    } catch (err) {
+      // seek 把这一片掐了：不是错误，交给新的泵从目标点重新取
+      if (ctrl.signal.aborted) return false;
+      throw err;
+    } finally {
+      if (t.abort === ctrl) t.abort = null;
+    }
+    // 字节还没到手时轨道可能已经换了（用户点了别的清晰度），或者用户把进度条拖走了：
+    // 两种情况都不能动 `next`——拖走时 `#seeked` 已经把它摆到目标那一片，
+    // 这里再 `+= 1` 就正好跳过「覆盖播放位置」的那一片，画面从此卡死在目标点上。
+    if (this.#destroyed || t.sb !== sb || t.gen !== gen) return false;
     await this.#append(t, buf);
+    if (t.gen !== gen) return false;
     t.next += 1;
     t.appended += 1;
     this.#hooks.onProgress?.({
@@ -524,28 +571,73 @@ export class DashMsePlayer {
     return 0;
   }
 
-  /** 缓冲区往前攒够 AHEAD_SEC 就停手；顺手把身后老掉的分片删掉 */
+  /**
+   * 缓冲区往前攒够 AHEAD_SEC 就停手；顺手把身后老掉的分片删掉。
+   *
+   * 两条轨**并行**填：以前是「视频填满 20 秒才轮到声音」，4K 一片 1~1.4 MB，
+   * 拖动进度条之后要先等视频那 4 片一片片排队取完，声音才开始动——
+   * 实测（`BV1...`/2160p AV1，本地端口 18081）单次冷 seek 恢复播放 0.4~2.0 秒，
+   * 其中一半以上时间花在排在后面的音频轨上。并行以后这段时间基本消失。
+   */
   #pump(): void {
-    if (this.#pumping || this.#destroyed) return;
+    if (this.#destroyed) return;
+    // 已经有泵在跑：记一笔，等它收尾后再来一轮。
+    // 拖动进度条时这一笔是必需的——seek 会 abort 掉在飞的分片，那一轮泵随即空转结束，
+    // 而「站在目标点上、缓冲里没有这一片」的状态不会再触发 timeupdate，
+    // 没人再叫泵就是彻底不动了（用户看到的「卡住」）。
+    if (this.#pumping) {
+      this.#pumpAgain = true;
+      return;
+    }
     this.#pumping = true;
     void (async () => {
       try {
-        for (const t of [this.#video, this.#audio]) {
-          if (!t || !t.sb) continue;
-          let guard = 0;
-          while (!this.#destroyed && guard < 60) {
-            guard += 1;
-            if (this.#ahead(t.sb) >= AHEAD_SEC) break;
-            if (!(await this.#appendOne(t))) break;
-          }
-          await this.#pruneBehind(t);
-        }
+        await Promise.all([this.#fillTrack(this.#video), this.#fillTrack(this.#audio)]);
       } catch (err) {
         this.#fatal(err);
       } finally {
         this.#pumping = false;
+        if (this.#pumpAgain && !this.#destroyed) {
+          this.#pumpAgain = false;
+          this.#pump();
+        }
       }
     })();
+  }
+
+  /** 一条轨往前填到 AHEAD_SEC，再把身后老掉的分片删掉 */
+  async #fillTrack(t: TrackState | null): Promise<void> {
+    if (!t) return;
+    // 手里这份 SourceBuffer 引用要一直核：换档会把 `t.sb` 摘成 null 再换一个新的，
+    // 这里若拿 `t.sb` 现读就会读到 null（`null.buffered` 直接抛，整条管道判死退回合流）
+    const sb = t.sb;
+    if (!sb) return;
+    this.#realign(t);
+    let guard = 0;
+    while (!this.#destroyed && guard < 60) {
+      guard += 1;
+      if (t.sb !== sb) return;
+      if (this.#ahead(sb) >= AHEAD_SEC) break;
+      if (!(await this.#appendOne(t))) break;
+    }
+    await this.#pruneBehind(t);
+  }
+
+  /**
+   * 兜底：播放位置那一片不在缓冲里、而 `next` 已经跑到它后面去了 —— 把 `next` 拨回来。
+   *
+   * 主路（`#seeked` 摆 next + 代次保护）已经不会跳片了，这一条是给「万一」准备的：
+   * 只要判错一次，用户看到的就是「拖到哪儿都卡死，只能刷新页面」，代价太大。
+   * 跳到未来的那一段缓冲不会丢，只是被晾着，`#pruneBehind` 会顺手收掉。
+   */
+  #realign(t: TrackState): void {
+    const sb = t.sb;
+    if (!sb) return;
+    const at = this.el.currentTime;
+    for (let i = 0; i < sb.buffered.length; i += 1) {
+      if (sb.buffered.start(i) <= at + 0.15 && sb.buffered.end(i) > at) return;
+    }
+    t.next = segmentAt(t.index.segments, at);
   }
 
   async #pruneBehind(t: TrackState): Promise<void> {
@@ -563,14 +655,25 @@ export class DashMsePlayer {
     }
   }
 
-  /** 拖动进度条：两条轨都重新对齐到目标时刻那一片 */
+  /**
+   * 拖动进度条：两条轨都重新对齐到目标时刻那一片。
+   *
+   * 拖进度条不是「一次 seek」而是几十次（滑块每次 pointermove 都改 currentTime），
+   * 所以这里做的两件事都必须便宜、且不能留下后患：
+   *   1. `gen += 1` + abort：飞在半路的分片立刻作废（4K 一片 1~1.4 MB，
+   *      等它拉完再丢掉，每拖一次要多等一秒多）；
+   *   2. 重设 `next`，然后重新叫泵。
+   */
   #seeked(): void {
     if (this.#destroyed) return;
     const at = this.el.currentTime;
     for (const t of [this.#video, this.#audio]) {
       if (!t || !t.sb) continue;
-      const idx = segmentAt(t.index.segments, at);
-      t.next = idx;
+      t.gen += 1;
+      const ctrl = t.abort;
+      t.abort = null;
+      ctrl?.abort();
+      t.next = segmentAt(t.index.segments, at);
     }
     this.#pump();
   }
