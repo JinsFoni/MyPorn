@@ -6,7 +6,8 @@
    * 头像条：横向滚动的圆头像＝**过滤器**（关注页 / 动态页 / B 站页 / YouTube 页共用一套）。
    *
    * 尺寸：**72px 圆头像**（`h-18 w-18`，取 128px 的图按 2x 稍有余量），列宽就是头像宽（`w-18` = 72px），
-   * 姓名 `text-ui` 14px（2026-11-04 从 12px「再大一点点」）、**单行截断**、**居中在头像正下方**
+   * 姓名 13px / 行高 18px（`text-[0.8125rem] leading-[1.125rem]`；2026-11-04 从 12px 加到 14px 后用户说太大，定在 13px）、
+   * **单行截断**、**居中在头像正下方**
    * （同日要求；此前是 80px 宽、左对齐）。
    * 历史：2026-11-02「头像改小一点」72 → 56；2026-11-04「再调大一点点」56 → 64 → 72 并要求名字居中。
    * **列宽与头像等宽（都 72px）是刻意的**：这样首列头像的左边仍落在内容左边缘（白环靠滚动盒 6px 内边距活着），
@@ -126,7 +127,7 @@
               {/if}
             </span>
             <span
-              class="w-full truncate text-center text-ui transition-colors {selected === item.id
+              class="w-full truncate text-center text-[0.8125rem] leading-[1.125rem] transition-colors {selected === item.id
                 ? 'font-medium text-fg'
                 : 'text-dim group-hover:text-fg'} {item.dimmed ? 'opacity-50' : ''}"
             >
