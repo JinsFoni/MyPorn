@@ -1,10 +1,11 @@
 // Package igram 抓 Instagram 博主的帖子照片。
 //
-// **必须登录态**：实测（docs/M5-SOCIAL.md §15.7）免登录在这个站已经彻底没有路——
-// web_profile_info 一律 401 require_login、usernameinfo 直接 429 spam、
-// ?__a=1 返回空、主页 HTML 302 跳登录页。所以适配器要求用户先在设置里贴
-// `sessionid` + `csrftoken` + `ds_user_id`（加密落库），拿不到就明确报 needs_auth，
-// 绝不静默返回空列表。
+// **Cookie 优先**：2026-10-28 复测里免登录是全线 401（docs/M5-SOCIAL.md §15.2 的表），
+// 但 2026-11-04 复测同一个 web_profile_info 又免登录 200 了：能拿到最新 12 条，
+// 只有翻页（feed/user/?max_id= → 403）和 GraphQL 老入口（query_id/query_hash → 401 require_login）
+// 还需要登录，属于 IG 自己的 igweb_rollout 灰度按 IP 浮动（§15.11 有逐条实测）。
+// 所以 Cookie 仍是必需：历史翻页只有带 sessionid 才通；免登录兜底（只抓最新 12 条）
+// 还没实现，NeedsCookie 暂时保持 true。拿不到 Cookie 明确报 needs_auth，绝不静默返回空列表。
 //
 // 两条请求：
 //  1. 第一页（顺带把博主资料取回来）：

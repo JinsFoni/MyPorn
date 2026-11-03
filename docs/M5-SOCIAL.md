@@ -169,9 +169,11 @@ type Adapter interface {
 - Cookie 升级路径：配 `auth_token` + `ct0` 后走 `i/api/graphql/{queryId}/UserMedia`，才有真游标。
   **queryId 随前端发版变化**，失效时明确报「需要更新 X 解析版本」，绝不静默返回空列表。
 
-### 5.2 Instagram（**必须 Cookie**，见 §15-2）
+### 5.2 Instagram（Cookie 为主、免登录兜底，见 §15.2 / §15.11）
 
-免登录在这个站已经彻底没有路径，不要再尝试：
+~~免登录在这个站已经彻底没有路径~~ —— 这是 2026-10-28 的结论，**2026-11-04 复测已不成立**：
+`web_profile_info` 免登录能拿到最新 12 条（翻页仍然要求登录），详见 §15.11。
+下面是 10-28 当天各条路子的实测记录，留作对照：
 
 | 试过的路子 | 实测结果 |
 |---|---|
@@ -181,8 +183,9 @@ type Adapter interface {
 | `www.instagram.com/{user}/?__a=1&__d=dis` | `201`，空响应体 |
 | 主页 HTML（找首屏 JSON） | `302` 跳登录页，HTML 里 0 处 `cdninstagram` |
 
-所以 IG 适配器**只有一条路**：用户在设置里贴 `sessionid` + `csrftoken` + `ds_user_id`（加密落库），
-然后打 `web_profile_info`（或 `api/v1/feed/user/{user_id}/`）：
+所以可靠路径仍然只有一条：用户在设置里贴 `sessionid` + `csrftoken` + `ds_user_id`（加密落库），
+然后打 `web_profile_info`（或 `api/v1/feed/user/{user_id}/`）。免登录在 11-04 复测里能拿到第一页，
+但翻页就 401/403 且状态随 IP 灰度浮动，只能当兜底（§15.11）：
 
 - 取 `data.user.edge_owner_to_timeline_media.edges[]`：`shortcode`、`display_url`（1080 长边）、
   `thumbnail_src`、`dimensions{width,height}`、`taken_at_timestamp`、`edge_media_to_caption`。
@@ -190,7 +193,7 @@ type Adapter interface {
 - 分页：`page_info.end_cursor` → 下次带 `max_id`，能真翻到 100 帖。
 - 图片 CDN 是 `*.cdninstagram.com` / `*.fbcdn.net`，要补进 `platform.ImageHostPlatform` 与
   `imgcache.refererOverrides`（Referer 用 `https://www.instagram.com/`）。
-  **是否校验 Referer 未验证**（拿不到任何真实图片地址），风险低：反正走服务端代理，带上 Referer 即可。
+  11-04 复测：带 `Referer: https://www.instagram.com/` 直接 200（1080×1920 JPEG，113 KB，0.61 s）。
 - IG 对 IP 的评分比 X 严（本次已吃到 `429 spam`），间隔按 3s 起，Cookie 失效要给出明确提示而不是空列表。
 
 ### 5.3 凭证
@@ -594,3 +597,64 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
 - **Instagram 全链路没有在真实账号上跑过**：手上没有可用 Cookie，首屏 `web_profile_info`、翻页
   `feed/user`、carousel 拆图、401/429 映射都只有 fixture 单测覆盖；第一次配好 Cookie 后建议先用
   小号试一条，确认能出图再挂大号。
+
+### 15.11 Instagram 复测（2026-11-04）：免登录第一页又通了，但只能当机会主义路径
+
+§15.7「全线 401」的结论今天在本机复跑**不成立**：同一个 `web_profile_info` 返回了完整 JSON。
+出口 IP `35.74.232.211`（`curl https://api.ipify.org`），请求全部无 Cookie、无代理设置。
+
+| 请求 | §15.7（10-28） | 今天（11-04） |
+|---|---|---|
+| `i.instagram.com/api/v1/users/web_profile_info/?username=natgeo`（`x-ig-app-id` + 桌面 Chrome UA） | 401 `require_login` | **200，509 898 B，1.5–3.0 s，12 条 edges** |
+| 同上，换移动 Safari UA / IG 142 移动端 UA | — | 200，431 820 B / 417 946 B |
+| 同上，**不带** `x-ig-app-id` | — | 400 `{"message":"useragent mismatch"}` |
+| 同上，curl 默认 UA | — | 400 `useragent mismatch` |
+| `api/v1/feed/user/{id}/?count=12&max_id=…`（翻页） | — | **403 `{"status":"fail"}`**（`www` 主机同名路径是 404 + 登录页 HTML） |
+| `graphql/query/?query_id=17888483320059182&variables=…` | — | **401 `{"require_login":true,"igweb_rollout":true}`** |
+| `graphql/query/?query_hash=e769aa…&variables=…` | — | 401 同上 |
+| `api/v1/users/{user}/usernameinfo/` | 429 `spam` | 302，0 B |
+| `www.instagram.com/{user}/?__a=1&__d=dis` | 201 空 | 201 空 |
+| 主页 HTML `www.instagram.com/natgeo/` | 302 跳登录 | 200，503 KB，但 0 处 `display_url`、0 处首屏 JSON（`xdt_api__v1__feed__…` 不存在） |
+| 不存在的 handle | — | 404 + 一段 HTML（**不是** JSON，别按 JSON 里的 `user:null` 判） |
+| 图片 CDN `scontent-nrt1-1.cdninstagram.com/…`（带 `Referer: https://www.instagram.com/`） | 未验证 | **200，113 440 B，1080×1920 JPEG，0.61 s** |
+
+连打 6 次同一博主（不睡，共 11 s）：6/6 都是 200，单次 1.5–2.4 s，没吃 429。
+
+结论：**免登录只到「最新 12 条」**。翻页一步就死（`max_id` 403、GraphQL 两条老入口 401），
+主页 HTML 里也没有首屏 JSON 可扒（instago 当年就是靠扒这个 `query_hash` 活着，此路已断）。
+可用字段够用：`edge_owner_to_timeline_media.edges[].node` 里有 `shortcode` / `display_url`（1080 长边）/
+`dimensions` / `is_video` / `edge_media_to_caption` / `edge_sidecar_to_children`（carousel 每个 child 都带
+`display_url`），`page_info.end_cursor` 也照给——但那个 cursor 现在没人能兑现成第二页。
+
+10-28 全 401、11-04 全 200，同一台机器、三种 UA 都试过，所以不是 UA 问题，是 IG 自己的
+`igweb_rollout` 灰度 + 按 IP 评分的浮动。设计上只能把它当**机会主义**路径：
+有 Cookie 走 Cookie（能翻到 100 帖），没 Cookie 就抓最新 12 条，并在界面上写清
+「未配 Cookie：只抓最新 12 条」，不做静默降级。
+
+`display_url` 是签名地址，实测能直接下；但时效短，从没被访问过的老图签名过期后就取不到
+（§16.4 已记，建议同步时顺手把图落一份磁盘缓存，别等用户翻到再取）。
+
+复跑：
+
+```bash
+curl -s -H 'x-ig-app-id: 936619743392459' \
+     -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' \
+     'https://i.instagram.com/api/v1/users/web_profile_info/?username=natgeo' \
+| python3 -c "import sys,json;u=json.load(sys.stdin)['data']['user'];m=u['edge_owner_to_timeline_media'];print(u['username'],m['count'],len(m['edges']),m['page_info']['has_next_page'])"
+```
+
+### 15.12 两个候选参考项目能不能用（2026-11-04 评估）
+
+| 项目 | 它其实是什么 | 结论 |
+|---|---|---|
+| [samirakhmedov/tg-downloader](https://github.com/samirakhmedov/tg-downloader) | Telegram bot（Go，34 commits，最后一提交 2026-04-04）。IG「支持」= `config/Example.pkl` 里一条链接正则 + 把 URL 丢给 `go-ytdlp` 子进程，**仓库里没有一行 IG 抓取代码**；还绑着 Pkl 配置生成、ent ORM、Telegram Bot API、POToken 服务 | ❌ 不可借。本项目已经装了 yt-dlp，实测 `yt-dlp 2026.10.26` 对 carousel 照片帖（`/p/DfOauaPF4QO/`）逐个 child 报 `No video formats found`——它是**视频**取流器，图片这条路它不走 |
+| [siongui/instago](https://github.com/siongui/instago) | Go 库（410 commits，最后真代码 2022-03，2023-03 只合了 dependabot）。核心是 IG 老私有 API：`i.instagram.com/api/v1/feed/user/{id}/reel_media`、`/friendships/{id}/followers`、`graphql/query/?query_id=17888483320059182`、`{user}/?__a=1`，签名靠自己算的 `X-Instagram-GIS`（从主页 HTML 里扒 `rhx_gis`/`query_hash`） | ❌ 两条数据路径今天都是 401 `require_login`（见 §15.11 表），`query_id`/`query_hash` 2023 年就被 IG 换成 `doc_id`；`reel_media` 端点也早改名。只剩 `typeuser.go`/`typemedia.go` 那套结构体字段名可以参考 |
+
+两条都别引进来。真正要补的是本仓库里已有的 `internal/social/igram`（647 行，`ea02e6a` 落地）：
+它现在**代码齐、缺的是凭证**——`GET /api/moments/accounts` 里 `hasInstagramCookie: false`，
+`POST /api/moments/resolve {"url":"https://www.instagram.com/natgeo"}` 直接回
+`needs_auth`「Instagram 需要登录态：请在设置 → 动态里粘贴 sessionid」。按 §15.11，
+改动最小的可行做法是：把 Cookie 从「必需」降级成「可选」——没有 Cookie 时用
+`web_profile_info` 抓最新 12 条并把状态写进账号行（`lastError` 或新增一个「受限于 12 条」的标记），
+有 Cookie 时原样走 `feed/user/{id}/?max_id=` 翻页。顺手把 `igram.go` 顶部那段
+「免登录在这个站已经彻底没有路」的注释改掉——它是 10-28 的结论，已经不成立了。
