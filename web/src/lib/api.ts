@@ -499,6 +499,10 @@ export const api = {
       body: { photoIds, libraryId: libraryId ?? 0 },
     });
   },
+  /** 从照片墙上删掉一张（服务端软删，同一张图以后同步也不会再回来）。 */
+  deleteMomentPhoto(photoId: number): Promise<void> {
+    return request<void>(`/api/moments/photos/${id(photoId)}`, { method: 'DELETE' });
+  },
   manageMoments(): Promise<MomentsManageResponse> {
     return request<MomentsManageResponse>('/api/manage/moments');
   },

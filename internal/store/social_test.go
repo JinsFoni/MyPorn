@@ -99,6 +99,83 @@ func TestSocialPostsDedupe(t *testing.T) {
 	}
 }
 
+// TestHideSocialPhotoStaysHidden 守住「删掉的图不会被下一次同步塞回来」。
+//
+// 这是软删的全部意义：`social_photos` 上有 UNIQUE (platform, url)，写入是 INSERT OR IGNORE。
+// 如果实现改成真删行，第二轮同步会把这同一张图重新插进来，用户在墙上删掉的照片
+// 六小时后又出现了。这里直接把「删 → 再同步一遍」跑出来看。
+func TestHideSocialPhotoStaysHidden(t *testing.T) {
+	st := newTestStore(t)
+	acc, err := st.UpsertSocialAccount(&SocialAccount{Platform: "x", Handle: "mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted := time.Date(2026, 11, 3, 8, 41, 0, 0, time.UTC)
+	posts := []SocialPostInput{{
+		PostID: "333", URL: "https://x.com/mini/status/333", PostedAt: posted,
+		Photos: []SocialPhotoInput{
+			{URL: "https://pbs.twimg.com/media/C.jpg", Seq: 1},
+			{URL: "https://pbs.twimg.com/media/D.jpg", Seq: 2},
+		},
+	}}
+	if _, err := st.InsertSocialPosts(acc.ID, "x", posts); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := st.ListMoments(MomentsQuery{AccountID: acc.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("墙上应有 2 张，得到 %d", len(got))
+	}
+	target := got[0].ID
+
+	accountID, err := st.HideSocialPhoto(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accountID != acc.ID {
+		t.Errorf("返回的账号 id 不对：%d != %d", accountID, acc.ID)
+	}
+
+	// 再同步一遍（同样的 url）——不该把删掉的那张插回来。
+	if _, err := st.InsertSocialPosts(acc.ID, "x", posts); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RefreshSocialCounts(acc.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err = st.ListMoments(MomentsQuery{AccountID: acc.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("删掉的那张被同步塞回来了：墙上 %d 张", len(got))
+	}
+	if got[0].ID == target {
+		t.Error("被删的那张还在墙上")
+	}
+	fresh, err := st.GetSocialAccount(acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.PhotoCount != 1 {
+		t.Errorf("照片计数应降到 1，得到 %d", fresh.PhotoCount)
+	}
+	if fresh.PostCount != 1 {
+		t.Errorf("帖子计数不该受影响，得到 %d", fresh.PostCount)
+	}
+
+	// 不存在的 id：ErrNotFound，别悄悄成功。
+	if _, err := st.HideSocialPhoto(999999); err != ErrNotFound {
+		t.Errorf("不存在的 id 应回 ErrNotFound，得到 %v", err)
+	}
+	// 幂等：再删一次同一张仍然成功（前端连点两下不该报错）。
+	if _, err := st.HideSocialPhoto(target); err != nil {
+		t.Errorf("重复删除应成功，得到 %v", err)
+	}
+}
+
 func TestListMomentsOrderAndCursor(t *testing.T) {
 	st := newTestStore(t)
 	acc, err := st.UpsertSocialAccount(&SocialAccount{Platform: "x", Handle: "mini"})

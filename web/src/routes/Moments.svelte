@@ -44,6 +44,8 @@
 
   // ---- 墙上的照片（InfiniteList 报上来的，灯箱要在里面前后翻） ----
   let photos = $state<MomentPhoto[]>([]);
+  /** 刚被删掉的照片 id：交给 InfiniteList 立刻从版面上抹掉（换筛选时清空） */
+  let droppedPhotos = $state<Set<number>>(new Set());
 
   // ---- 选择与存档 ----
   let selection = $state<Set<number>>(new Set());
@@ -127,6 +129,7 @@
     filterAccount = accountId;
     filterPlatform = platform;
     selection = new Set();
+    droppedPhotos = new Set();
     wallKey += 1;
     patchQuery({ account: accountId === null ? null : String(accountId) });
   }
@@ -207,6 +210,36 @@
     } catch (err) {
       live.toast(messageFor(err), 'error');
     }
+  }
+
+  /**
+   * 删掉一张照片（格子右下角那个垃圾桶）。
+   *
+   * 服务端是软删：这张图留一行 `hidden = 1` 当墓碑，所以「以后同步也不会再抓回来」是真的
+   *（`social_photos` 上 `UNIQUE (platform, url)` 会挡住重插）。但已经存进本地库的文件不会删，
+   * 所以确认框里要写清楚「删的只是墙上这一张」，不然用户会以为硬盘上也清了。
+   */
+  async function removePhoto(photo: MomentPhoto): Promise<void> {
+    const ok = window.confirm(
+      '从照片墙删掉这张？\n以后同步也不会再抓回来。已经存进本地库的文件不会被删除。',
+    );
+    if (!ok) return;
+    try {
+      await api.deleteMomentPhoto(photo.id);
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+      return;
+    }
+    // 只把这张从版面上抹掉：不重拉整条墙，免得把人弹回第一屏
+    droppedPhotos = new Set(droppedPhotos).add(photo.id);
+    if (selection.has(photo.id)) {
+      const next = new Set(selection);
+      next.delete(photo.id);
+      selection = next;
+    }
+    live.toast('已从照片墙删除', 'success');
+    // 头像条上那位博主的「N 张」跟着变，重拉一次博主列表（三个账号，很便宜）
+    void loadAccounts();
   }
 
   // ---- 灯箱键盘 ----
@@ -430,6 +463,7 @@
       reloadKey={wallKey}
       maxLoadedPages={8}
       gridClass="grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
+      droppedKeys={droppedPhotos}
       onItems={(items: MomentPhoto[]) => {
         photos = items;
       }}
@@ -516,6 +550,25 @@
           >
             <span class="block truncate">@{photo.handle}</span>
           </div>
+
+          <!-- 删除：右下角。桌面端跟着悬停出现（不给版面添常驻控件），
+               触屏上（没有 hover）常显——不然手机上没有入口。放在最后画，
+               盖住底下那条 byline 渐变；byline 是 pointer-events-none，不会抢点击。 -->
+          <button
+            type="button"
+            onclick={() => void removePhoto(photo)}
+            aria-label="删除这张照片"
+            title="删除这张照片"
+            class="absolute bottom-1.5 right-1.5 z-10 grid h-6 w-6 place-items-center rounded-full bg-ink/55 text-white/90 opacity-100 transition-all hover:bg-brick hover:text-white focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" class="h-3.5 w-3.5">
+              <path
+                d="M4.5 7h15M9.5 7V5.2h5V7M6.6 7l.9 12.3h9l.9-12.3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
         </div>
       {/snippet}
     </InfiniteList>

@@ -48,6 +48,14 @@
      * 灯箱要在「整条流」里前后翻，而条目列表是本组件内部状态，父组件拿不到。
      */
     onItems?: (items: T[]) => void;
+    /**
+     * 立刻从版面上抹掉的条目 key（父组件删掉一条之后放进来）。
+     *
+     * 为什么不干脆 `reloadKey += 1` 重拉：那会把整条墙重置回顶部，用户在照片墙中部
+     * 删一张就被弹回第一屏。这里只过滤已加载的页；被淘汰的页滚回来是会**重新拉**的，
+     * 服务端那边已经查不到这张了（`hidden = 1`），所以它会自然消失，不用担心复活。
+     */
+    droppedKeys?: ReadonlySet<string | number>;
   }
 
   let {
@@ -62,6 +70,7 @@
     // 瞬间页是照片墙（间距更紧），自己传一个。
     gridClass = WALL_GRID,
     onItems,
+    droppedKeys = new Set<string | number>(),
   }: Props = $props();
 
   let pages = $state<Page<T>[]>([]);
@@ -236,9 +245,16 @@
     void loadFirst();
   });
 
+  /** 已加载的条目，去掉父组件点名要抹掉的那些（灯箱翻页也用这份）。 */
+  function visible(page: Page<T>): T[] {
+    if (droppedKeys.size === 0) return page.items;
+    return page.items.filter((item) => !droppedKeys.has(keyOf(item)));
+  }
+
   $effect(() => {
     if (!onItems) return;
-    onItems(pages.filter((p) => p.loaded).flatMap((p) => p.items));
+    void droppedKeys;
+    onItems(pages.filter((p) => p.loaded).flatMap((p) => visible(p)));
   });
 
   const isEmpty = $derived(!loading && errorMessage === '' && pages.length > 0 && pages.every((p) => p.count === 0));
@@ -266,7 +282,7 @@
 <div class={gridClass} aria-busy={loading}>
   {#each pages as page (page.id)}
     {#if page.loaded}
-      {#each page.items as item (keyOf(item))}
+      {#each visible(page) as item (keyOf(item))}
         {@render children(item)}
       {/each}
     {:else}

@@ -502,6 +502,30 @@ func NormalizeSocialURL(raw string) (platform, handle string, ok bool) {
 
 // ---- 照片落库（M5-c）----
 
+// HideSocialPhoto 把一张照片从照片墙上删掉（软删：行留着当墓碑）。
+//
+// 为什么不真删：`social_photos` 上有 `UNIQUE (platform, url)`，写入是 `INSERT OR IGNORE`——
+// 行真没了，下一轮同步（默认 6 小时一轮，也能手动点「同步」）会把这同一张图原样塞回来，
+// 用户看到的就是「删了又回来」。留一行 `hidden = 1` 撞唯一键，它就不会再回到墙上
+//（`ListMoments` 和账号的 photo_count 都只算 `hidden = 0`）。
+//
+// 已经存进本地库的文件不在这里动：那是媒体库里的资产，照片墙删图不该带走它。
+// 返回这张照片属于哪个账号，调用方好刷一下照片计数。
+func (s *Store) HideSocialPhoto(id int64) (int64, error) {
+	var accountID int64
+	err := s.db.QueryRow(`SELECT account_id FROM social_photos WHERE id = ?`, id).Scan(&accountID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.db.Exec(`UPDATE social_photos SET hidden = 1 WHERE id = ?`, id); err != nil {
+		return 0, err
+	}
+	return accountID, nil
+}
+
 // SavePhotoFile 记一条「这张照片已经存进某个库」的记录（已存在则更新体积）。
 func (s *Store) SavePhotoFile(photoID, libraryID int64, relPath string, size int64) error {
 	_, err := s.db.Exec(`INSERT INTO social_photo_files (photo_id, library_id, rel_path, size_bytes)

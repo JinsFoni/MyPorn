@@ -410,6 +410,31 @@ type momentSaveReq struct {
 	LibraryID int64   `json:"libraryId"`
 }
 
+// ---- 从照片墙删一张 ----
+
+// handleDeleteMomentPhoto 把一张照片从墙上删掉（软删，见 store.HideSocialPhoto）。
+func (s *Server) handleDeleteMomentPhoto(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "照片 id 非法")
+		return
+	}
+	accountID, err := s.st.HideSocialPhoto(id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "这张照片已经不在了")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "删除照片失败")
+		return
+	}
+	// 头像条那边的「N 张」来自账号计数，删完顺手对齐（失败也不影响这次删除）。
+	if err := s.st.RefreshSocialCounts(accountID); err != nil {
+		s.log.Warn("刷新博主照片计数失败", "account", accountID, "err", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleSaveMomentPhotos(w http.ResponseWriter, r *http.Request) {
 	var req momentSaveReq
 	if err := decodeJSON(r, &req); err != nil || len(req.PhotoIDs) == 0 {
