@@ -194,25 +194,26 @@ func (a *Adapter) ParsePerformerURL(raw string) (string, error) {
 	return "", errors.New("链接里没有艺人标识（应形如 /pornstars/<slug>）")
 }
 
-// performerPath 返回艺人影片列表的路径（第 1 页与第 N 页）。两个参数都是踩出来的：
+// performerPath 返回艺人影片列表的路径（第 1 页与第 N 页）。
 //
-// **1）必须带 `/full-length`**（站点的「完整影片」分类）。不带时 `/newest` 是「该艺人所有新片」，
-// 会连 60–180 秒的付费预告一起抓：2026-11-04 实测 `hot-pearl` 的 `/newest` 第 1 页 46 条里
-// 有 8 条 <180s（60 / 67 / 70 / 112s，标题带 `- Trailer`、`Private com -` 这类），
-// 而 `/full-length/newest` 5 页 214 条最短 361s、一条预告都没有；`mysaaat` 这种每部都 ≥9min 的
-// 艺人，两个地址给出**完全相同**的 42 条 id——所以这个过滤只削短片，不会漏长片，页数还从 12 降到 5。
-// 注意 `full-length` 是站点的内容分类，不是我们算的时长门槛（riley-reid 那边最短 1274s、
-// hot-pearl 最短 361s，门槛是上传时人工标的）。竖版短视频另有 `/shorts` 页（hot-pearl 上 234 条），不要。
-//
-// **2）必须带 `/newest`**：不带时站点给默认序（`sort: "rated"`），而增量同步是「遇到已入库影片即停」——
+// **必须带 `/newest`**：不带时站点给的是默认序（`sort: "rated"`），而增量同步是「遇到已入库影片即停」——
 // 第 1 页最上面躺着一堆几年前的老片，一撞上就停，新上传的永远发现不了。2026-10 实测（`mysaaat`）：
-// 默认页只有 38 条按评分排的，最新那 4 条单独挂在 `newestVideoSectionComponent` 里；
-// 换 `/newest` 后 42 条、`sort: "added"`、按 `created` 严格倒序，最新那条落在第一位。
+// 默认页只有 38 条按评分排的，最新那 4 条单独挂在 `newestVideoSectionComponent` 里；换 `/newest` 后
+// 42 条、`sort: "added"`、按 `created` 严格倒序，最新那条落在第一位。
+//
+// **不要改成 `/full-length/newest`**（2026-11-04 改过又撤了，证据留在这儿）。
+// 起因是 `hot-pearl` 的 `/newest` 第 1 页混着 8 条 60–163s 的片花，看着像「`full-length` 才是完整版」。
+// 把两边整份列表拉下来对照才发现它不是过滤器，而是个更小的子集：
+// 她 `/newest` 是 12 页 545 条、`/full-length/newest` 只有 5 页 214 条；拿最近 6 页（276 条）去比，
+// **188 条不在 full-length 里，其中 146 条 ≥360s**——包括 1126s 的「Hot Pearl & Lina Shisuta Share BBC」
+// 和 3708s 的「21 SEXTURY … 1 HOUR of DPs」。抽那条 1126s（xh2grDz）实测照样解出 2160p 直链，
+// 既没付费墙也没截断，就是普通正片。也就是说换成 `full-length` 会静默丢掉三分之一正片。
+// 片花改在入库时按 `minVideoDuration` 挡掉，见 ListPerformerVideos。
 func performerPath(slug string, page int) string {
 	if page <= 1 {
-		return "/pornstars/" + url.PathEscape(slug) + "/full-length/newest"
+		return "/pornstars/" + url.PathEscape(slug) + "/newest"
 	}
-	return fmt.Sprintf("/pornstars/%s/full-length/newest/%d", url.PathEscape(slug), page)
+	return fmt.Sprintf("/pornstars/%s/newest/%d", url.PathEscape(slug), page)
 }
 
 // performerURLPath 是给人看/存下来的艺人主页地址（不带排序）。
@@ -238,9 +239,18 @@ func (a *Adapter) GetPerformer(ctx context.Context, performerID string) (*model.
 	return p, nil
 }
 
-// ListPerformerVideos 取一页影片：`/pornstars/<slug>/full-length/newest`，第 2 页起是
-// `/full-length/newest/<n>`，每页 46 条（`perPage` 字段也是 46），按发布时间倒序。
-// 为什么必须是这个路径（完整影片 + 最新排序）见 performerPath。
+// minVideoDuration 是「值得入库的最短时长」：低于它的都是付费片花，不是完整片。
+//
+// 2026-11-04 实测：`hot-pearl` 的 `/newest` 里 <180s 的一共 25 条，一条不缺全是预告——
+// 75/96/103/148s 的标题直接写 `- Trailer`，两条 `Private com -` 是 70/72s，
+// 还有一条 26s 标题就是账号名（`rjrajukhan2`）；112–163s 那批是付费场景的片花（同名两三份重复）。
+// 而 180–360s 的 26 条留下：那是完整但短的场景（232s「Sensual Homemade Sex …」、
+// 312s「Horny Household (part 4)」），拿 `/full-length` 分类去挡会连 1126s 的正片一起挡掉（见 performerPath）。
+const minVideoDuration = 180
+
+// ListPerformerVideos 取一页影片：`/pornstars/<slug>/newest`，第 2 页起是 `/newest/<n>`，
+// 每页 46 条（`perPage` 字段也是 46），按发布时间倒序（为什么必须指定排序见 performerPath）。
+// 短于 minVideoDuration 的片花不入库，数量记在 Page.Skipped 里，由同步日志说出来。
 func (a *Adapter) ListPerformerVideos(ctx context.Context, performerID string, page int) (*platform.Page, error) {
 	if page < 1 {
 		page = 1
@@ -267,6 +277,10 @@ func (a *Adapter) ListPerformerVideos(ctx context.Context, performerID string, p
 	for _, t := range section.items() {
 		v := videoFromThumb(t, a.base)
 		if v.PlatformVideoID == "" {
+			continue
+		}
+		if v.DurationSec > 0 && v.DurationSec < minVideoDuration {
+			out.Skipped++
 			continue
 		}
 		v.Platform = a.Key()

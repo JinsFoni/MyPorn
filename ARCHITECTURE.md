@@ -662,15 +662,20 @@ X 的账号名猜不出来的（艺名拼起来超过 15 字符、账号名里�
 - **影片列表一律带 `/newest`**：`/pornstars/<slug>` 默认是评分序（`sort:"rated"`），第 1 页最上面
   是几年前的老片，最新的几部甚至不在我们用的那个分区里（`newestVideoSectionComponent` 只有 4 条）。
   而增量同步是「遇到已入库影片即停」——排序不对就等于老片一挡，**新片永远发现不了**。
-  所以列表固定请求 `/pornstars/<slug>/full-length/newest`（第 N 页 `/full-length/newest/<n>`，
-  `sort:"added"`、按 `created` 倒序、可翻页）；2026-10 实测把 `mysaaat` 从「38 条按评分排」纠正成「42 条按时间排」，
-  补回漏掉的 4 部新片。
-- **`/full-length` 是「完整片 vs 短片/预告」的分类，必须带上**（2026-11-04 翻案）：
-  裸 `/newest` 是「该艺人所有新片」，会把 Faphouse 付费预告一起抓进来——实测 `hot-pearl` 的 `/newest`
-  第 1 页 46 条里有 8 条 <180s（60/67/70/112s，标题带 `- Trailer`、`Private com -`），而
-  `/full-length/newest` 5 页 214 条最短 361s、一条预告都没有；`mysaaat` 每部都 ≥9min，
-  两个地址给出完全相同的 42 条 id，所以只削短片、不漏长片，页数还从 12 降到 5。
-  阈值是站点上传时标的分类而不是固定时长（riley-reid 那边最短 1274s、34 条、无分页组件）。
+  所以列表固定请求 `/pornstars/<slug>/newest`（第 N 页 `/newest/<n>`，`sort:"added"`、按 `created` 倒序、
+  可翻页）；2026-10 实测把 `mysaaat` 从「38 条按评分排」纠正成「42 条按时间排」，补回漏掉的 4 部新片。
+- **片花不入库，但别拿 `/full-length` 当「完整版」过滤器**（2026-11-04 实测，改过去又改回来）：
+  `hot-pearl` 的 `/newest` 第 1 页混着 8 条 60–163s 片花（`- Trailer`、`Private com -`），一度以为
+  站点的 `/full-length` 分类就是「完整版」。把整份列表拉下来逐条对照才看清它是**更小的子集而不是过滤器**：
+  `/newest` 12 页 545 条（= 页面自称 `videoCount`）vs `/full-length/newest` 5 页 200 条，
+  545 条里 **345 条不在 full-length**（360–600s 145、600–1200s 139、≥1200s 10、180–360s 26、<180s 25）。
+  抽被剔掉的 1126s 那条把 HLS 清单数了一遍：281 段 / 合计 1125.9 s / 带 `#EXT-X-ENDLIST`，
+  是完整的 18.8 分钟正片、没有付费墙。换成它等于静默丢掉三分之二正片，所以路径保持 `/newest`。
+  片花用两道闸门挡：`minVideoDuration = 180s`（实测 <180s 的 25 条全是预告 / 账号名垃圾），
+  以及「**同名片花**」——同一部片会以 372 / 492 / 582 / 612 秒这几档固定长度再发一遍、标题一字不差、
+  id 不同（实测 46 组同名、其中 30 组一长一短，最长那份 663–1849s 才是正片），入库前用
+  `store.HasLongerSameTitle` 挡掉。跳过数量进 `platform.Page.Skipped` 与同步日志
+  （「跳过短片（<180s 的片花/竖屏）」「跳过同名片花（库里已有更长的那份）」），不静默。
   竖版短视频另有 `/shorts` 页（hot-pearl 上 234 条），不抓。
 - **搜索退化**：`/api/front/search/suggest` 被 Cloudflare 挡住（带 csrf token、Referer、Cookie 也是 403），
   `/pornstars?search=` 会被忽略并返回完整 A–Z 列表。所以站内搜索只做「按 slug 精确探测」：

@@ -173,6 +173,23 @@ func (s *Store) VideoExists(platform, platformVideoID string) (bool, error) {
 	return n > 0, err
 }
 
+// HasLongerSameTitle 查同平台、同标题、时长更长的已入库影片。
+//
+// 为什么要它：xHamster 把同一部片发成一串固定档位的片花 + 完整片——2026-11-04 实测
+// `hot-pearl` 的列表里 372 / 492 / 582 / 612 秒这几档反复出现，标题一字不差，
+// 最长的那份（663–1849 秒）才是正片。这些片花的 `platform_video_id` 各不相同，
+// 靠 UNIQUE(platform, platform_video_id) 拦不住，同一部片会在墙上出现 2–3 次。
+func (s *Store) HasLongerSameTitle(platform, title string, durationSec int) (bool, error) {
+	if strings.TrimSpace(title) == "" || durationSec <= 0 {
+		return false, nil
+	}
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM videos
+		WHERE platform = ? AND duration_sec > ? AND lower(trim(title)) = lower(trim(?))`,
+		platform, durationSec, title).Scan(&n)
+	return n > 0, err
+}
+
 // LinkVideoPerformer 建立影片与艺人关联。
 func (s *Store) LinkVideoPerformer(videoID, performerID int64) error {
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO video_performers (video_id, performer_id) VALUES (?,?)`,

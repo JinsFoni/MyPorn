@@ -227,15 +227,14 @@ func TestParseInitialsToleratesListInfoValues(t *testing.T) {
 	}
 }
 
-// 列表路径钉死成 `/full-length/newest`：`/newest` 是「所有新片」，会混进 60–180s 的付费预告
-// （2026-11-04 实测 hot-pearl 第 1 页 46 条里 8 条 <180s，标题带 `- Trailer`）；
-// 而 `/full-length` 是站点的「完整影片」分类，5 页 214 条最短 361s、没有预告。
-// 同时必须带 `/newest`：默认序是 sort=rated，第 1 页最上面是老片，增量同步一撞上就停。
-func TestPerformerPathUsesFullLengthNewest(t *testing.T) {
+// 列表路径必须带 `/newest`（sort=added）：默认序是 sort=rated，第 1 页最上面是老片，
+// 增量同步一撞上就停，新片永远发现不了（2026-10 实测 mysaaat 漏了最新 4 部）。
+// 也钉住「不回到 `/full-length`」：2026-11-04 试过，它会把 1126s 的正片一起剔掉（见 performerPath 注释）。
+func TestPerformerPathUsesNewestSort(t *testing.T) {
 	cases := map[int]string{
-		1:  "/pornstars/riley-reid/full-length/newest",
-		2:  "/pornstars/riley-reid/full-length/newest/2",
-		34: "/pornstars/riley-reid/full-length/newest/34",
+		1:  "/pornstars/riley-reid/newest",
+		2:  "/pornstars/riley-reid/newest/2",
+		34: "/pornstars/riley-reid/newest/34",
 	}
 	for page, want := range cases {
 		if got := performerPath("riley-reid", page); got != want {

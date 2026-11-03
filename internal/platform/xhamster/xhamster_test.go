@@ -181,8 +181,8 @@ func TestResolvePlaybackPageSkipsRedirect(t *testing.T) {
 	}
 }
 
-// `/full-length` 的页数比 `/newest` 少得多，站点对没有分页组件的列表只给一页
-// （2026-11-04 实测 riley-reid：34 条、`paginationComponent: null`，`/full-length/newest/2` 直接 404）。
+// 没有分页组件就是只有一页（2026-11-04 实测 riley-reid 的 `/full-length/newest`：34 条、
+// `paginationComponent: null`、第 2 页 404；`/newest` 的最后一页同理不该再要下一页）。
 // 原来的 `HasMore = len(items) > 0` 会让同步接着要第 2 页、拿回 404、写一条「分页抓取中断」。
 func TestListPerformerVideosSinglePageWhenNoPagination(t *testing.T) {
 	// get() 把 <2048 字节的响应当成链路被掐（按限流处理），所以补点空白凑体积。
@@ -228,7 +228,7 @@ func TestListPerformerVideosNotFoundEndsPagination(t *testing.T) {
 		`]}}};</script>`
 	pad := strings.Repeat("<!-- "+strings.Repeat("y", 200)+" -->\n", 12)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/full-length/newest/2") {
+		if strings.HasSuffix(r.URL.Path, "/newest/2") {
 			http.NotFound(w, r)
 			return
 		}
@@ -247,5 +247,38 @@ func TestListPerformerVideosNotFoundEndsPagination(t *testing.T) {
 	}
 	if len(page.Items) != 0 || page.HasMore {
 		t.Fatalf("404 页应为空且没有下一页，得到 %d 条 HasMore=%v", len(page.Items), page.HasMore)
+	}
+}
+
+// 片花不入库：<180s 的是付费预告，180–360s 的留下（那是完整但短的场景）。
+// 2026-11-04 实测 hot-pearl 的 /newest 里 <180s 的 25 条全是 `- Trailer` / `Private com -` / 账号名当标题的垃圾。
+func TestListPerformerVideosSkipsTeasers(t *testing.T) {
+	const listing = `<script>window.initials={"sort":"added",` +
+		`"trendingVideoSectionComponent":{"videoListProps":{"videoThumbProps":[` +
+		`{"id":1,"duration":75,"title":"Threesome Birthday Party - Trailer","pageURL":"https://xhamster.com/videos/a-xhA"},` +
+		`{"id":2,"duration":26,"title":"rjrajukhan2","pageURL":"https://xhamster.com/videos/b-xhB"},` +
+		`{"id":3,"duration":232,"title":"Sensual Homemade Sex Between Two Young Lesbians","pageURL":"https://xhamster.com/videos/c-xhC"},` +
+		`{"id":4,"duration":1126,"title":"Hot Pearl & Lina Shisuta Share BBC","pageURL":"https://xhamster.com/videos/d-xhD"}` +
+		`]}}};</script>`
+	pad := strings.Repeat("<!-- "+strings.Repeat("z", 200)+" -->\n", 12)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, listing+pad)
+	}))
+	defer srv.Close()
+
+	a, err := New(srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.lim = rate.NewLimiter(rate.Inf, 1)
+	page, err := a.ListPerformerVideos(context.Background(), "hot-pearl", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 2 || page.Skipped != 2 {
+		t.Fatalf("应留下 2 条、跳过 2 条，实际留下 %d 条、跳过 %d 条", len(page.Items), page.Skipped)
+	}
+	if page.Items[0].DurationSec != 232 || page.Items[1].DurationSec != 1126 {
+		t.Fatalf("留下的时长不对：%d / %d", page.Items[0].DurationSec, page.Items[1].DurationSec)
 	}
 }

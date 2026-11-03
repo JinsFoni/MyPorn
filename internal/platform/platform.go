@@ -38,6 +38,9 @@ type Page struct {
 	Page       int
 	TotalPages int // 0 表示未知
 	HasMore    bool
+	// Skipped 是本页被主动扔掉、没入库的条目数（目前只有 xHamster 用它挡片花）。
+	// 单独记一份是为了让同步日志能说出「这页有 8 条被跳过」，而不是让人以为站上只有 38 条。
+	Skipped int
 }
 
 // Adapter 是各站点必须实现的最小接口集。

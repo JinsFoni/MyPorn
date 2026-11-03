@@ -157,12 +157,24 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 		}
 
 		hitKnown := false
+		skippedDup := 0
 		for _, item := range res.Items {
 			if err := c.Check(); err != nil {
 				return err
 			}
 			videosSeen++
 			item.Platform = perf.Platform
+			// xHamster 的「同名片花」：同一部片还会以 372 / 492 / 582 / 612 秒等固定档位再发一遍，
+			// 标题一字不差、id 各不相同。库里已经有更长的那份就跳过，否则清掉的片花下一轮回填又回来。
+			if item.Platform == "xhamster" {
+				longer, lerr := r.st.HasLongerSameTitle(item.Platform, item.Title, item.DurationSec)
+				if lerr != nil {
+					r.log.Warn("查同名影片失败", "video", item.PlatformVideoID, "err", lerr)
+				} else if longer {
+					skippedDup++
+					continue
+				}
+			}
 			exists, err := r.st.VideoExists(item.Platform, item.PlatformVideoID)
 			if err != nil {
 				return err
@@ -199,6 +211,15 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 				"platform":    item.Platform,
 				"title":       item.Title,
 			})
+		}
+
+		// 被主动扔掉的条目（目前只有 xHamster 的片花：<180s 的付费预告）要说出来，
+		// 否则「这页只入库了 38 条」看着像漏抓。
+		if res.Skipped > 0 {
+			r.log.Info("跳过短片（<180s 的片花/竖屏）", "performer", perf.PerformerID, "page", page, "count", res.Skipped)
+		}
+		if skippedDup > 0 {
+			r.log.Info("跳过同名片花（库里已有更长的那份）", "performer", perf.PerformerID, "page", page, "count", skippedDup)
 		}
 
 		// 增量同步只有一两页，不该显示成「回填」。
