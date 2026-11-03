@@ -517,29 +517,35 @@
             }}
             aria-label={`查看 ${photoName(photo)} 的照片`}
           >
-            <!-- 垫底：同一张图的糊版小图（后端缩到一百多像素再糊，6–12 KB）铺满格子， -->
-            <!-- 留白处不是一块死板的面板色，而是这张照片自己的虚影。 -->
-            <!-- 用 object-fill 而不是 object-cover：糊版已经看不出形变，cover 会把小图中间的 -->
-            <!-- 一小块放大四五倍（横图铺进 3:4 格子就是这样），糊到最后只剩一块纯色。 -->
-            {#if needsBackdrop(photo)}
+            <!-- 悬停放大 2%，和视频卡（VideoCard / YtCard / LibraryCard 的 `CoverArt`
+                 `group-hover:scale-[1.02]`）同一个手感：那三面墙的卡片都是
+                 `transition-transform duration-300` + 1.02，这里照抄，别自己发明一套曲线。
+                 兜底层、压暗层、主体三块一起缩放——只缩主体的话，糊影和照片之间会裂开一道缝。 -->
+            <span class="block absolute inset-0 transition-transform duration-300 group-hover:scale-[1.02]">
+              <!-- 垫底：同一张图的糊版小图（后端缩到一百多像素再糊，6–12 KB）铺满格子， -->
+              <!-- 留白处不是一块死板的面板色，而是这张照片自己的虚影。 -->
+              <!-- 用 object-fill 而不是 object-cover：糊版已经看不出形变，cover 会把小图中间的 -->
+              <!-- 一小块放大四五倍（横图铺进 3:4 格子就是这样），糊到最后只剩一块纯色。 -->
+              {#if needsBackdrop(photo)}
+                <img
+                  src={blurredImageUrl(photo.thumbUrl, 480) ?? ''}
+                  alt=""
+                  aria-hidden="true"
+                  class="absolute inset-0 h-full w-full object-fill"
+                  loading="lazy"
+                  decoding="async"
+                />
+              {/if}
+              <span class="pointer-events-none absolute inset-0 bg-ink/10"></span>
+              <!-- 主体：原比例居中，比例不合的留白正好落在上面那层糊影里 -->
               <img
-                src={blurredImageUrl(photo.thumbUrl, 480) ?? ''}
-                alt=""
-                aria-hidden="true"
-                class="absolute inset-0 h-full w-full object-fill"
+                src={imageUrl(photo.thumbUrl, 480) ?? ''}
+                alt={photo.caption ? photo.caption.slice(0, 80) : `${photoName(photo)} 的照片`}
+                class="relative h-full w-full object-contain"
                 loading="lazy"
                 decoding="async"
               />
-            {/if}
-            <span class="pointer-events-none absolute inset-0 bg-ink/10"></span>
-            <!-- 主体：原比例居中，比例不合的留白正好落在上面那层糊影里 -->
-            <img
-              src={imageUrl(photo.thumbUrl, 480) ?? ''}
-              alt={photo.caption ? photo.caption.slice(0, 80) : `${photoName(photo)} 的照片`}
-              class="relative h-full w-full object-contain transition-opacity duration-200 group-hover:opacity-90"
-              loading="lazy"
-              decoding="async"
-            />
+            </span>
           </button>
 
           <!-- 勾选：右上角，只在悬停/已选时出现，避免墙上到处是控件 -->
