@@ -16,7 +16,7 @@
   import InfiniteList from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import { ApiError, api, messageFor } from '../lib/api';
-  import { imageUrl } from '../lib/img';
+  import { blurredImageUrl, imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
   import { patchQuery, router } from '../lib/router.svelte';
   import { ui } from '../lib/ui.svelte';
@@ -316,14 +316,20 @@
     return platforms.find((p) => p.key === key)?.name ?? key;
   }
 
+  // 格子比例固定成 3:4（2026-11-03 按用户要求改）：以前每格跟着照片自己的比例走，
+  // 同一行里矮的那几张底下会露出一块深色空档（行高按最高的那张算）。现在格子统一，
+  // 照片按原比例 object-contain 居中，比例对不上的地方用同一张图的糊版垫满，
+  // 见格子里那层 blurredImageUrl。
+  const TILE_RATIO = 3 / 4;
+
   /**
-   * 墙上的显示比例。极端长图/超宽图会把整行撑变形（一张 3:1 的全景能让同排其他格子空出一大截），
-   * 所以把比例夹在 3:4 – 16:9 之间：超出的部分裁掉，点开大图仍然看得到完整画面。
+   * 只有比例和格子对不上的照片才铺糊影垫底：比例正好是 3:4 的那张本来就填满整格，
+   * 垫了也看不见，白白多请求一张小图（实测每张 6–12 KB，一页 24 格）。
+   * 拿不到宽高时按「需要」处理——宁可多一层糊影，也别露出一条死板的面板色。
    */
-  function ratio(photo: MomentPhoto): string {
-    if (!(photo.width > 0 && photo.height > 0)) return '1 / 1';
-    const r = Math.min(16 / 9, Math.max(3 / 4, photo.width / photo.height));
-    return `${String(r)}`;
+  function needsBackdrop(photo: MomentPhoto): boolean {
+    if (!(photo.width > 0 && photo.height > 0)) return true;
+    return Math.abs(photo.width / photo.height - TILE_RATIO) > 0.02;
   }
 </script>
 
@@ -438,20 +444,35 @@
       {/snippet}
 
       {#snippet children(photo: MomentPhoto)}
-        <div class="group relative overflow-hidden rounded-lg bg-panel">
+        <div class="group relative aspect-3/4 overflow-hidden rounded-lg bg-panel">
           <button
             type="button"
-            class="block w-full cursor-zoom-in"
+            class="absolute inset-0 block cursor-zoom-in"
             onclick={() => {
               lightboxAt = photos.findIndex((p) => p.id === photo.id);
             }}
             aria-label={`查看 @${photo.handle} 的照片`}
           >
+            <!-- 垫底：同一张图的糊版小图（后端缩到一百多像素再糊，6–12 KB）铺满格子， -->
+            <!-- 留白处不是一块死板的面板色，而是这张照片自己的虚影。 -->
+            <!-- 用 object-fill 而不是 object-cover：糊版已经看不出形变，cover 会把小图中间的 -->
+            <!-- 一小块放大四五倍（横图铺进 3:4 格子就是这样），糊到最后只剩一块纯色。 -->
+            {#if needsBackdrop(photo)}
+              <img
+                src={blurredImageUrl(photo.thumbUrl, 480) ?? ''}
+                alt=""
+                aria-hidden="true"
+                class="absolute inset-0 h-full w-full object-fill"
+                loading="lazy"
+                decoding="async"
+              />
+            {/if}
+            <span class="pointer-events-none absolute inset-0 bg-ink/10"></span>
+            <!-- 主体：原比例居中，比例不合的留白正好落在上面那层糊影里 -->
             <img
               src={imageUrl(photo.thumbUrl, 480) ?? ''}
               alt={photo.caption ? photo.caption.slice(0, 80) : `@${photo.handle} 的照片`}
-              style:aspect-ratio={ratio(photo)}
-              class="w-full bg-panel object-cover transition-opacity duration-200 group-hover:opacity-90"
+              class="relative h-full w-full object-contain transition-opacity duration-200 group-hover:opacity-90"
               loading="lazy"
               decoding="async"
             />

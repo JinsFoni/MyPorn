@@ -64,6 +64,41 @@ export function imageUrl(raw: string | null | undefined, width?: number): string
   return width ? `${proxied}&w=${String(width)}` : proxied;
 }
 
+/**
+ * 同一张图的「糊版」小图 URL：照片墙上给留白垫底用（2026-11-03）。
+ *
+ * 为什么不用 CSS `filter: blur()` 做垫底：和隐私模式同一个理由（见文件头）——每张图各开一个
+ * 合成层再模糊，滚动时新进视口的格子要重新 raster。这里直接问后端要 `s=`：它把原图缩到几十像素、
+ * 盒式模糊三遍、编成 PNG（一两 KB），浏览器把它拉伸铺满格子，糊得均匀又不吃 CPU。
+ *
+ * `s` 取显示宽度的 1/4（夹在 32–160，和隐私模式同一个比例）：一开始试的 1/8（480→60px）
+ * 糊到只剩一块死板的纯色，看着像「格子里垫了块色块」而不是「照片自己的虚影」——放大到 120px
+ * 才留得住构图（实测 60px 时那张草地横图整块墨绿，120px 能看出人和草）。
+ */
+export function blurredImageUrl(raw: string | null | undefined, width?: number): string | null {
+  if (!raw) return null;
+  const s = String(backdropWidth(width));
+
+  if (raw.startsWith(`${PROXY_PATH}?`)) {
+    const params = new URLSearchParams(raw.slice(PROXY_PATH.length + 1));
+    params.set('s', s);
+    params.set('sv', SMALL_PIPELINE);
+    params.delete('w');
+    return `${PROXY_PATH}?${params.toString()}`;
+  }
+
+  // 站内相对路径（已落盘的小图）没有 `s=` 那条流水线，直接拿原图凑合，别拼坏地址。
+  if (raw.startsWith('/') && !raw.startsWith('//')) return raw;
+
+  return `${PROXY_PATH}?u=${encodeURIComponent(raw)}&s=${s}&sv=${SMALL_PIPELINE}`;
+}
+
+/** 垫底小图的宽度：显示宽度的四分之一，夹在 32–160（太小糊成色块，太大就没虚化感）。 */
+function backdropWidth(width?: number): number {
+  const w = width && width > 0 ? Math.round(width / 4) : 96;
+  return Math.min(160, Math.max(32, w));
+}
+
 /** 响应式候选宽度，给缩略图用（移动 2 列 ~200px，桌面 5 列 ~320px） */
 export function thumbWidthForColumns(columns: number): number {
   if (columns <= 2) return 360;
