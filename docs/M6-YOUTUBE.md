@@ -226,7 +226,7 @@ and other exclusive perks.
 
 ```
 yt-dlp --no-playlist --newline --socket-timeout 20 --retries 3 --concurrent-fragments 4 \
-       --proxy <若配置> --cookies <若配置，临时 0600 文件> \
+       --proxy <若配置> --cookies <若配置，该轮的私有副本，0600，跑完回收> \
        -f <格式串，默认 "bv*[vcodec^=av01]+ba/bv*+ba/b"> \
        --merge-output-format mp4 \
        -P "<dataDir>/tmp/yt-<videoID>-<libID>" -o "%(id)s.%(ext)s" \
@@ -1180,6 +1180,7 @@ metadata 还没到的那几十毫秒按「铺满盒子」退化，`loadedmetadat
 
 - `YtDlp.addCookies`：三条解析路径（`ResolveStream` / `ListChannel` / `VideoInfo`）统一把库里的 cookies
   写进 0600 临时文件并追加 `--cookies`，用完即删；写不出来就照旧不带 cookie 跑（失败原因落在 yt-dlp 的报错上）。
+  **「用完即删」这一半是错的**，2026-11-04 才量明白，见 §14.23。
 - 解析不再加 `--no-warnings`；`mapError` 拆成两个视图——`ERROR:` 行判「这条片子怎么了」，整个 stderr 只用来认
   `no longer valid` / `rotated in the browser`（这条 WARNING 优先于「人机验证」，文案改成
   「这份 cookies.txt 已经失效（YouTube 说它在浏览器里被轮换了）：用无痕窗口登录 → 导出 → 立刻关掉那个窗口」）。
@@ -1371,3 +1372,108 @@ MacBook 上「移动鼠标」很容易就做成两指滚动（指针没挪），
 1. 重导 cookies：无痕窗口 → 登录 → F12 → 任意 `youtube.com` 请求的 `cookie:` 那一整行 → 粘进设置
    （姿势见 §14.19，`document.cookie` 拿不到，`SID`/`LOGIN_INFO` 是 HttpOnly）→ **立刻关掉那个窗口**。
 2. 给 YouTube 配一条真能换出口的代理（设置里已有 `proxy_youtube`；本机现在是空的，Clash 出口和直连同一个 IP）。
+
+### 14.23 「cookie 总是失效」：我们把 yt-dlp 轮换后的那份扔了（2026-11-04）
+
+**起因**：用户的原话是「YouTube cookie 总是失效」，并让先去看两个成熟项目怎么做的
+（[franklioxygen/MyTube](https://github.com/franklioxygen/MyTube)、[arabcoders/ytptube](https://github.com/arabcoders/ytptube)）。
+
+**两个参考项目各自的答案**（`git clone --depth 1` 后逐个文件读的）
+
+| | MyTube（TS） | ytptube（Python） | 我们（改之前） |
+|---|---|---|---|
+| cookie 存在哪 | `DATA_DIR/cookies.txt` **一个固定文件** | 库里存字符串，用时写 `cookie_{item}.txt` | 库里存密文，用时写临时文件 |
+| 每次调用 | `--cookies <同一个路径>`（`ytdlp/cookies.ts` → `execute.ts` 四处都加） | `--cookies <每轮重写的文件>`（`ytdlp_opts.py`） | `--cookies <临时文件>`，跑完删 |
+| yt-dlp 写回的轮换结果 | **留在那个固定文件里**，下一轮继续用 | 下一轮被库里的旧字符串覆盖 → 丢掉 | 被删掉 → 丢掉 |
+| PO token | 自带 `bgutil-ytdlp-pot-provider`（`PYTHONPATH` + `youtubepot-bgutilscript:script_path=…`） | 同样自带（`diagnostics._check_pot_provider_package`） | 没有 |
+| 客户端 | 默认 `youtube:player_client=default,mweb` | 用户可配 `extractor_args` | `tv_samsung,web_safari` 快车道 |
+| cookie 失效怎么表现 | 403 时把报错换成「cookies 可能过期，请重新上传」 | 各自报 yt-dlp 原文 | `mapError` 翻成「已被轮换，重导一份」（§14.18 加的） |
+
+一句话：**MyTube 是唯一把「轮换结果留在原地」的那个**，而这一条就是「总是失效」的真因。
+
+**真因（可复现的量法）**
+
+`--cookies` 在 yt-dlp 里不是「只读」：`options.py` 的原文是
+`Netscape formatted file to read cookies from and dump cookie jar in`，
+`YoutubeDL.close()` 里 `if self.params.get('cookiefile') is not None: self.cookiejar.save()`。
+也就是说 YouTube 每轮轮换 `__Secure-1PSIDTS` / `__Secure-3PSIDTS`，yt-dlp 把轮换后的 jar
+**写回你给它的那个文件**——而我们每轮跑完 `os.RemoveAll` 掉它，下一轮再把库里那份旧快照写出去。
+于是每一轮都在拿已经作废的 1PSIDTS 敲门，YouTube 判定「这份 cookie 在浏览器里被轮换过」，
+几次之后把整个登录态清空。
+
+2026-11-04 上午拿库里那份（`updated_at` = `2026-11-03T12:24Z`，26 条 youtube 行 / 4238 字节）实测：
+
+```
+cp 库里的 jar → control.txt（不动）；另存一份 persist.txt（交给 yt-dlp）
+.tmp/ytvenv/bin/yt-dlp --cookies persist.txt -j --no-warnings https://www.youtube.com/watch?v=H__uebwbFq0
+→ ERROR: Sign in to confirm you're not a bot.
+→ persist.txt 从 4238 字节缩到 2894 字节，26 行掉到 16 行
+```
+
+掉的是这些（`diff <(awk -F'\t' 'NF==7{print $6}' control.txt) <(… persist.txt)`）：
+
+```
+SID, HSID, SSID, APISID, SAPISID, LOGIN_INFO, SIDCC, YSC,
+__Secure-1PAPISID, __Secure-1PSID, __Secure-1PSIDCC        ← 只剩 __Secure-3PSID 一个空壳
+```
+
+**这就是「粘了也撑不过一天」**：11-03 12:24 存进去，到 11-04 01:00 已经是这个状态。
+同期还量了「是不是出口 IP 的问题」——不是全部原因，但也确实有份：
+
+| 检查 | 结果 |
+|---|---|
+| 出口 IP | `13.158.71.17`（AWS 东京，`ip-api` 报 `hosting: true`） |
+| 9 个 `player_client`（default / tv_samsung / mweb / web_safari / tv / android_vr / ios / web_embedded） | 全是 `Sign in to confirm you're not a bot` |
+| `--impersonate chrome-136`（venv 里 `curl_cffi 0.17.0`） | 一样 |
+| 装好 `bgutil-ytdlp-pot-provider 2.0.2` + 编好 `server/build/generate_once.js`，带 `youtubepot-bgutilscript:script_path=…` | provider 被加载（`PO Token Providers: bgutil:http-2.0.2 …`）但**一次都没被问到**——`-v` 里三个 player response 都是 `playability status: LOGIN_REQUIRED`，PO token 撑的是 `gvs` 拿格式那一步，走的不是这里 |
+| 同一个 IP 换片子 | `dQw4w9WgXcQ` 正常，`jNQXAC9IVRw` / `7rUSky9M0A` 撞墙 → 墙是按请求抽的，不是全封 |
+
+所以 PO token 这一条**没有上**：在这台机器上量到的失败点在 playability，不是 POT 能救的那一段。
+真要上就三步（本机都试过、跑通了、然后**又卸掉了**，避免 venv 里多一个我们不配置的插件）：
+`pip install bgutil-ytdlp-pot-provider`、编一份服务端脚本（clone `Brainicism/bgutil-ytdlp-pot-provider` 到
+`.tmp/bgutil` 后 `npm ci && npx tsc`，产物 `server/build/generate_once.js`）、
+命令里加 `--extractor-args "youtubepot-bgutilscript:script_path=<那个 js>"`。
+
+**改了什么**
+
+- 新 `internal/ytsub/cookiejar.go`：
+  - `CookieJar.Checkout(content)` 给每轮发一份**私有副本**（`{DataDir}/ytcookies/cookies-*.txt`，0600）
+    并返回收尾函数。私有副本是为了并发安全：两个同时跑的 yt-dlp 各写各的，不会把同一个文件写花。
+  - 收尾 `collect()` 把副本读回来：内容与发出去的不同、且是完整 Netscape jar（每行 7 列 + 以换行结尾，
+    防「写断的半截文件」）→ `st.SetSecret(box, "yt_cookies", …)` 存回设置。
+    **失败的那一轮也收**：实测报 bot check 的那一轮正是把登录态写成过期的那一轮。
+  - `LoginCookieCount(text)` 数还剩几条登录态（8 个名字，只数 `youtube.com` 域、未过期的）；
+    `LoginAlive(text)` 才是结论——`SID` 与 `LOGIN_INFO` 都还在才算活着（实测那轮只剩 `__Secure-3PSID`
+    空壳，「还剩 1 条」看着还行其实已登录不上）。
+- `YtDlp.addCookies` 四条路径（播放清单 / 频道列表 / 单条信息 / 下载）都走 jar；没配 jar（单测）才退回临时文件。
+- `cmd/myporn/main.go`：`ytsub.NewCookieJar({DataDir}/ytcookies, save → SetSecret("yt_cookies"), logger)`。
+- 设置 DTO 加两个字段 `cookieLogins` / `cookieAlive`，设置 → YouTube 的 Cookie 徽标变成
+  「已配置 · 登录态在（8 条）」/「已配置 · 登录态已被清掉」（`text-brick`），并在后者下面直接说清原因与做法。
+- 日志：`WARN YouTube 轮换了 Cookie 并清掉了登录态 … before=8 after=1`。
+
+**实测（本机 `:18081`，改完重启后）**
+
+| 步骤 | 结果 |
+|---|---|
+| `GET /api/settings`（还没跑过 yt-dlp） | `cookieLogins: 8, cookieAlive: true` |
+| `GET /api/yt/videos/6614/stream`（触发一次真解析） | `blocked`：这份 cookies.txt 已经失效…（文案不变，该报的还是报） |
+| 日志 | `WARN msg="YouTube 轮换了 Cookie 并清掉了登录态：这份很快就不管用了，去设置里重导" before=8 after=1` |
+| `.tmp/run/data/ytcookies/` | `total 0`（副本自己收干净了，没在盘上摊登录态） |
+| 库里那份 | 26 行 → 17 行；`settings.yt_cookies` 密文 5688 → 3952 字节，`updated_at` → `2026-11-04T02:05:44Z` |
+| `GET /api/settings`（跑完） | `cookieLogins: 1, cookieAlive: false` |
+| 设置 → YouTube（真浏览器，先 unregister SW + 清 caches） | 徽标「已配置 · 登录态已被清掉」，颜色 `rgb(226,104,95)`；下面一段红字说明 |
+| 紧接着再解析一次 | 没有新的 WARN、库里仍是 17 行 → 第二轮**就是拿上一轮存回的那份**在跑，不再重复「清空」 |
+
+**给用户的结论**：这次之后，一份**导出的那一刻还活着**的 cookie 就能一直活下去；
+之前无论导得多正确，都被「每轮删掉轮换结果」这个动作一天内玩死。
+真要恢复，还是 §14.19 那条路：无痕窗口 → 登录 → F12 → `cookie:` 整行 → 粘进设置 → 关窗。
+
+**测试**
+
+| 测试 | 钉住什么 |
+|---|---|
+| `TestCookieJarCheckoutIsPrivate` | 两轮拿到两个不同文件（并发不写花）、0600、内容就是库里那份、收尾删掉 |
+| `TestCookieJarCollectSavesRotation` | 没变不存；变了必须存回 |
+| `TestCookieJarRejectsTornWrite` | 写断的 jar（无结尾换行）不能被采用，否则一次并发写坏就把好 cookie 覆盖成半截 |
+| `TestLoginCookieCount` / `TestLoginAlive` | 8 条 / 0 条 / 只剩空壳 / SID 过期 —— 数和结论都得对 |
+| `TestResolveStreamPersistsRotatedCookies` | 端到端：假 yt-dlp 跑的时候往 `--cookies` 那个文件里追加一行，跑完必须存回设置，第二轮发的就是存回去的那份 |

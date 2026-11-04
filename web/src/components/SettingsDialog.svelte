@@ -35,6 +35,8 @@
       ytdlpPath: '',
       hasCookies: false,
       cookiesBroken: false,
+      cookieLogins: 0,
+      cookieAlive: false,
     },
     bilibili: { hasCookie: false, cookieBroken: false },
   };
@@ -782,7 +784,8 @@
                       <div class="flex items-center justify-between">
                         <label for="yt-cookie" class="label-meta">Cookie（可选）</label>
                         <span
-                          class="text-meta {settings.youtube.cookiesBroken
+                          class="text-meta {settings.youtube.cookiesBroken ||
+                          (settings.youtube.hasCookies && !settings.youtube.cookieAlive)
                             ? 'text-brick'
                             : settings.youtube.hasCookies
                               ? 'text-sage'
@@ -791,10 +794,22 @@
                           {settings.youtube.cookiesBroken
                             ? '存了但解不开'
                             : settings.youtube.hasCookies
-                              ? '已配置'
+                              ? settings.youtube.cookieAlive
+                                ? `已配置 · 登录态在（${settings.youtube.cookieLogins} 条）`
+                                : '已配置 · 登录态已被清掉'
                               : '未配置'}
                         </span>
                       </div>
+                      {#if settings.youtube.hasCookies &&
+                        !settings.youtube.cookiesBroken &&
+                        !settings.youtube.cookieAlive}
+                        <p class="mt-1 text-meta text-brick">
+                          这份 cookie 的登录态已经没了（<span class="text-muted">SID</span> /
+                          <span class="text-muted">LOGIN_INFO</span> 这类字段被 YouTube 置成了过期），
+                          现在用它请求只会报「请确认你不是机器人」。重导一份就好——服务端现在会保管
+                          yt-dlp 轮换后的那份，不会再一轮就死。
+                        </p>
+                      {/if}
                       <p class="mt-1 text-meta text-dim">
                         只有「需要登录才能看」的内容才用得上（会员、年龄限制、要人机验证的片子）。贴
                         <span class="text-muted">cookies.txt</span>（Netscape 格式，整份粘进来即可）或请求头里那整段 Cookie。
@@ -803,7 +818,12 @@
                       <p class="mt-1 text-meta text-dim">
                         <span class="text-muted">导出姿势很要紧</span>：开一个<strong>无痕窗口</strong>登录 YouTube → 在那里导出
                         cookies → <strong>立刻关掉那个窗口</strong>。正常窗口挂着登录态时 YouTube 会一直轮换
-                        <span class="text-muted">__Secure-3PSIDTS</span>，导出的副本用一次就被判「已失效」。
+                        <span class="text-muted">__Secure-3PSIDTS</span>，同时存在的两份副本会互相把对方轮换掉。
+                      </p>
+                      <p class="mt-1 text-meta text-dim">
+                        导出来之后不用再管：服务端把这份 cookie 放在一个固定文件里，yt-dlp 每轮把
+                        <strong>轮换后</strong>的 cookie 写回同一个文件，服务端再存回库里——所以只要导出的那一刻是活的，
+                        它就能一直活下去（以前每轮写完就删，等于每轮都拿作废的那份去敲门）。
                       </p>
                       <p class="mt-1 text-meta text-dim">
                         无痕窗口里装不了扩展时走 F12：<strong>Network</strong> → 刷新 youtube.com → 点任意一条请求 →

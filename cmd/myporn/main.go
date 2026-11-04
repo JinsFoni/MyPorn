@@ -167,6 +167,13 @@ func main() {
 
 	// YouTube 订阅（M6）：yt-dlp 调用器 + 按 IP 计的限速器。
 	// 代理 / Cookie / 格式串都是每次调用现取的，所以设置里改完立刻生效。
+	//
+	// Cookie 由 CookieJar 收发：每轮发一份私有副本（该目录下 0600 的 cookies-*.txt），
+	// 跑完把 yt-dlp 写回来的**轮换后** jar 存回设置。过去的临时文件方案每轮把它删掉，
+	// 等于每轮都拿作废快照去敲门（2026-11-04 实测：一轮就从 26 条掉到 16 条，
+	// SID / LOGIN_INFO 全被清），见 cookiejar.go。
+	ytJar := ytsub.NewCookieJar(filepath.Join(cfg.DataDir, "ytcookies"),
+		func(text string) error { return st.SetSecret(box, "yt_cookies", text) }, logger)
 	ytDlp := ytsub.NewYtDlp(
 		func() string {
 			if v, err := st.GetSetting("ytdlp_path"); err == nil && strings.TrimSpace(v) != "" {
@@ -187,6 +194,7 @@ func main() {
 			return v
 		},
 		logger)
+	ytDlp.SetCookieJar(ytJar)
 	ytThrottle := social.NewThrottle(1200 * time.Millisecond)
 
 	hub := events.NewHub()

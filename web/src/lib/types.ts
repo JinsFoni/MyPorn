@@ -412,6 +412,20 @@ export interface YouTubeSettings {
   hasCookies: boolean;
   /** 同 BilibiliSettings.cookieBroken：存着但解不开 */
   cookiesBroken: boolean;
+  /**
+   * 这份 cookies.txt 里还剩几条未过期的 YouTube 登录态（SID / LOGIN_INFO / __Secure-*PSID …）。
+   *
+   * 0 = YouTube 已经把登录态清掉了，配着也只会报「请确认你不是机器人」。
+   * 服务端每轮都会把 yt-dlp 轮换后的 jar 存回去，所以这个数会自己变——它是体温计。
+   */
+  cookieLogins: number;
+  /**
+   * 结论：SID 与 LOGIN_INFO 还在不在。
+   *
+   * 只要少一根，YouTube 就当未登录——这时 cookieLogins 可能还剩 1 条空壳，
+   * 看着「已配置」其实已经废了（2026-11-04 实测就是这么废的）。
+   */
+  cookieAlive: boolean;
 }
 
 /** PUT /api/settings：字段均可选；token 单独写，响应不回显 */

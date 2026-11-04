@@ -856,7 +856,8 @@ POST /api/moments/cooldown
 
 ```json
 {
-  "youtube": { "syncHours": 6, "backfillLimit": 200, "format": "", "ytdlpPath": "", "hasCookies": false },
+  "youtube": { "syncHours": 6, "backfillLimit": 200, "format": "", "ytdlpPath": "", "hasCookies": false,
+               "cookiesBroken": false, "cookieLogins": 0, "cookieAlive": false },
   "platformProxy": { "…": "", "youtube": "" }
 }
 ```
@@ -867,6 +868,10 @@ POST /api/moments/cooldown
   （**AV1 最高画质 + 最高音质**，再用 ffmpeg `-c copy` 合成 mp4，不转码）。
 - `ytdlpPath` 留空 = 从 `PATH` 找；填绝对路径可以固定用一个独立安装的版本。
 - `cookies` 只写：不传 = 不动，传空串 = 清除；`hasCookies` 只读。
+- `cookieLogins` / `cookieAlive` 只读：库里那份 cookies.txt 还剩几条 YouTube 登录态 cookie
+  （`SID` / `LOGIN_INFO` / `__Secure-*PSID` 等 8 个名字、未过期的），以及 `SID` + `LOGIN_INFO`
+  是否都还在。`cookieAlive: false` = 这份 cookie 已经登录不上了，界面据此提示重导。
+  这两个数会随 yt-dlp 每轮的回写而变（见 docs/M6-YOUTUBE.md §14.23）。
 - `platformProxy.youtube`：抓 RSS 和 yt-dlp 下载都走这个出口，保存即生效（不用重启）。
 
 ### C16. SSE 新增事件

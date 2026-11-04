@@ -155,7 +155,7 @@ func (y *YtDlp) resolveStreamWith(ctx context.Context, bin, videoID, client stri
 	args, dropCookies, cerr := y.addCookies(args)
 	defer dropCookies()
 	if cerr != nil {
-		y.log.Debug("写临时 Cookie 失败，这条照旧不带 cookie 跑", "err", cerr)
+		y.log.Debug("Cookie 写不出来，这条照旧不带 cookie 跑", "err", cerr)
 	}
 	if client != "" {
 		args = append(args, "--extractor-args", "youtube:player_client="+client)

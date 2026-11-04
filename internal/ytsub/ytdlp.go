@@ -56,7 +56,15 @@ type YtDlp struct {
 	// rcBad 记住「这个版本的 yt-dlp 不认 --remote-components」（老版本带上就整个跑不动）。
 	// 第一次撞上 unrecognized arguments 就地置位，然后自动重跑一遍不带它的命令。
 	rcBad atomic.Bool
+
+	// jar 管 cookies.txt 的发/收：每轮发一份私有副本给 yt-dlp，跑完把它写回来的
+	// 轮换结果存回设置（见 cookiejar.go）。nil = 没有落点（单测里常见），
+	// 退回「每次一份临时文件、用完即删」的老做法。
+	jar *CookieJar
 }
+
+// SetCookieJar 让 yt-dlp 用同一个稳定文件读写 cookies.txt。
+func (y *YtDlp) SetCookieJar(j *CookieJar) { y.jar = j }
 
 // NewYtDlp 构造调用器。pathFor 每次现取（设置页可改），返回空串时从 PATH 里找 yt-dlp。
 func NewYtDlp(pathFor func() string, proxyFor func() string, cookies func() string, format func() string, log *slog.Logger) *YtDlp {
@@ -231,7 +239,7 @@ func (y *YtDlp) ListChannel(ctx context.Context, channelID string, limit int) ([
 	args, dropCookies, err := y.addCookies(args)
 	defer dropCookies()
 	if err != nil {
-		y.log.Debug("写临时 Cookie 失败，这条照旧不带 cookie 跑", "err", err)
+		y.log.Debug("Cookie 写不出来，这条照旧不带 cookie 跑", "err", err)
 	}
 	args = append(args, url)
 
@@ -304,7 +312,7 @@ func (y *YtDlp) VideoInfo(ctx context.Context, videoID string) (Video, error) {
 	args, dropCookies, err := y.addCookies(args)
 	defer dropCookies()
 	if err != nil {
-		y.log.Debug("写临时 Cookie 失败，这条照旧不带 cookie 跑", "err", err)
+		y.log.Debug("Cookie 写不出来，这条照旧不带 cookie 跑", "err", err)
 	}
 	args = append(args, BaseURL+"/watch?v="+videoID)
 
@@ -379,13 +387,10 @@ func (y *YtDlp) Download(ctx context.Context, req DownloadRequest) (string, erro
 			"%(progress.total_bytes_estimate)s %(progress.speed)s %(progress.eta)s",
 	}
 	args = append(args, y.commonArgs()...)
-	cookiePath, cleanup, err := writeCookies(req.WorkDir, y.cookieText())
-	if err != nil {
-		return "", fmt.Errorf("写入临时 Cookie 失败: %w", err)
-	}
-	defer cleanup()
-	if cookiePath != "" {
-		args = append(args, "--cookies", cookiePath)
+	args, dropCookies, cerr := y.addCookies(args)
+	defer dropCookies()
+	if cerr != nil {
+		return "", fmt.Errorf("写入 Cookie 失败: %w", cerr)
 	}
 	args = append(args, BaseURL+"/watch?v="+req.VideoID)
 
@@ -596,8 +601,11 @@ func withoutRemoteComponents(args []string) []string {
 	return out
 }
 
-// cookiesArg 在有 Cookie 时把内容写进工作目录的临时文件（0600），用完即删。
+// writeCookies 是「没有 jar」时的退路：把内容写进 dir 下的一次性文件（0600），用完即删。
 // 这里单独抽出来是因为 yt-dlp 只认文件路径，不认环境变量。
+//
+// **生产路径不用它**：用完即删会让 yt-dlp 回写的轮换结果一起消失，登录态就活不过一轮
+// （见 cookiejar.go 的 4238→2894 实测）。只有单测和「还没配落点」时才走这里。
 func writeCookies(dir, content string) (string, func(), error) {
 	if strings.TrimSpace(content) == "" {
 		return "", func() {}, nil
@@ -623,20 +631,29 @@ func writeCookies(dir, content string) (string, func(), error) {
 	return f.Name(), func() { os.Remove(f.Name()) }, nil
 }
 
-// addCookies 把「当前配置的 cookies.txt」落到临时文件并追加 --cookies，返回收尾函数。
+// addCookies 把「当前配置的 cookies.txt」交给 yt-dlp 并追加 --cookies，返回收尾函数。
 //
 // 为什么要单独一个函数：**解析（-j）这条路原来一条 cookie 都不带**，只有下载那条带了。
 // 2026-11-03 的现场是用户在设置里填好了 cookies，播放照样被要求人机验证——把库里那份
 // cookies 导出成文件再手工跑 `yt-dlp -j`，报的却是「The provided YouTube account cookies
 // are no longer valid」，也就是说登录态对解析一样是刚需（年龄限制/要验证的片子连清单都不给），
-// 而当时 ResolveStream 的命令行里根本没有 --cookies。三条解析路径（清单、频道列表、单条信息）
-// 现在都从这里加。
+// 而当时 ResolveStream 的命令行里根本没有 --cookies。四条路径（播放清单、频道列表、单条信息、
+// 下载）现在都从这里加。
 //
-// 失败不致命：临时文件写不出来就照旧不带 cookie 跑一次，让失败原因落在 yt-dlp 的报错上。
+// 配了 jar 就由 jar 发一份私有副本、并在收尾时把 yt-dlp 写回来的轮换结果存回设置
+// （见 cookiejar.go；不这么做的话登录态活不过一轮）；没配才退到「用完即删」的临时文件。
+// 失败不致命：写不出来就照旧不带 cookie 跑一次，让原因落在 yt-dlp 的报错上。
 func (y *YtDlp) addCookies(args []string) ([]string, func(), error) {
 	content := strings.TrimSpace(y.cookieText())
 	if content == "" {
 		return args, func() {}, nil
+	}
+	if y.jar != nil {
+		path, done, err := y.jar.Checkout(content)
+		if err != nil || path == "" {
+			return args, func() {}, err
+		}
+		return append(args, "--cookies", path), done, nil
 	}
 	dir, err := os.MkdirTemp("", "myporn-ytcookies-")
 	if err != nil {

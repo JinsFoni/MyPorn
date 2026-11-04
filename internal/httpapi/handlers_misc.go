@@ -16,6 +16,7 @@ import (
 	"github.com/JinsFoni/MyPorn/internal/model"
 	"github.com/JinsFoni/MyPorn/internal/social/igram"
 	"github.com/JinsFoni/MyPorn/internal/store"
+	"github.com/JinsFoni/MyPorn/internal/ytsub"
 )
 
 // socialSyncHours 把设置里的字符串夹到合理区间（1–48 小时）。
@@ -356,6 +357,14 @@ type youtubeDTO struct {
 	HasCookies    bool   `json:"hasCookies"`
 	// CookiesBroken 同 bilibiliDTO.CookieBroken：存着但解不开，别当没配。
 	CookiesBroken bool `json:"cookiesBroken"`
+	// CookieLogins 是「库里这份 cookies.txt 还剩几条未过期的 YouTube 登录态」
+	// （SID/HSID/SSID/APISID/SAPISID/LOGIN_INFO/__Secure-1/3PSID 里数得出来的条数，
+	// 见 ytsub.LoginCookieCount）。0 = YouTube 已经把登录态清掉，配了也白配。
+	// 这个数字会随着 yt-dlp 每轮回写而变——它就是「这份 cookie 还能用多久」的体温计。
+	CookieLogins int `json:"cookieLogins"`
+	// CookieAlive 才是结论：SID 与 LOGIN_INFO 还在（见 ytsub.LoginAlive）。
+	// 只要这两根支柱少一根，YouTube 就当未登录，直接报「请确认你不是机器人」。
+	CookieAlive bool `json:"cookieAlive"`
 }
 
 // youtubePatch 是设置里可以改的 YouTube 项；Cookies 传 "" 表示清空。
@@ -427,6 +436,29 @@ func (s *Server) hasYtCookies() bool {
 	return has
 }
 
+// ytCookieLogins 数库里那份 cookies.txt 还剩几条 YouTube 登录态。
+//
+// 为什么要给前端看这个数：2026-11-04 的现场是「设置里明明填了 cookie」，
+// 而 YouTube 早在某一次请求里就把 SID / LOGIN_INFO 全部置成过期了——
+// 界面上完全看不出来，只能等点开视频报「请确认你不是机器人」才发现。
+// 条数掉到 0 就是明确信号：去重导一份，别再怀疑出口 IP。
+func (s *Server) ytCookieLogins() int {
+	v, err := s.st.GetSecret(s.box, "yt_cookies")
+	if err != nil || strings.TrimSpace(v) == "" {
+		return 0
+	}
+	return ytsub.LoginCookieCount(v)
+}
+
+// ytCookieAlive 回答「库里这份 cookie 还登录着吗」（SID + LOGIN_INFO 都还在）。
+func (s *Server) ytCookieAlive() bool {
+	v, err := s.st.GetSecret(s.box, "yt_cookies")
+	if err != nil || strings.TrimSpace(v) == "" {
+		return false
+	}
+	return ytsub.LoginAlive(v)
+}
+
 type olDTO struct {
 	BaseURL  string `json:"baseUrl"`
 	Root     string `json:"root"`
@@ -494,6 +526,8 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 			YtDlpPath:     get("ytdlp_path", ""),
 			HasCookies:    hasYt,
 			CookiesBroken: brokenYt,
+			CookieLogins:  s.ytCookieLogins(),
+			CookieAlive:   s.ytCookieAlive(),
 		},
 		Bilibili: bilibiliDTO{HasCookie: hasBili, CookieBroken: brokenBili},
 	}
