@@ -488,7 +488,7 @@
       keyOf={(photo: MomentPhoto) => photo.id}
       reloadKey={wallKey}
       maxLoadedPages={8}
-      gridClass="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
+      gridClass="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
       droppedKeys={droppedPhotos}
       onItems={(items: MomentPhoto[]) => {
         photos = items;
