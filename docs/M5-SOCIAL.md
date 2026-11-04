@@ -39,7 +39,7 @@
 |---|---|
 | 侧边栏「动态」（`/moments`，`icon: 'moments'`，位于「关注」之后） | 所有博主照片混流，发布时间倒序；页面顶部**不画标题**（2026-11-02 用户要求去掉左上角那个「动态」），直接是**博主头像条**（和关注页 / B 站页 / YouTube 页同一个 `AvatarRail`：72px 圆头像、名字 13px 居中且 700 粗体、点谁筛谁、再点一次取消，选中的写进地址栏 `?account=`，可深链）；**头像下的名字写平台显示名 `displayName`，空着才回退 `@handle`，并且和其余三排一样单行截断（与头像等宽 72px）**（2026-11-03 用户先要求「头像下面不要显示 ID，显示名称」，随后要求「名字限制一行」；名字太长时截断，完整名字连同 `@handle`、照片数都进 `title`）；照片格子悬停时**左下角写博主名字（`displayName`，空着回退 `@handle`），不写 X 的 ID**（2026-11-04 用户要求，和头像条同一条口径；完整「名字 · @handle」在 `title` 里，灯箱标题行也照这条规则）；下面一行工具栏只剩「全部」+ 平台筛选 +「添加博主」。**每张照片右下角一个删除按钮**（2026-11-04 用户要求）：桌面端跟悬停出现（`sm` 起 `opacity-0` → `group-hover`），触屏没有 hover 所以常显；点击先弹统一确认框（`ConfirmDialog`，不再是原生 `window.confirm`）问一句，删的是「墙上这张」——服务端软删（`hidden = 1`），同步不会再抓回来，但已经存进本地库的文件不动；删完不重拉整条墙（只把这一格抹掉），免得把人弹回第一屏 |
 | 管理页 → 新 tab「动态管理」 | 添加博主、启用开关、单独同步、删除、关联艺人（手动改）、看帖子数/照片数/上次同步/错误 |
-| 设置弹窗 → 新分类「动态」 | 抓取总开关、同步间隔、回填上限、X / Instagram Cookie、Instagram 代理、图片缓存上限 |
+| 设置弹窗 → 新分类「动态」 | 同步间隔、发现间隔、两个站的免登录说明、图片库根目录（**没有 Instagram Cookie 了**，2026-11-04 用户要求，§15.19） |
 | 艺人 page（`/performer/:id`） | 已关联的话多一块「社交动态」：最近 12 张缩略图，点开进灯箱 |
 | 灯箱（`/moments?p=<photoId>` 可深链） | 大图 + 博主 + 时间 +「原帖」（外链）+「删除这张」。**不显示原帖正文**（2026-11-04 用户要求「不要显示原贴内容」）：灯箱是看图的地方，正文一多就把图挤小；要读原文点「原帖」过去。`caption` 仍取下来，只给 `<img alt>` 用 |
 | 照片墙多选 | 格子上角「勾选」进入多选 → 底部浮条「已选 N 张 / 取消 / 删除」（2026-11-04 用户要求：原来这里是「存进本地库」，自动落盘之后改成批量删除）。**照片格子上不画任何「已存 / 待存」角标**（2026-11-04 用户要求「不要显示已存标识」）：自动落盘之后落没落盘是后台的事，每格都挂一枚状态只是噪音，要看进度去「下载」页看任务 |
@@ -209,7 +209,9 @@ type Adapter interface {
 ### 5.3 凭证
 
 - 存 `settings` 表，用已有的 `encrypted` 列（`internal/secret` 的 AES-GCM），
-  key 名 `social_cookie_x` / `social_cookie_instagram`，值是 JSON。
+  key 名 `social_cookie_x`，值是 JSON。**`social_cookie_instagram` 已经不存在了**：
+  2026-11-04 用户要求 Instagram 一律免登录，那一格从设置/接口/库里一起删掉（§15.19），
+  启动时 `retireInstagramCookie` 会把老库里那条密文删掉。
 - UI 只显示「已配置 / 未配置 + 上次校验时间」，**不回显明文**；有「测试」按钮，
   抓一次 timeline 且拿到 media 才算通过。
 - Cookie 失效的失败方式必须显式：账号行上标「登录态失效」，不要让用户以为这个博主没发图。
@@ -569,13 +571,13 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
 |---|---|
 | `internal/social/social.go` | `Adapter` 接口、可选接口 `Discoverer`（便宜的「只发现最新几条」，§15.16）、`Error`（`needs_auth` / `rate_limited` / `stale_parser` / `not_found` / `upstream`）、`Throttle`（串行 + 间隔 + **整站冷却 `CoolUntil` / 按宿主冷却 `CoolUntilHost`**）、`NormalizeHandle`、`Registry` |
 | `internal/social/xcom/` | X 免登录抓取：时间线 widget（历史）+ 主页 HTML 发现新帖（§15.10）+ 单帖 `tweet-result`（详情）、限流冷却、fixture 单测 |
-| `internal/social/igram/` | Instagram Cookie 抓取：`graphql.go` 是主路径（主页抠 `lsd`/`fb_dtsg` → `POST /api/graphql` + doc_id，游标 `gql:…`），`igram.go` 留 `web_profile_info` / `feed/user` 作降级；carousel 拆图、Cookie 归一化（**Netscape cookies.txt / Cookie 头 / JSON 三种写法**）、fixture 单测 + `LIVE=1` 真实网络冒烟 |
+| `internal/social/igram/` | Instagram **只走免登录**（§15.19）：`igram.go` 是薄适配器（`New(client)` 不带任何 setting，`ListPosts` 只认 `anon:{offset}` 断点），`anon.go` 是全部实现（爬虫页 → 免登录网格 doc 39451372751143943 → 轮播走单帖 doc 28459077533770840，carousel 拆图、pk→短码/时间、本地切片 + 10 分钟首屏缓存 + 6 小时单帖缓存）；fixture 单测 + `LIVE=1` 真实网络冒烟 |
 | `internal/store/social.go` + `migrations/0007_m5_social.sql` | 四张表与全部读写、照片墙 keyset 游标、计数、URL 反查艺人；`migrations/0014_photo_root.sql` 把 `social_photo_files.library_id` 的库外键拆掉（`0` = 图片库根），并补 `HideSocialPhotos`（批量软删）/ `PhotoSaved` / `ListUnsavedSocialPhotos`（补漏查询）/ `PostSavedPhotoPaths` |
 | `internal/jobs/social.go` | `social_sync`（每轮最多 5 页/账号；`mode=auto/full/discover`，遇 `needs_auth` 整轮停、遇 `rate_limited` 只跳过该账号，§15.16）/ `social_save`（下载入库到 `photo_root/{名字}/{年}/{月}/` + `.post.json`，每轮 200 张上限、自愈、成功即续排，§9） |
 | `internal/httpapi/handlers_moments.go` | B1–B11 全部端点（含批量删除 `POST /api/moments/photos/delete`）+ `writeSocialErr`（错误码 → 状态码的唯一出口） |
 | `web/src/routes/Moments.svelte` | 照片墙（`InfiniteList` 复用 + 灯箱 + 多选删除 + 添加博主；格子上不画存/未存角标） |
 | `web/src/routes/Manage.svelte` | 「动态管理」页签：博主列表 / 同步 / 重填 / 启停 / 删除 |
-| `web/src/components/SettingsDialog.svelte` | 「动态」分类：抓取间隔 + **图片库根目录（`photo_root`，保存后立刻补一轮存量）** + Instagram Cookie |
+| `web/src/components/SettingsDialog.svelte` | 「动态」分类：抓取间隔 + 发现间隔 + 两个站的免登录说明 + **图片库根目录（`photo_root`，保存后立刻补一轮存量）**（Instagram Cookie 那一格 2026-11-04 删除，§15.19） |
 | `web/src/routes/Performer.svelte` | 艺人页「社交动态」区块（12 张，6 列两行，点图跳带 `account` 筛选的照片墙） |
 | `internal/proxying/` | 代理解析器（设置优先、环境变量兜底）+ 动态 HTTP 客户端接线，改设置即时生效 |
 | `internal/imgcache/evict.go` | 缓存上限与淘汰（`IMG_CACHE_MAX_MB`，默认 2048；按 mtime 淘汰到 90%；启动扫一次 + 写入后十分钟一次） |
@@ -655,8 +657,8 @@ token 是官方嵌推 widget 那套：`((id / 1e15) * π)` 转 36 进制、去�
   45 秒内先后报连不上，而同一分钟 `curl https://x.com/...` 是 200——那时候没有任何重试，
   账号就被标红到下一次成功同步（默认 6 小时）。现在文案也换了：「连不上 X（本机网络或代理不通）」，
   不再拿代理的 fake-IP 当主语（单测 `TestGetRetriesConnectionRefused` / `TestNoRetryOnHTTPStatus` 守着）。
-- **Instagram Cookie 只要给得出就能用，但「给不出」的判断只看 sessionid**：缺 `sessionid` 一律当未配置；
-  其余 Cookie（`mid` / `ig_did` / `datr` / `rur`）给了就原样带上，少这些时 IG 可能照样 401。
+- ~~**Instagram Cookie 只要给得出就能用，但「给不出」的判断只看 sessionid**~~ —— **2026-11-04 作废**：
+  Cookie 那条路整个删了，Instagram 现在不用任何凭证（§15.19）。这段留着当历史，别再照着实现。
 - **Instagram 全链路没有在真实账号上跑过**：手上没有可用 Cookie，首屏 `web_profile_info`、翻页
   `feed/user`、carousel 拆图、401/429 映射都只有 fixture 单测覆盖；第一次配好 Cookie 后建议先用
   小号试一条，确认能出图再挂大号。
@@ -717,7 +719,7 @@ curl -s -H 'x-ig-app-id: 936619743392459' \
 | [siongui/instago](https://github.com/siongui/instago) | Go 库（410 commits，最后真代码 2022-03，2023-03 只合了 dependabot）。核心是 IG 老私有 API：`i.instagram.com/api/v1/feed/user/{id}/reel_media`、`/friendships/{id}/followers`、`graphql/query/?query_id=17888483320059182`、`{user}/?__a=1`，签名靠自己算的 `X-Instagram-GIS`（从主页 HTML 里扒 `rhx_gis`/`query_hash`） | ❌ 两条数据路径今天都是 401 `require_login`（见 §15.11 表），`query_id`/`query_hash` 2023 年就被 IG 换成 `doc_id`；`reel_media` 端点也早改名。只剩 `typeuser.go`/`typemedia.go` 那套结构体字段名可以参考 |
 
 两条都别引进来。真正要补的是本仓库里已有的 `internal/social/igram`（647 行，`ea02e6a` 落地）：
-它现在**代码齐、缺的是凭证**——`GET /api/moments/accounts` 里 `hasInstagramCookie: false`，
+它当时**代码齐、缺的是凭证**——`GET /api/moments/accounts` 里 `hasInstagramCookie: false`，
 `POST /api/moments/resolve {"url":"https://www.instagram.com/natgeo"}` 直接回
 `needs_auth`「Instagram 需要登录态：请在设置 → 动态里粘贴 sessionid」。按 §15.11，
 改动最小的可行做法是：把 Cookie 从「必需」降级成「可选」——没有 Cookie 时用
@@ -1084,6 +1086,9 @@ POST /api/graphql         doc 28459077533770840, media_id=pk → 轮播子图 + 
 - 轮播帖的子图必须靠单帖详情（网格只给第一张），带 6 小时缓存，否则每轮都重拉同一批。
 - **懒解析**：第一版是「先把 100 条全解析再返回」，20 条轮播 × 3 s 间隔，害得**只要资料的
   GetProfile 花了 3 分 39 秒**。改成按页解析后同一个请求 **4.55 s**。
+> **注**：这一节的「想翻更早的历史再贴 Cookie」与下面列的单测名（`TestAnonProfileWhenSessionDead` 等）
+> 已在 §15.19 作废：Cookie 那一格整个删了，测试也改名了。历史记录保留原样。
+
 - `NeedsCookie()` 从 `true` 改成 `false`，设置里的平台提示从「必须先在设置 → 动态里粘贴 Cookie」
   改成「免登录可用：资料 + 最新 100 条（含原图）；想翻更早的历史再贴 Cookie」。
 
@@ -1109,3 +1114,74 @@ POST /api/graphql         doc 28459077533770840, media_id=pk → 轮播子图 + 
 `TestAnonSlicePage`（100 条切页 + 轮播详情只打一次）、`TestAnonProfileWhenSessionDead`、
 `TestAnonListPostsGridAndCarousel`、`TestAnonGridFallsBackToPageEdges`、
 `TestAnonBothPathsFailKeepsNeedsAuth`（两条路都断了，报的仍是会话那条错）。
+
+### 15.19 去掉设置里的 Instagram Cookie：Instagram 只走免登录（2026-11-04 16:4x）
+
+用户要求：「把设置里的 Instagram Cookie 去掉，ins 以后都使用免登录抓取」。
+
+§15.18 当时把免登录排在登录态**后面**当兜底，理由是「会话能翻页、能追全量，别为省事把翻页丢掉」。
+但那把会话在 2026-11-04 已经被上游 302 到 `/accounts/update_risky_contactpoint`（要验证邮箱/手机号），
+翻页能力事实上已经没了——留着那个输入框只会让人以为「贴个 Cookie 就能翻到更早」。
+所以这次不是加一条路，而是**删一条路**：
+
+**1) 删掉的东西**
+
+| 位置 | 删了什么 |
+|---|---|
+| `internal/social/igram/graphql.go` | 整个文件 **661 行**：`ensureTokens` / `fetchTokens`（主页抠 `lsd`/`fb_dtsg`）、`graphql` / `graphqlOnce`、`gqlPosts` / `gqlProfile`、`loginRedirectError`、`cookieValue` |
+| `internal/social/igram/graphql_test.go` | 整个文件 **403 行** |
+| `internal/social/igram/igram.go` | **755 → 184 行**：`Credentials` / `ParseCredentials` / `NormalizeCookie`（Netscape cookies.txt / Cookie 头 / JSON 三种写法）、`HasCookie` / `cookieHeader`、`get`（REST 那条）、`restProfile` / `restPosts`、`gqlCursorPrefix`、`New(client, setting)` 的 `setting` 参数 |
+| `internal/httpapi/handlers_misc.go` | `socialDTO.HasInstagramCookie` / `.InstagramCookie`、`socialPatch.InstagramCookie`、以及那段「传空串 = 清除」的落库分支 |
+| `internal/httpapi/handlers_moments.go` | `hasInstagramCookie()`、`GET /api/moments/accounts` 里的 `hasInstagramCookie` 字段 |
+| `cmd/myporn/main.go` | `buildSocialRegistry` 里那个只为 IG 存在的 `setting` 闭包 |
+| `web/src/components/SettingsDialog.svelte` | 「动态」分类里的 Instagram Cookie 那一格（label + 已配置/未配置徽章 + textarea + 提示文案）、`instagramCookie` 状态与提交逻辑 |
+| `web/src/routes/Manage.svelte` | 「Instagram 未配置 Cookie，加不了 IG 博主」那条红字 |
+| `web/src/lib/types.ts` | `SocialSettings.hasInstagramCookie`、`settingsPatch.social.instagramCookie`、`MomentsManageResponse.hasInstagramCookie` |
+
+包总行数 **3428 → 1360**（含测试）；`internal/social/igram` 只剩 `igram.go`（薄适配器）+ `anon.go`（全部实现）。
+
+**2) 新增的两处**
+
+- `store.DeleteSecret(key)`：删一条密文（连行一起），返回删掉的行数。
+- `cmd/myporn` 的 `retireInstagramCookie`：每次启动跑一遍，删老库里的 `social_cookie_instagram`
+  （删过之后再跑是 0 行，无害）。
+- 设置里空出来的位置补了一条 Instagram 的**免登录说明**（不是输入框），把天花板写在用户眼前：
+  「拿得到资料 + 最新 100 条，含原图与轮播全部子图；这条查询不能翻页，第 101 条往前的老帖子拿不到」。
+
+**3) 兼容：老断点怎么办**
+
+库里 `social_accounts.sync_cursor` 可能还留着 `gql:{end_cursor}` 或 `{userID}|{nextMaxID}`。
+那些游标现在没人能兑现，`ListPosts` 遇到它们**直接从最新一页重来**（不是报错），
+已入库的帖子按 `post_id` 去重，不会重复上墙。单测 `TestLegacyCursorRestartsFromNewest` 守着这条。
+
+**4) 实测（真机 `:18081`，重启后）**
+
+| 步骤 | 结果 |
+|---|---|
+| 删除前 `settings` 表 | `social_cookie_instagram` 一条，密文 **888 字节** |
+| 重启日志 | `level=INFO msg="已删除 Instagram Cookie（Instagram 改为免登录抓取）"` |
+| 删除后同一查询 | `select count(*) … where key='social_cookie_instagram'` → **0** |
+| `GET /api/settings` 的 `social` | 只剩 3 个键：`discoverMinutes` / `photoRoot` / `syncHours` |
+| `GET /api/moments/accounts` | 顶层不再有 `hasInstagramCookie`；platforms 里 `instagram: hasCookie=false` |
+| 设置弹窗「动态」分类（先 unregister SW + 清 cache） | 整段 `Cookie` 字样 **0 处**；Instagram 显示的是免登录说明 |
+| 管理页 | 「Instagram 未配置 Cookie，加不了 IG 博主」**已消失** |
+| 构建产物 | `grep -rl "Instagram Cookie" web/dist internal/webui/dist` → **无匹配** |
+| **一次完全没有凭证的同步**（`POST /api/moments/accounts/187/sync`） | **72 s** 跑完，`done`「@kaedekaren0825 第 1 页，新增 0 张照片」；`post_count=100 photo_count=368` 保持不变、`last_error=''`（帖子全在库里，去重后 0 新增是对的） |
+
+**5) 测试**
+
+`go vet ./...`、`go test ./...`、`pnpm --dir web check`（0 error）、`make build` 全绿。
+`internal/social/igram` 现在 12 个用例全过，新增/改写的：`TestParseProfileURL`（含 `/p/`、`/reel/`、
+别的站、空串要报错）、`TestLegacyCursorRestartsFromNewest`、`TestBlockPageIsNotRateLimited`
+（429 + HTML 拦截页 → `blocked` 且**不设冷却**）、`TestJSON429LocksPlatform`（429 + JSON + `Retry-After: 600`
+→ `rate_limited` 且冷却 ≥ 9 分钟）、`TestNotFoundWhenProfileMissing`、`TestAnonProfile`、
+`TestAnonEmptyPageIsStaleParser`（爬虫页没资料段 → `stale_parser`，文案说「资料段」）。
+删掉的：`TestFetchTokensLoginRedirect`、`TestFetchTokensShellIsStale`、`TestParseCredentials*`（5 个）、
+`TestListPostsFirstPageFallsBackToREST`、`TestListPostsSecondPage`、`TestUnauthorized`、
+`TestDeadLegacyEndpointIsNotNotFound`、`TestAnonBothPathsFailKeepsNeedsAuth`。
+
+**6) 代价（用户的取舍，写在这里免得以后当成 bug）**
+
+- 第 101 条往前的历史**永久拿不到**了。要恢复只能把登录态那条路整条搬回来（`git revert` 这一提交），
+  而它当时是被上游风控的。
+- `needs_auth` 这个错误种类现在两个适配器都不再返回，界面里对应的引导改成了「换出口 IP」。

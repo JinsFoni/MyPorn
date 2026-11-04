@@ -14,7 +14,6 @@ import (
 
 	"github.com/JinsFoni/MyPorn/internal/library"
 	"github.com/JinsFoni/MyPorn/internal/model"
-	"github.com/JinsFoni/MyPorn/internal/social/igram"
 	"github.com/JinsFoni/MyPorn/internal/store"
 	"github.com/JinsFoni/MyPorn/internal/ytsub"
 )
@@ -378,26 +377,24 @@ type youtubePatch struct {
 
 // socialDTO 是 M5 社交动态的设置。
 //
-// InstagramCookie 只写不读：Cookie 是登录凭证，前端只需要知道「有没有配」，
-// 每次把明文回传给浏览器等于白白多一处泄漏面。
+// 这里**没有** Instagram Cookie 了：2026-11-04 用户要求去掉，Instagram 一律免登录抓
+// （见 internal/social/igram 的包注释）。老库里那条密文在启动时被删掉，见 cmd/myporn 的
+// retireInstagramCookie。
 type socialDTO struct {
 	SyncHours int `json:"syncHours"`
 	// DiscoverMinutes 是「只发现最新几条」那一轮的间隔（分钟，0 = 关）。
 	// X 的主页 HTML 一页只给 5–8 个帖子 id，完整同步 6 小时一轮会把中间的发帖滑走，
 	// 所以单独按分钟级跑一条便宜的路子（docs/M5-SOCIAL.md §15.15）。
-	DiscoverMinutes    int    `json:"discoverMinutes"`
-	HasInstagramCookie bool   `json:"hasInstagramCookie"`
-	InstagramCookie    string `json:"instagramCookie,omitempty"`
+	DiscoverMinutes int `json:"discoverMinutes"`
 	// PhotoRoot 是「图片库根目录」：抓到的照片自动下载到这里，按 {名字}/{年}/{月} 分目录
 	// （2026-11-04 用户要求）。它不是任何一个视频库的 root_path，所以单独一项设置。
 	PhotoRoot string `json:"photoRoot"`
 }
 
-// socialPatch 是设置里可以改的社交项；InstagramCookie 传 "" 表示清空。
+// socialPatch 是设置里可以改的社交项。
 type socialPatch struct {
 	SyncHours       *int    `json:"syncHours"`
 	DiscoverMinutes *int    `json:"discoverMinutes"`
-	InstagramCookie *string `json:"instagramCookie"`
 	PhotoRoot       *string `json:"photoRoot"`
 }
 
@@ -514,10 +511,9 @@ func (s *Server) buildSettingsDTO() settingsDTO {
 			HasToken: token != "",
 		},
 		Social: socialDTO{
-			SyncHours:          socialSyncHours(get("social_sync_hours", "6")),
-			DiscoverMinutes:    socialDiscoverMinutes(get("social_discover_minutes", "60")),
-			HasInstagramCookie: s.hasInstagramCookie(),
-			PhotoRoot:          get("photo_root", filepath.Join(s.cfg.LibraryRoot, "photos")),
+			SyncHours:       socialSyncHours(get("social_sync_hours", "6")),
+			DiscoverMinutes: socialDiscoverMinutes(get("social_discover_minutes", "60")),
+			PhotoRoot:       get("photo_root", filepath.Join(s.cfg.LibraryRoot, "photos")),
 		},
 		YouTube: youtubeDTO{
 			SyncHours:     youtubeInt(get("yt_sync_hours", "6"), 6, 1, 48),
@@ -625,26 +621,6 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			if root != "" && root != strings.TrimSpace(old) && s.runner != nil {
 				if _, err := s.runner.EnqueueSocialSave(nil, -1); err != nil {
 					s.log.Warn("投递照片补存任务失败", "err", err)
-				}
-			}
-		}
-		if p.Social.InstagramCookie != nil {
-			raw := strings.TrimSpace(*p.Social.InstagramCookie)
-			if raw == "" {
-				// 传空串 = 清除 Cookie（换号、或不想再用 IG 时用）。
-				if err := s.st.SetSecret(s.box, "social_cookie_instagram", ""); err != nil {
-					writeErr(w, http.StatusInternalServerError, "internal", "清除 Cookie 失败")
-					return
-				}
-			} else {
-				normalized, err := igram.NormalizeCookie(raw)
-				if err != nil {
-					writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
-					return
-				}
-				if err := s.st.SetSecret(s.box, "social_cookie_instagram", normalized); err != nil {
-					writeErr(w, http.StatusInternalServerError, "internal", "保存 Cookie 失败")
-					return
 				}
 			}
 		}

@@ -56,6 +56,18 @@ func (s *Store) SetSecret(box *secret.Box, key, plain string) error {
 	return err
 }
 
+// DeleteSecret 删掉一条敏感项（连密文一起），返回删掉的行数。
+//
+// 用途：某个凭证槽位被产品决定弃用之后，把老库里那条密文清掉——留着只是多一处
+// 泄漏面，而且下次「扫不出来的密文」体检会一直报它（2026-11-04 Instagram Cookie）。
+func (s *Store) DeleteSecret(key string) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM settings WHERE key = ? AND encrypted = '1'`, key)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // SecretUpdatedAt 返回这条敏感项最近一次被写入的时间（RFC3339，空 = 没这条）。
 //
 // 用途：B 站把登录态作废时，界面要说的是「这条 Cookie 是 X 写进来的、现在 B 站不认了」，

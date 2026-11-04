@@ -2,8 +2,6 @@ package igram
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,58 +11,21 @@ import (
 	"github.com/JinsFoni/MyPorn/internal/social"
 )
 
-// profileFixture 照真实 web_profile_info 的结构裁出来：3 条帖子
-// （单图、carousel 两张、视频），带 end_cursor。
-const profileFixture = `{"status":"ok","data":{"user":{
-  "id":"42","username":"mini","full_name":"Mini Diva",
-  "profile_pic_url_hd":"https://scontent.cdninstagram.com/avatar.jpg",
-  "edge_owner_to_timeline_media":{
-    "count":3,
-    "edges":[
-      {"node":{"shortcode":"AAA","is_video":false,"taken_at_timestamp":1761200000,
-        "display_url":"https://scontent.cdninstagram.com/AAA.jpg",
-        "dimensions":{"width":1080,"height":1350},
-        "edge_media_to_caption":{"edges":[{"node":{"text":"first post"}}]}}},
-      {"node":{"shortcode":"BBB","is_video":false,"taken_at_timestamp":1761100000,
-        "display_url":"https://scontent.cdninstagram.com/BBB0.jpg",
-        "dimensions":{"width":1080,"height":1080},
-        "edge_media_to_caption":{"edges":[{"node":{"text":"carousel"}}]},
-        "edge_sidecar_to_children":{"edges":[
-          {"node":{"display_url":"https://scontent.cdninstagram.com/BBB0.jpg","dimensions":{"width":1080,"height":1080}}},
-          {"node":{"display_url":"https://scontent.cdninstagram.com/BBB1.jpg","dimensions":{"width":1080,"height":1350}}}]}}},
-      {"node":{"shortcode":"CCC","is_video":true,"taken_at_timestamp":1761000000,
-        "display_url":"https://scontent.cdninstagram.com/CCC.jpg",
-        "dimensions":{"width":1080,"height":1920}}}],
-    "page_info":{"has_next_page":true,"end_cursor":"CURSOR1"}}}}}`
-
-// feedFixture 是后续页（app 接口），用 image_versions2 + carousel_media。
-const feedFixture = `{"status":"ok","more_available":false,"next_max_id":"",
-  "items":[{"code":"DDD","media_type":8,"taken_at":1760900000,
-    "caption":{"text":"later post"},
-    "carousel_media":[
-      {"media_type":1,"image_versions2":{"candidates":[{"url":"https://scontent.cdninstagram.com/DDD0.jpg","width":1080,"height":1350},{"url":"https://scontent.cdninstagram.com/DDD0s.jpg","width":480,"height":600}]}},
-      {"media_type":1,"image_versions2":{"candidates":[{"url":"https://scontent.cdninstagram.com/DDD1.jpg","width":1080,"height":1080}]}}]}]}`
-
-const cookieJSON = `{"sessionid":"S1","csrftoken":"C1","ds_user_id":"42"}`
-
-func newTestAdapter(t *testing.T, h http.HandlerFunc, cookie string) *Adapter {
+// newTestAdapter 起一个本地假 IG：`a.www` 指过去，限流间隔缩到 1 ms。
+//
+// 适配器不再需要任何凭证（2026-11-04 起只走免登录），所以这里也不用给 Cookie。
+func newTestAdapter(t *testing.T, h http.HandlerFunc) *Adapter {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	a := New(srv.Client(), func(key string) string {
-		if key == cookieKey {
-			return cookie
-		}
-		return ""
-	})
-	a.base = srv.URL
+	a := New(srv.Client())
 	a.www = srv.URL
 	a.throttle = social.NewThrottle(time.Millisecond)
 	return a
 }
 
 func TestParseProfileURL(t *testing.T) {
-	a := New(nil, nil)
+	a := New(nil)
 	cases := []struct{ in, want string }{
 		{"https://www.instagram.com/mini/", "mini"},
 		{"https://instagram.com/Mini.Diva", "mini.diva"},
@@ -78,381 +39,81 @@ func TestParseProfileURL(t *testing.T) {
 			t.Errorf("ParseProfileURL(%q) = (%q, %v)，期望 %q", c.in, got, err, c.want)
 		}
 	}
-	bad := []string{"https://www.instagram.com/p/ABC/", "https://x.com/mini", "https://www.instagram.com/reel/x/", ""}
-	for _, in := range bad {
-		if got, err := a.ParseProfileURL(in); err == nil {
-			t.Errorf("ParseProfileURL(%q) 应该报错，却得到 %q", in, got)
+	for _, bad := range []string{
+		"https://www.instagram.com/p/DfMdV4oTEC9/",
+		"https://www.instagram.com/reel/xyz/",
+		"https://twitter.com/mini",
+		"https://www.instagram.com/",
+		"",
+	} {
+		if got, err := a.ParseProfileURL(bad); err == nil {
+			t.Errorf("ParseProfileURL(%q) 应该报错，却给了 %q", bad, got)
 		}
 	}
 }
 
-// 没配 Cookie 必须明确报 needs_auth，不能静默返回空列表。
+// TestLegacyCursorRestartsFromNewest：库里登录态时代留下的断点（gql:… / {id}|{max}）
+// 现在没人能兑现，要能原地退回「最新一页」，而不是整轮报错。
+func TestLegacyCursorRestartsFromNewest(t *testing.T) {
+	a, _, _ := anonServer(t, "")
+	for _, cursor := range []string{"gql:QVFB", "42|QVFB"} {
+		page, err := a.ListPosts(context.Background(), "kaedekaren0825", cursor)
+		if err != nil {
+			t.Fatalf("老断点 %q 应退回最新一页，实际报错：%v", cursor, err)
+		}
+		if len(page.Posts) != 3 {
+			t.Fatalf("老断点 %q 应回最新 3 条，实际 %d", cursor, len(page.Posts))
+		}
+	}
+}
+
+// TestBlockPageIsNotRateLimited：风控拦截页（429 + HTML）只提示、不设冷却。
 //
-// 免登录爬虫页（anon.go）例外：那条路本来就不带 Cookie，没有 Cookie 也会走它，
-// 所以这里只禁止「非爬虫 UA」的请求，并让爬虫页也回 404。
-func TestNeedsAuthWithoutCookie(t *testing.T) {
+// 冷却 15 分钟会让用户以为「站坏了」，而拦截页等下去也不会好——要去换出口 IP。
+func TestBlockPageIsNotRateLimited(t *testing.T) {
 	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.Header.Get("User-Agent"), "Googlebot") {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		t.Error("没有 Cookie 时不应该带着会话去请求")
-	}, "")
-	_, err := a.ListPosts(context.Background(), "mini", "")
-	if k := social.KindOf(err); k != social.KindNeedsAuth {
-		t.Fatalf("错误种类 = %s，期望 needs_auth（%v）", k, err)
-	}
-}
-
-// GraphQL 那条路断掉（主页里抠不到 lsd/fb_dtsg）时，第一页必须回退到 web_profile_info。
-func TestListPostsFirstPageFallsBackToREST(t *testing.T) {
-	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		// 主页：200 但没有任何令牌 —— 网页版改版/登录墙的样子。
-		if r.URL.Path == "/mini/" {
-			w.Write([]byte(`<html><body>没有令牌</body></html>`))
-			return
-		}
-		if !strings.Contains(r.URL.Path, "/users/web_profile_info/") {
-			t.Errorf("回退路径应该打 web_profile_info，实际 %s", r.URL.Path)
-		}
-		if q := r.URL.Query().Get("username"); q != "mini" {
-			t.Errorf("username 参数 = %q", q)
-		}
-		if ck := r.Header.Get("Cookie"); !strings.Contains(ck, "sessionid=S1") {
-			t.Errorf("Cookie 头没带上 sessionid: %q", ck)
-		}
-		if app := r.Header.Get("x-ig-app-id"); app != appID {
-			t.Errorf("缺 x-ig-app-id 头: %q", app)
-		}
-		w.Write([]byte(profileFixture))
-	}, cookieJSON)
-
-	page, err := a.ListPosts(context.Background(), "mini", "")
-	if err != nil {
-		t.Fatalf("ListPosts: %v", err)
-	}
-	if len(page.Posts) != 3 {
-		t.Fatalf("帖子数 = %d，期望 3", len(page.Posts))
-	}
-	if page.NextCursor != "42|CURSOR1" {
-		t.Errorf("翻页游标 = %q，期望 42|CURSOR1", page.NextCursor)
-	}
-
-	p := page.Posts[0]
-	if p.PostID != "AAA" || p.URL != "https://www.instagram.com/p/AAA/" || p.Caption != "first post" {
-		t.Errorf("帖子字段不对: %+v", p)
-	}
-	if len(p.Photos) != 1 || p.Photos[0].Width != 1080 || p.Photos[0].Height != 1350 {
-		t.Errorf("单图帖照片不对: %+v", p.Photos)
-	}
-
-	// carousel：两个 child 都要收，序号从 1 开始。
-	car := page.Posts[1]
-	if len(car.Photos) != 2 {
-		t.Fatalf("carousel 照片数 = %d，期望 2", len(car.Photos))
-	}
-	if car.Photos[1].URL != "https://scontent.cdninstagram.com/BBB1.jpg" || car.Photos[1].Seq != 2 {
-		t.Errorf("carousel 第二张不对: %+v", car.Photos[1])
-	}
-
-	// 视频帖不留照片。
-	if len(page.Posts[2].Photos) != 0 {
-		t.Errorf("视频帖不该有照片: %+v", page.Posts[2])
-	}
-}
-
-func TestListPostsSecondPage(t *testing.T) {
-	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Path, "/feed/user/42/") {
-			t.Errorf("第二页应该打 feed/user，实际 %s", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("max_id"); got != "CURSOR1" {
-			t.Errorf("max_id = %q", got)
-		}
-		w.Write([]byte(feedFixture))
-	}, cookieJSON)
-
-	page, err := a.ListPosts(context.Background(), "mini", "42|CURSOR1")
-	if err != nil {
-		t.Fatalf("ListPosts: %v", err)
-	}
-	if len(page.Posts) != 1 {
-		t.Fatalf("帖子数 = %d，期望 1", len(page.Posts))
-	}
-	if page.NextCursor != "" {
-		t.Errorf("more_available=false 时不该给游标，得到 %q", page.NextCursor)
-	}
-	p := page.Posts[0]
-	if p.PostID != "DDD" || p.Caption != "later post" {
-		t.Errorf("帖子字段不对: %+v", p)
-	}
-	if len(p.Photos) != 2 {
-		t.Fatalf("carousel 照片数 = %d，期望 2", len(p.Photos))
-	}
-	// image_versions2 的 candidates 取最大的一档。
-	if p.Photos[0].URL != "https://scontent.cdninstagram.com/DDD0.jpg" || p.Photos[0].Width != 1080 {
-		t.Errorf("尺寸选择不对: %+v", p.Photos[0])
-	}
-}
-
-// 401 必须报 needs_auth（Cookie 失效），不能报成通用错误。
-func TestUnauthorized(t *testing.T) {
-	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]any{"message": "Please wait", "require_login": true, "status": "fail"})
-	}, cookieJSON)
-	_, err := a.GetProfile(context.Background(), "mini")
-	if k := social.KindOf(err); k != social.KindNeedsAuth {
-		t.Errorf("错误种类 = %s，期望 needs_auth（%v）", k, err)
-	}
-}
-
-// 429 报限流并冷却。
-func TestRateLimited(t *testing.T) {
-	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusTooManyRequests)
-		json.NewEncoder(w).Encode(map[string]any{"message": "", "spam": true, "status": "fail"})
-	}, cookieJSON)
+		_, _ = w.Write([]byte(`<!DOCTYPE html><html><head><title>Page Not Found</title></head>` +
+			`<body>Please wait a few minutes before you try again.</body></html>`))
+	})
+	_, err := a.GetProfile(context.Background(), "mini")
+	if k := social.KindOf(err); k != social.KindBlocked {
+		t.Fatalf("错误种类 = %s，期望 blocked（%v）", k, err)
+	}
+	if d := a.throttle.CooldownRemaining(); d > 0 {
+		t.Errorf("拦截页不是限流，不该设冷却，实际还有 %s", d)
+	}
+}
+
+// TestJSON429LocksPlatform：真限流（429 + JSON）要设冷却，别继续撞。
+func TestJSON429LocksPlatform(t *testing.T) {
+	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "600")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"message":"Please wait a few minutes before you try again."}`))
+	})
 	_, err := a.GetProfile(context.Background(), "mini")
 	if k := social.KindOf(err); k != social.KindRateLimited {
 		t.Fatalf("错误种类 = %s，期望 rate_limited（%v）", k, err)
 	}
-	if a.throttle.CooldownRemaining() <= 0 {
-		t.Error("撞到 429 之后应该进入冷却")
+	if d := a.throttle.CooldownRemaining(); d < 9*time.Minute {
+		t.Fatalf("JSON 限流应按 Retry-After 锁 10 分钟，实际 %s", d)
 	}
 }
 
-func TestParseCredentials(t *testing.T) {
-	if _, ok := ParseCredentials(""); ok {
-		t.Error("空串应为未配置")
-	}
-	if _, ok := ParseCredentials(`{"csrftoken":"x"}`); ok {
-		t.Error("缺 sessionid 应为未配置")
-	}
-	c, ok := ParseCredentials(cookieJSON)
-	if !ok || c.SessionID != "S1" || c.UserID != "42" {
-		t.Errorf("解析结果不对: %+v %v", c, ok)
-	}
-}
-
-// Netscape cookies.txt（浏览器扩展 / curl cookie jar 导出的那种）要能直接用：
-// 每行 7 个制表符分隔字段，HttpOnly 的行首多一个 `#HttpOnly_`，
-// 而且整份导出里其它站的 Cookie 必须被丢掉。
-func TestParseCredentialsNetscape(t *testing.T) {
-	raw := "# Netscape HTTP Cookie File\n" +
-		"# https://curl.se/docs/http-cookies.html\n" +
-		"# This file was generated by libcurl! Edit at your own risk.\n" +
-		"\n" +
-		"#HttpOnly_.instagram.com\tTRUE\t/\tTRUE\t1767225600\tsessionid\t123%3Aabc%3A9\n" +
-		".instagram.com\tTRUE\t/\tTRUE\t1767225600\tcsrftoken\tCSRF123\n" +
-		".instagram.com\tTRUE\t/\tTRUE\t1767225600\tds_user_id\t4567\n" +
-		".instagram.com\tTRUE\t/\tTRUE\t1767225600\tmid\tMID789\n" +
-		".youtube.com\tTRUE\t/\tTRUE\t1767225600\tSID\tSHOULD-BE-DROPPED\n"
-
-	c, ok := ParseCredentials(raw)
-	if !ok {
-		t.Fatal("Netscape 格式应当解析成功")
-	}
-	if c.SessionID != "123%3Aabc%3A9" || c.CSRFToken != "CSRF123" || c.UserID != "4567" {
-		t.Fatalf("三项关键 Cookie 没解出来: %+v", c)
-	}
-	if c.Cookies["mid"] != "MID789" {
-		t.Errorf("其余 Cookie 也应当留着（IG 会看 mid），得到 %v", c.Cookies)
-	}
-	if _, ok := c.Cookies["SID"]; ok {
-		t.Error("别的站的 Cookie 不该带进来")
-	}
-}
-
-// 整段 Cookie 头也要照原样带上，而不是只挑三项。
-func TestParseCredentialsCookieHeaderKeepsAll(t *testing.T) {
-	c, ok := ParseCredentials("sessionid=abc; csrftoken=xyz; ds_user_id=42; ig_did=DEV")
-	if !ok {
-		t.Fatal("Cookie 头应当解析成功")
-	}
-	if c.Cookies["ig_did"] != "DEV" {
-		t.Errorf("多余 Cookie 应当保留，得到 %v", c.Cookies)
-	}
-}
-
-// 少 sessionid 就是没配置，别让它以「已配置」的样子混过去。
-func TestParseCredentialsRequiresSessionID(t *testing.T) {
-	if _, ok := ParseCredentials(".instagram.com\tTRUE\t/\tTRUE\t1\tcsrftoken\tX\n"); ok {
-		t.Error("没有 sessionid 时应当判定为未配置")
-	}
-	if _, ok := ParseCredentials("csrftoken=X; ds_user_id=1"); ok {
-		t.Error("没有 sessionid 的 Cookie 头也应当判定为未配置")
-	}
-}
-
-// 旧的 JSON 写法（库里已经存着的那些）必须还能读。
-func TestParseCredentialsLegacyJSON(t *testing.T) {
-	c, ok := ParseCredentials(`{"sessionid":"s","csrftoken":"c","ds_user_id":"u"}`)
-	if !ok || c.SessionID != "s" || c.CSRFToken != "c" || c.UserID != "u" {
-		t.Fatalf("老 JSON 读不出来: %+v %v", c, ok)
-	}
-}
-
-// IG 的两种 429 必须分开：JSON 是真限流（要冷却），HTML 是风控拦截页（等下去没用、也不该锁 15 分钟）。
-// 2026-10 实测：Cookie 有效（拦截页 HTML 里带着 logged-in class），但 api/v1 全部回 429 + "Page Not Found"。
-func TestBlockPageIsNotRateLimited(t *testing.T) {
-	blockPage := `<!DOCTYPE html><html lang="en" class="no-js logged-in"><head><title>Page Not Found &bull; Instagram</title></head></html>`
+// TestNotFoundWhenProfileMissing：爬虫页里没有资料段也不该报「限流/改版」，要报没这个号。
+func TestNotFoundWhenProfileMissing(t *testing.T) {
 	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write([]byte(blockPage))
-	}, cookieJSON)
-
-	_, err := a.ListPosts(context.Background(), "mini", "")
-	if k := social.KindOf(err); k != social.KindBlocked {
-		t.Fatalf("错误种类 = %s，期望 blocked（%v）", k, err)
-	}
-	// 关键：拦截页不该让平台整体冷却 —— 换了 Cookie 的用户应该能立刻重试。
-	if d := a.throttle.CooldownRemaining(); d > 0 {
-		t.Errorf("拦截页不该设冷却，实际还有 %s", d)
-	}
-	if msg := err.Error(); !strings.Contains(msg, "拦截页") {
-		t.Errorf("错误文案要说清是拦截页，实际 %q", msg)
-	}
-}
-
-// Retry-After 给了就按它冷却，不给才用默认 15 分钟。
-func TestRateLimitedHonoursRetryAfter(t *testing.T) {
-	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Retry-After", "42")
-		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write([]byte(`{"message":"Please wait a few minutes before you try again.","status":"fail"}`))
-	}, cookieJSON)
-	if _, err := a.ListPosts(context.Background(), "mini", ""); social.KindOf(err) != social.KindRateLimited {
-		t.Fatalf("错误种类 = %s，期望 rate_limited", social.KindOf(err))
-	}
-	d := a.throttle.CooldownRemaining()
-	if d <= 30*time.Second || d > 45*time.Second {
-		t.Errorf("冷却时长应当接近 42s，实际 %s", d)
-	}
-}
-
-// 用户换完 Cookie 点「清除冷却并重试」后，必须能立刻再发请求。
-func TestThrottleClearAllowsImmediateRetry(t *testing.T) {
-	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write([]byte(`{"message":"spam"}`))
-	}, cookieJSON)
-	if _, err := a.ListPosts(context.Background(), "mini", ""); err == nil {
-		t.Fatal("应当先撞一次限流")
-	}
-	if a.throttle.CooldownRemaining() <= 0 {
-		t.Fatal("先要进入冷却，才谈得上清除")
-	}
-	a.throttle.Clear()
-	if d := a.throttle.CooldownRemaining(); d != 0 {
-		t.Fatalf("Clear 之后不该还有冷却，实际 %s", d)
-	}
-	if err := a.throttle.Wait(context.Background()); err != nil {
-		t.Errorf("Clear 之后应当可以直接请求，实际 %v", err)
-	}
-}
-
-// TestFetchTokensLoginRedirect 覆盖 2026-11-04 的那次误诊：会话有问题时 IG 不报错，
-// 而是 302 走人，Go 自动跟完，我们手里是一张 472KB、标题也叫 Instagram、
-// 但**没有 dtsg** 的页面。以前一律说「网页版改版或登录墙」，用户查不出原因。
-// 现在按落地地址判定，并且报 needs_auth（不是 stale_parser）——别再去试已经下线的旧接口。
-func TestFetchTokensLoginRedirect(t *testing.T) {
-	cases := []struct {
-		name     string
-		landing  string
-		wantWord string
-	}{
-		{"登录页", "/accounts/login/?next=%2Fnatgeo%2F", "登录页"},
-		{"要验证联系方式", "/accounts/update_risky_contactpoint/?challenge_context=abc", "验证邮箱/手机号"},
-		{"人机验证", "/challenge/?next=%2Fnatgeo%2F", "人机验证"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasPrefix(r.URL.Path, "/accounts/") || strings.HasPrefix(r.URL.Path, "/challenge/") {
-					// 落地页长得跟主页一样：200、HTML、标题 Instagram、没有令牌。
-					w.Header().Set("Content-Type", "text/html; charset=utf-8")
-					_, _ = io.WriteString(w, `<!DOCTYPE html><html><head><title>Instagram</title></head>
-						<body class="no-js not-logged-in">验证一下</body></html>`)
-					return
-				}
-				http.Redirect(w, r, c.landing, http.StatusFound)
-			}, cookieJSON)
-
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_, _, err := a.fetchTokens(ctx, "natgeo")
-			if err == nil {
-				t.Fatal("被 302 到登录/验证页时必须报错")
-			}
-			if k := social.KindOf(err); k != social.KindNeedsAuth {
-				t.Fatalf("应当是 %s，得到 %s（%v）", social.KindNeedsAuth, k, err)
-			}
-			if !strings.Contains(err.Error(), c.wantWord) {
-				t.Fatalf("文案里要说清「%s」: %v", c.wantWord, err)
-			}
-			if !strings.Contains(err.Error(), "/accounts/") && !strings.Contains(err.Error(), "/challenge") {
-				t.Errorf("文案里要带上落地地址，方便排查: %v", err)
-			}
-		})
-	}
-}
-
-// 真的登录态好、页面也是主页，只是令牌注入变了：仍然报 stale_parser（可以降级），
-// 别把「会话没了」也算进这一类。
-func TestFetchTokensShellIsStale(t *testing.T) {
-	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, `<!DOCTYPE html><html><head><title>natgeo</title></head>
-			<body><script>window.__x = 1;</script></body></html>`)
-	}, cookieJSON)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_, _, err := a.fetchTokens(ctx, "natgeo")
-	if k := social.KindOf(err); k != social.KindStaleParser {
-		t.Fatalf("应当是 %s，得到 %s（%v）", social.KindStaleParser, k, err)
-	}
-}
-
-// TestDeadLegacyEndpointIsNotNotFound 覆盖同一轮误诊里那句「Instagram 上没有这个账号」：
-// 旧接口 web_profile_info 现在对**任何** username 都回同一个 404 HTML 页面
-// （2026-11-04 实测 natgeo / 真号 / 瞎编的号、i. 与 www. 各两份、带 cookie 与否，全一样）。
-// 把接口下线说成「博主不存在」，会让人白删订阅。
-func TestDeadLegacyEndpointIsNotNotFound(t *testing.T) {
-	const notFoundHTML = `<!DOCTYPE html><html><head><title>Page Not Found • Instagram</title></head>
-		<body><h2>Sorry, this page isn't available.</h2></body></html>`
-	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = io.WriteString(w, notFoundHTML)
-	}, cookieJSON)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_, err := a.restProfile(ctx, "natgeo")
+		_, _ = w.Write([]byte(`<!DOCTYPE html><html><body>找不到</body></html>`))
+	})
+	_, err := a.GetProfile(context.Background(), "nosuchhandle")
 	if err == nil {
-		t.Fatal("404 HTML 应当报错")
+		t.Fatal("空页面应报错")
 	}
-	if k := social.KindOf(err); k == social.KindNotFound {
-		t.Fatalf("404 的 HTML 页说明接口下线了，不能说成「没有这个账号」: %v", err)
-	}
-	if k := social.KindOf(err); k != social.KindStaleParser {
-		t.Fatalf("应当是 %s（可降级/可诊断），得到 %s（%v）", social.KindStaleParser, k, err)
-	}
-	if !strings.Contains(err.Error(), "下线") {
-		t.Fatalf("文案里要说清是接口下线: %v", err)
-	}
-
-	// JSON 的 404 仍然算「没有这个账号」——别把这条也一起改死。
-	aJSON := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = io.WriteString(w, `{"message":"user not found","status":"fail"}`)
-	}, cookieJSON)
-	_, err = aJSON.restProfile(ctx, "natgeo")
-	if k := social.KindOf(err); k != social.KindNotFound {
-		t.Fatalf("JSON 404 应当是 %s，得到 %s（%v）", social.KindNotFound, k, err)
+	if !strings.Contains(err.Error(), "爬虫页") {
+		t.Fatalf("文案要说清是爬虫页结构的问题：%v", err)
 	}
 }

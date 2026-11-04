@@ -133,7 +133,7 @@ func TestTakenAtOfPK(t *testing.T) {
 	}
 }
 
-// TestAnonSlicePage 校验本地切片：100 条按 gqlPageSize 切页、断点是 anon:{end}，
+// TestAnonSlicePage 校验本地切片：100 条按 pageSize 切页、断点是 anon:{end}，
 // 而且轮播帖的单帖详情**只打一次**（第二次切同一页走 6 小时缓存）。
 func TestAnonSlicePage(t *testing.T) {
 	a, _, detailCalls := anonServer(t, "")
@@ -149,35 +149,35 @@ func TestAnonSlicePage(t *testing.T) {
 	}
 	c := &anonCache{nodes: nodes, lsd: "L"}
 	p1 := a.anonSlicePage(context.Background(), "kaedekaren0825", c, 0)
-	if len(p1.Posts) != gqlPageSize {
-		t.Fatalf("第一页 %d 条，期望 %d", len(p1.Posts), gqlPageSize)
+	if len(p1.Posts) != pageSize {
+		t.Fatalf("第一页 %d 条，期望 %d", len(p1.Posts), pageSize)
 	}
-	if p1.NextCursor != "anon:"+itoa(gqlPageSize) {
+	if p1.NextCursor != "anon:"+itoa(pageSize) {
 		t.Fatalf("第一页断点 %q", p1.NextCursor)
 	}
-	if *detailCalls != gqlPageSize {
-		t.Fatalf("第一页的 %d 条轮播应各打 1 次详情，实际 %d", gqlPageSize, *detailCalls)
+	if *detailCalls != pageSize {
+		t.Fatalf("第一页的 %d 条轮播应各打 1 次详情，实际 %d", pageSize, *detailCalls)
 	}
 	offset, ok := anonOffset(p1.NextCursor)
-	if !ok || offset != gqlPageSize {
+	if !ok || offset != pageSize {
 		t.Fatalf("断点解析 %d %v", offset, ok)
 	}
 	// 同一页再切一次：全走缓存，不再打详情
 	a.anonSlicePage(context.Background(), "kaedekaren0825", c, 0)
-	if *detailCalls != gqlPageSize {
+	if *detailCalls != pageSize {
 		t.Fatalf("重复切页不该再打详情，实际 %d", *detailCalls)
 	}
 	// 100 条 = 33 + 33 + 34
 	p2 := a.anonSlicePage(context.Background(), "kaedekaren0825", c, offset)
-	if len(p2.Posts) != gqlPageSize || p2.NextCursor != "anon:"+itoa(2*gqlPageSize) {
+	if len(p2.Posts) != pageSize || p2.NextCursor != "anon:"+itoa(2*pageSize) {
 		t.Fatalf("第二页 %d 条，断点 %q", len(p2.Posts), p2.NextCursor)
 	}
-	p3 := a.anonSlicePage(context.Background(), "kaedekaren0825", c, 2*gqlPageSize)
-	if len(p3.Posts) != gqlPageSize || p3.NextCursor != "anon:"+itoa(3*gqlPageSize) {
+	p3 := a.anonSlicePage(context.Background(), "kaedekaren0825", c, 2*pageSize)
+	if len(p3.Posts) != pageSize || p3.NextCursor != "anon:"+itoa(3*pageSize) {
 		t.Fatalf("第三页 %d 条，断点 %q", len(p3.Posts), p3.NextCursor)
 	}
-	p4 := a.anonSlicePage(context.Background(), "kaedekaren0825", c, 3*gqlPageSize)
-	if want := anonMaxFirst - 3*gqlPageSize; len(p4.Posts) != want {
+	p4 := a.anonSlicePage(context.Background(), "kaedekaren0825", c, 3*pageSize)
+	if want := anonMaxFirst - 3*pageSize; len(p4.Posts) != want {
 		t.Fatalf("最后一页 %d 条，期望 %d", len(p4.Posts), want)
 	}
 	if p4.NextCursor != "" {
@@ -199,23 +199,20 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// anonServer 起一个「会话已死、爬虫页还活着」的假 IG。
+// anonServer 起一个假 IG。
 //
-//   - 普通 UA 的 GET /{handle}/ → 302 到 /accounts/login/（模拟会话被拦）
 //   - 爬虫 UA 的 GET /{handle}/ → 爬虫页（200，带资料 + 网格 + LSD）
-//   - POST /api/graphql：网格查询回 first 条；单帖查询回详情
+//   - 普通 UA 的 GET /{handle}/ → 404（这条路径已经不存在，走到就是 bug）
+//   - POST /api/graphql：网格查询回节点；单帖查询回详情
 func anonServer(t *testing.T, gridErr string) (*Adapter, *int, *int) {
 	t.Helper()
 	var gridCalls, detailCalls int
 	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/") {
-			http.Error(w, `{"message":"down"}`, http.StatusNotFound)
-			return
-		}
 		if r.Method == http.MethodGet {
 			if !strings.Contains(r.Header.Get("User-Agent"), "Googlebot") {
-				// 会话路径：跟 graphql.go 的 loginRedirectError 对齐（302 到登录页）
-				http.Redirect(w, r, "/accounts/login/?next=%2Fkaedekaren0825%2F", http.StatusFound)
+				// 不带爬虫 UA 就只有登录壳：这条路径现在一次都不该被走到。
+				t.Errorf("不该用普通 UA 抓主页（这条路径已经删了）")
+				w.WriteHeader(http.StatusNotFound)
 				return
 			}
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -254,7 +251,7 @@ func anonServer(t *testing.T, gridErr string) (*Adapter, *int, *int) {
 		default:
 			http.Error(w, "unknown doc", http.StatusBadRequest)
 		}
-	}, "")
+	})
 	return a, &gridCalls, &detailCalls
 }
 
@@ -263,8 +260,8 @@ func itoa2(n int) string {
 	return string(b)
 }
 
-// TestAnonProfileWhenSessionDead：会话被 302 到登录页时，资料改由爬虫页给出。
-func TestAnonProfileWhenSessionDead(t *testing.T) {
+// TestAnonProfile：资料来自爬虫页里的 xig_user_by_igid_v2。
+func TestAnonProfile(t *testing.T) {
 	a, _, _ := anonServer(t, "")
 	acct, err := a.GetProfile(context.Background(), "kaedekaren0825")
 	if err != nil {
@@ -278,7 +275,7 @@ func TestAnonProfileWhenSessionDead(t *testing.T) {
 	}
 }
 
-// TestAnonListPostsGridAndCarousel：会话断了也能出帖子；轮播帖的子图靠单帖详情补齐。
+// TestAnonListPostsGridAndCarousel：网格出帖子；轮播帖的子图靠单帖详情补齐。
 func TestAnonListPostsGridAndCarousel(t *testing.T) {
 	a, gridCalls, detailCalls := anonServer(t, "")
 	page, err := a.ListPosts(context.Background(), "kaedekaren0825", "")
@@ -346,30 +343,25 @@ func TestAnonGridFallsBackToPageEdges(t *testing.T) {
 	}
 }
 
-// TestAnonBothPathsFailKeepsNeedsAuth：两条路都不通时，报的仍然是会话那条的错，
-// 并且把免登录的结论也带上（用户能动手修的是会话）。
-func TestAnonBothPathsFailKeepsNeedsAuth(t *testing.T) {
+// TestAnonEmptyPageIsStaleParser：爬虫页里没有资料段（IG 又改了页面）→ stale_parser，
+// 并且如实说「爬虫页里没有资料段」，而不是含糊的「抓取失败」。
+func TestAnonEmptyPageIsStaleParser(t *testing.T) {
 	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/") {
-			http.Error(w, `{"message":"down"}`, http.StatusNotFound)
-			return
-		}
-		if strings.Contains(r.Header.Get("User-Agent"), "Googlebot") {
-			// 爬虫页也不给数据（模拟 IG 又改了爬虫页）
+		if r.Method == http.MethodGet {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = w.Write([]byte(`<!DOCTYPE html><html><body>nothing</body></html>`))
 			return
 		}
-		http.Redirect(w, r, "/accounts/login/", http.StatusFound)
-	}, "")
+		http.Error(w, "no graphql", http.StatusBadRequest)
+	})
 	_, err := a.GetProfile(context.Background(), "kaedekaren0825")
 	if err == nil {
-		t.Fatal("两条路都不通时应该报错")
+		t.Fatal("空页面应该报错")
 	}
-	if social.KindOf(err) != social.KindNeedsAuth {
-		t.Fatalf("错误种类应为 needs_auth（会话才是用户能修的那条），实际 %s：%v", social.KindOf(err), err)
+	if social.KindOf(err) != social.KindStaleParser {
+		t.Fatalf("错误种类应为 stale_parser，实际 %s：%v", social.KindOf(err), err)
 	}
-	if !strings.Contains(err.Error(), "验证") && !strings.Contains(err.Error(), "登录") {
-		t.Fatalf("文案应说清会话怎么了：%v", err)
+	if !strings.Contains(err.Error(), "资料段") {
+		t.Fatalf("文案应说清是页面结构变了：%v", err)
 	}
 }

@@ -352,8 +352,6 @@ export interface SocialSettings {
   syncHours: number;
   /** 「只发现最新几条」那一轮的间隔（分钟，0 = 关） */
   discoverMinutes: number;
-  /** Instagram 是否已配 Cookie（Cookie 本身不回显） */
-  hasInstagramCookie: boolean;
   /**
    * 图片库根目录：抓到的照片自动下到这里，按 `{名字}/{年}/{月}/` 分目录。
    * 不是任何一个视频库的 rootPath——照片和影片分开归档。
@@ -446,11 +444,9 @@ export interface SettingsPatch {
   downloadConcurrency?: number;
   downloadRateKb?: number;
   openlist?: { baseUrl?: string; root?: string; token?: string };
-  /** instagramCookie 传空串表示清除 */
   social?: {
     syncHours?: number;
     discoverMinutes?: number;
-    instagramCookie?: string;
     /** 改了之后服务端会立刻补一轮存量照片的下载 */
     photoRoot?: string;
   };
@@ -921,7 +917,6 @@ export interface MomentResolve {
 export interface MomentsManageResponse {
   items: MomentAccount[];
   stats: { accounts: number; posts: number; photos: number; errors: number };
-  hasInstagramCookie: boolean;
 }
 
 // ---------- YouTube 订阅（M6） ----------

@@ -550,13 +550,15 @@ type Video = {
 `performerId` + `performerName`（这个链接已经躺在某个艺人的社交链接里时给，用来在添加前
 提示「会自动关联到艺人 X」）。
 
-未配 Cookie 时探测 Instagram 直接 409 `needs_auth`，消息里带「去哪配」：
+Instagram 只走免登录（2026-11-04 起，见 `docs/M5-SOCIAL.md` §15.19），**没有 Cookie 可配**，
+所以不会再出现「先去配 Cookie 再探测」这一步。被上游拦时回 429 `blocked`：
 
 ```json
-{ "error": { "code": "needs_auth", "message": "Instagram 需要登录态：请在设置 → 动态里粘贴 sessionid" } }
+{ "error": { "code": "blocked", "message": "Instagram 把这次请求拦了（风控页）…" } }
 ```
 
-前端拿到 `needs_auth` 会在同一处渲染「去设置 → 动态里粘贴 Instagram Cookie」的链接。
+前端拿到 `blocked` / `needs_auth` 会在同一处渲染「去设置 → 网络与代理里给这个站换个出口 IP」
+的链接（两个站都不用凭证，能动手的只剩出口 IP）。
 
 ### B4. `POST /api/moments/accounts`
 
@@ -620,31 +622,30 @@ type Video = {
 
 ### B11. `GET /api/manage/moments`
 
-管理页快照：`items`（与 B2 同构）+ `stats`{accounts, posts, photos, errors} + `hasInstagramCookie`。
+管理页快照：`items`（与 B2 同构）+ `stats`{accounts, posts, photos, errors}。
+（`hasInstagramCookie` 已在 2026-11-04 随 Instagram Cookie 一起去掉，见 §B12。）
 
 ### B12. 设置扩展
 
 `GET/PUT /api/settings` 的 `social` 字段：
 
 ```json
-{ "syncHours": 6, "hasInstagramCookie": true, "instagramCookie": "（只写，永不回显）" }
+{ "syncHours": 6, "discoverMinutes": 60, "photoRoot": "./media/photos" }
 ```
 
-`syncHours` 夹在 1–48；`instagramCookie` 只写：不传 = 不动，传空串 = 清除。
+`syncHours` 夹在 1–48，`discoverMinutes` 夹在 0–720（0 = 关）。
+
+**这里没有 `instagramCookie` / `hasInstagramCookie` 了**（2026-11-04 用户要求）：
+Instagram 一律免登录抓，设置里那一格、接口里那两个字段、库里那条密文一起删掉，
+老库启动时由 `retireInstagramCookie` 清掉（`docs/M5-SOCIAL.md` §15.19）。
+传这两个字段也不会报错，只是被忽略。
 
 `platformProxy` 里的 `instagram` / `x` 与影片平台那三项同一套机制：
 **设置 > 环境变量**，平台专用 > 全局；每个请求发出去之前才取值，所以**保存即生效、不用重启**
 （`internal/proxying`，`Transport.Proxy` 直接接到设置表上）。
 
-`instagramCookie` 收三种写法（服务端统一归一化成 JSON 落库，加密保存）：
-
-1. 浏览器扩展导出的 **Netscape cookies.txt**（`# Netscape HTTP Cookie File`，每行 7 个制表符字段，
-   `#HttpOnly_` 前缀照收；非 `instagram.com` 的行直接丢掉）；
-2. 整段 Cookie 头 `a=1; b=2`；
-3. 归一化后的 JSON（内部存的形式，也认）。
-
-只要里面没有 `sessionid` 就按「未配置」处理并返回 409 `needs_auth`。除三项关键 Cookie 外，
-其余（`mid` / `ig_did` / `datr` 等）会原样带上——IG 的接口少了它们照样会 401 或回空列表。
+Instagram 现在**没有任何凭证写法**：Netscape cookies.txt / Cookie 头 / JSON 三种归一化
+（`igram.NormalizeCookie`）随登录态路径一起删了。被拦住时能换的只有出口 IP。
 
 ### B13. SSE 新增事件
 

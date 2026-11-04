@@ -756,12 +756,14 @@
         <div class="mt-3 rounded-xl bg-raise p-2.5" role="alert">
           <p class="text-meta text-brick">{addError}</p>
           {#if addNeedsAuth || addBlocked}
+            <!-- 两个站现在都是免登录抓（2026-11-04），所以「换一份 Cookie」这种指引已经不存在了：
+                 被拦时能动手的是出口 IP，指向代理设置。 -->
             <a
               data-link
               href="/settings"
               class="mt-1.5 inline-block text-meta text-fg underline decoration-line underline-offset-2 hover:decoration-fg"
-              onclick={() => ui.openSettings('social')}
-              >{addBlocked ? '去设置里换一份 Cookie' : '去设置 → 动态里粘贴 Instagram Cookie'}</a
+              onclick={() => ui.openSettings('network')}
+              >去设置 → 网络与代理里给这个站换个出口 IP</a
             >
           {/if}
           {#if addCooling}
@@ -769,7 +771,7 @@
               type="button"
               class="mt-1.5 text-meta text-fg underline decoration-line underline-offset-2 hover:decoration-fg"
               onclick={() => void retryAfterCooldown()}
-              >换过 Cookie 了？清除冷却并重试</button
+              >换过出口 IP 了？清除冷却并重试</button
             >
           {/if}
         </div>

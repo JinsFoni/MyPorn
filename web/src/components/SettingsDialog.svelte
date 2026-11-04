@@ -27,7 +27,7 @@
     libraryRoot: './media',
     ffmpegAvailable: true,
     openlist: { baseUrl: 'http://192.168.0.108:5244', root: '/123云盘/资源目录/MyPorn', hasToken: true },
-    social: { syncHours: 6, discoverMinutes: 60, hasInstagramCookie: false, photoRoot: './media/photos' },
+    social: { syncHours: 6, discoverMinutes: 60, photoRoot: './media/photos' },
     youtube: {
       syncHours: 6,
       backfillLimit: 200,
@@ -47,7 +47,7 @@
     { id: 'network', label: '网络与代理', hint: '全局与按平台代理' },
     { id: 'upload', label: '上传', hint: 'OpenList 上传目标' },
     { id: 'download', label: '下载', hint: '并发、限速与自动下载' },
-    { id: 'social', label: '动态', hint: '博主抓取频率与 Instagram 登录态' },
+    { id: 'social', label: '动态', hint: '博主抓取频率与图片库落点' },
     { id: 'youtube', label: 'YouTube', hint: 'yt-dlp、画质与登录态' },
     { id: 'bilibili', label: 'B 站', hint: '登录态与画质' },
     { id: 'libraries', label: '本地库', hint: '落盘目录与空间' },
@@ -90,7 +90,6 @@
   let socialSyncHours = $state(6);
   let socialDiscoverMinutes = $state(60);
   let photoRoot = $state('');
-  let instagramCookie = $state('');
   let youtubeProxy = $state('');
   let ytSyncHours = $state(6);
   let ytBackfillLimit = $state(200);
@@ -127,7 +126,6 @@
     socialSyncHours = value.social.syncHours;
     socialDiscoverMinutes = value.social.discoverMinutes ?? 60;
     photoRoot = value.social.photoRoot;
-    instagramCookie = '';
     youtubeProxy = value.platformProxy.youtube ?? '';
     ytSyncHours = value.youtube.syncHours;
     ytBackfillLimit = value.youtube.backfillLimit;
@@ -223,11 +221,6 @@
       discoverMinutes: socialDiscoverMinutes,
       photoRoot: photoRoot.trim(),
     };
-    // Cookie 只在用户真的粘了新内容时才提交：留空 = 不动（服务端把它当"清除"，
-    // 所以这里必须"没填就不带这个字段"）。
-    const cookie = instagramCookie.trim();
-    if (cookie.length > 0) patch.social = { ...patch.social, instagramCookie: cookie };
-
     patch.youtube = {
       syncHours: ytSyncHours,
       backfillLimit: ytBackfillLimit,
@@ -1059,6 +1052,13 @@
                           不需要登录。免费配额是每 15 分钟 30 次请求（按 IP 计），一次抓取只用 1–2 次。
                         </p>
                       </div>
+                      <div>
+                        <p class="label-meta mb-1.5">Instagram</p>
+                        <p class="rounded-xl bg-ink/35 px-3 py-2 text-meta text-dim">
+                          也不需要登录（冒充搜索引擎爬虫抓公开页）：拿得到资料 + 最新 <strong class="text-fg">100 条</strong>，
+                          含原图与轮播全部子图。这条查询不能翻页，第 101 条往前的老帖子拿不到。
+                        </p>
+                      </div>
                     </div>
 
                     <div class="mt-5">
@@ -1080,33 +1080,6 @@
                       </p>
                     </div>
 
-                    <div class="mt-5">
-                      <div class="flex items-center justify-between">
-                        <label for="ig-cookie" class="label-meta">Instagram Cookie</label>
-                        <span class="text-meta {settings.social.hasInstagramCookie ? 'text-sage' : 'text-dim'}">
-                          {settings.social.hasInstagramCookie ? '已配置' : '未配置'}
-                        </span>
-                      </div>
-                      <p class="mt-1 text-meta text-dim">
-                        Instagram 已经不能免登录抓取，必须贴一段登录态。两种都认：
-                        <span class="text-muted">① 浏览器扩展导出的 cookies.txt</span>（Netscape 格式，
-                        <code class="font-mono"># Netscape HTTP Cookie File</code> 那种，整份粘进来即可，
-                        别的站的 Cookie 会被丢掉）；
-                        <span class="text-muted">② 开发者工具 → Network → 任选一个请求</span>，
-                        把请求头里的 Cookie 整段复制过来。Cookie 加密存库，保存后不再回显。
-                      </p>
-                      <textarea
-                        id="ig-cookie"
-                        class="field mt-2 h-32 resize-y font-mono text-meta"
-                        placeholder={settings.social.hasInstagramCookie
-                          ? '已保存 · 留空表示不修改'
-                          : '# Netscape HTTP Cookie File —— 整份 cookies.txt 粘进来，或 sessionid=…; csrftoken=…'}
-                        spellcheck="false"
-                        autocomplete="off"
-                        bind:value={instagramCookie}
-                        disabled={saving}
-                      ></textarea>
-                    </div>
                   </section>
                 {/if}
 

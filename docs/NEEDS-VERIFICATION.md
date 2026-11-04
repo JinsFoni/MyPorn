@@ -181,7 +181,7 @@ make backend           # 先编译
 | 🆕 IG 主路径 | `POST https://www.instagram.com/api/graphql`，`doc_id=29600383452901789`（`PolarisProfilePostsQuery`）+ 从主页 HTML 抠的 `lsd`/`fb_dtsg`。**必须带 `Referer: https://www.instagram.com/{handle}/` 与 `Sec-Fetch-Site/Mode/Dest`**，缺了会回 200 + 513 KB 网页壳 | 502 `stale_parser`「主页里没找到 lsd/fb_dtsg」或「响应里没有帖子连接」→ `doc_id` 随发版变了，去浏览器请求体里抄新的 |
 | 🆕 IG 网页壳 | GraphQL 回 `text/html`（513 KB、`<!DOCTYPE html>`）而不是 JSON：令牌和会话对不上，或这次请求被判自动化 | 适配器已经会换令牌重试一次，两次都是网页壳就报 `blocked`；此时换出口 IP，别连着重试 |
 | IG 出口 IP | 抓 IG 建议固定住宅代理：设置 → 网络与代理 → Instagram 专用代理（保存即生效，`proxy_instagram`），环境变量 `PLATFORM_PROXY_INSTAGRAM` / `GLOBAL_PROXY` 只作兜底。机房 IP 容易被直接拦 | 配了代理仍报 `blocked` → 该代理 IP 也脏，换一个（可在同一处直接改，不用重启） |
-| IG Cookie 写法 | 三种都认：Netscape cookies.txt（`# Netscape HTTP Cookie File`，7 个制表符字段，`#HttpOnly_` 前缀）、整段 Cookie 头、JSON。非 `instagram.com` 的行丢掉 | 贴上整份导出仍报「没找到 sessionid」→ 导出文件的列数/分隔符变了（应把原始行贴出来核对） |
+| IG 免登录路径 | 2026-11-04 起 Instagram **不用凭证**（Cookie 写法那三种随登录态路径一起删了，见 `docs/M5-SOCIAL.md` §15.19）。唯一要盯的是爬虫页结构：`xig_user_by_igid_v2` + `["LSD",[],{"token":…}]` 还在不在 | 报「爬虫页里没有资料段」= IG 又改了页面；此时抓一份 `curl -A Googlebot https://www.instagram.com/{handle}/` 的原始 HTML 核对 |
 | IG 首屏 | GraphQL `count=33`（服务端上限，传 50 也只回 33）。`variables.data` 里 4 个布尔值必填，只传 `count` 翻页会 `field_exception` | 502 `stale_parser` |
 | IG 翻页 | 换 `variables.after = page_info.end_cursor`；库里的游标形如 `gql:…`（旧断点 `{id}|{maxID}` 仍可跑完） | 只抓到第一页 → 多半是 `after` 没带上或 `data` 少参数 |
 | IG 部分失败 | `data` 整页齐全、`errors[]` 里挂着每个 geotag 节点的 `location.profile_pic_url` `field_exception` —— **当成功处理** | 每翻一页都报「服务端错误」→ 判定条件被写成了「errors 非空即失败」 |

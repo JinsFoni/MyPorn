@@ -129,12 +129,11 @@ func (s *Server) handleListMomentAccounts(w http.ResponseWriter, r *http.Request
 		"platforms": []map[string]any{
 			{"key": "x", "name": "X", "needsCookie": false,
 				"hasCookie": true, "hint": "免登录可用：新帖从主页发现，历史每次 20 帖（越同步越全）"},
-			// Instagram 2026-11-04 起免登录也能抓（冒充爬虫 UA 的公开页，见
-			// internal/social/igram/anon.go）：资料 + 最新 100 条，含原图与轮播全图。
-			// 配不配 Cookie 都能上墙，区别只在「能不能翻到第 101 条往前」。
+			// Instagram 只走免登录（冒充爬虫 UA 的公开页，见 internal/social/igram/anon.go）：
+			// 资料 + 最新 100 条，含原图与轮播全图。没有 Cookie 可配，也没有第 101 条往前。
 			{"key": "instagram", "name": "Instagram", "needsCookie": false,
-				"hasCookie": s.hasInstagramCookie(),
-				"hint": "免登录可用：资料 + 最新 100 条（含原图）；想翻更早的历史再贴 Cookie"},
+				"hasCookie": false,
+				"hint": "免登录抓：资料 + 最新 100 条（含原图），更早的历史拿不到"},
 		},
 	})
 }
@@ -489,16 +488,7 @@ func (s *Server) handleManageMoments(w http.ResponseWriter, r *http.Request) {
 			"photos":   stats.Photos,
 			"errors":   stats.Errors,
 		},
-		"hasInstagramCookie": s.hasInstagramCookie(),
 	})
-}
-
-// hasInstagramCookie 报告 Instagram 是否配了登录态（界面据此提示先填 Cookie）。
-func (s *Server) hasInstagramCookie() bool {
-	if v, err := s.st.GetSecret(s.box, "social_cookie_instagram"); err == nil && strings.TrimSpace(v) != "" {
-		return true
-	}
-	return false
 }
 
 // writeSocialErr 把适配器的错误分类翻成 HTTP 状态与错误码。

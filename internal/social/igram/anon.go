@@ -1,8 +1,9 @@
-// Instagram 的免登录（匿名）路径：冒充搜索引擎爬虫，拿 IG 给 SEO 用的那份公开页面。
+// Instagram 的免登录抓取：冒充搜索引擎爬虫，拿 IG 给 SEO 用的那份公开页面。
 //
-// 为什么需要它：2026-11-04 那个会话被上游 302 到 /accounts/update_risky_contactpoint（要验证
-// 邮箱/手机号，见 graphql.go 的 loginRedirectError），账号本身也进了风控。这时登录态这条路
-// 彻底走不通，而「免登录能不能抓」是必须量出来的问题——量的结果：**能，且能拿到原图**。
+// 2026-11-04 起这是**唯一**的路径（用户要求：设置里去掉 Instagram Cookie，以后一律免登录）。
+// 之前它只是登录态断掉时的兜底，因为会话能翻页追全量；但那把 Cookie 被上游 302 到
+// /accounts/update_risky_contactpoint（要验证邮箱/手机号）之后，会话这条路整条走不通了，
+// 于是量了「免登录到底能拿到什么」，结论是：**能，且能拿到原图**。
 //
 // 逐条实测（同一台机器、同一个出口 IP、同一分钟，2026-11-04 15:4x）：
 //
@@ -24,9 +25,8 @@
 //     `taken_at ≈ (pk>>23) + 1314220021721 ms`。实测两帖误差 0.66 s 与 40 s——排序够用，
 //     轮播帖反正会走第 3 条拿到精确值。
 //
-// 所以「免登录」= 资料 + 最新 100 条（原图、正文、时间、轮播全部子图），缺的只有第 101 条
-// 往前的老帖子。这条路径永远排在登录态后面：有会话就用会话（能翻页、能追全量），
-// 会话断了才走这里，免得为了省事把翻页能力丢掉。
+// 所以免登录 = 资料 + 最新 100 条（原图、正文、时间、轮播全部子图），缺的只有第 101 条
+// 往前的老帖子。这一点在界面上要说清楚：`backfill_done` 会直接落真，不再有「越同步越全」。
 package igram
 
 import (
@@ -53,7 +53,7 @@ const (
 	anonMaxFirst = 100
 	// anonCursorPrefix 标记「这个断点是免登录路径的本地切片序号」。
 	//
-	// 免登录查询不能翻页，所以一页 100 条拉回来后在本地按 gqlPageSize 切片，
+	// 免登录查询不能翻页，所以一页 100 条拉回来后在本地按 pageSize 切片，
 	// 断点写成 anon:{offset}。缓存过期也不丢进度：拿不到缓存就重新拉一遍 100 条再切。
 	anonCursorPrefix = "anon:"
 	// anonPageTTL 是本地切片缓存的存活时间：一轮同步（几页）内复用，跨轮次重拉。
@@ -156,24 +156,16 @@ func (a *Adapter) anonCursorPage(ctx context.Context, handle, cursor string) (*s
 	return a.anonSlicePage(ctx, handle, c, offset), nil
 }
 
-// anonFirstPage 是免登录路径的第一页。sessionErr 是登录态那条路失败的原因，
-// 只在免登录也不通时才用它来定错误种类（用户能动手修的是会话，不是爬虫页）。
-func (a *Adapter) anonFirstPage(ctx context.Context, handle string, sessionErr error) (*social.Page, error) {
+// anonFirstPage 是第一页：拿一次免登录首屏，解析前 pageSize 条。
+func (a *Adapter) anonFirstPage(ctx context.Context, handle string) (*social.Page, error) {
 	c, err := a.anonGrid(ctx, handle, false)
 	if err != nil {
-		kind := social.KindNeedsAuth
-		if sessionErr != nil {
-			kind = social.KindOf(sessionErr)
-		}
-		return nil, &social.Error{
-			Kind:    kind,
-			Message: fmt.Sprintf("%v；免登录爬虫页也不通：%v", sessionErr, err),
-		}
+		return nil, err
 	}
 	return a.anonSlicePage(ctx, handle, c, 0), nil
 }
 
-// anonSlicePage 把缓存的节点列表按 gqlPageSize 切一页，**只解析这一页**。
+// anonSlicePage 把缓存的节点列表按 pageSize 切一页，**只解析这一页**。
 //
 // 一页 33 条里通常有十几条轮播，每条要一次单帖详情（3 s 间隔）：这是免登录路径的主要耗时，
 // 也是为什么 GetProfile 绝不走这里（它只读 root）。
@@ -182,7 +174,7 @@ func (a *Adapter) anonSlicePage(ctx context.Context, handle string, c *anonCache
 	if offset >= len(c.nodes) {
 		return page
 	}
-	end := offset + gqlPageSize
+	end := offset + pageSize
 	if end > len(c.nodes) {
 		end = len(c.nodes)
 	}
@@ -536,6 +528,12 @@ func (a *Adapter) anonGraphQL(ctx context.Context, handle, lsd, docID, friendly 
 		}
 	}
 	return body, nil
+}
+
+// gqlError 是 IG GraphQL 的错误条目（只需 message 与 code 两项就够定性）。
+type gqlError struct {
+	Message string `json:"message"`
+	Code    int    `json:"code"`
 }
 
 // shortcodeOfPK 由 pk 推短码。

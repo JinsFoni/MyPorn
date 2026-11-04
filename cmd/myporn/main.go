@@ -67,6 +67,22 @@ func reportKeyState(st *store.Store, box *secret.Box, logger *slog.Logger) {
 	}
 }
 
+// retireInstagramCookie 删掉老库里那条 Instagram Cookie（一次性）。
+//
+// 2026-11-04 用户要求：Instagram 以后一律免登录抓，设置里不再有 Cookie 这一项。
+// 那条密文（social_cookie_instagram）留着没有意义——代码已经不读它，留着只是多一处
+// 泄漏面，而且它是一把被上游风控的会话（302 到 update_risky_contactpoint）。
+// 每次启动都执行一遍：删过的库再跑是 0 行，无害。
+func retireInstagramCookie(st *store.Store, logger *slog.Logger) {
+	n, err := st.DeleteSecret("social_cookie_instagram")
+	switch {
+	case err != nil:
+		logger.Warn("删除 Instagram Cookie 失败", "err", err)
+	case n > 0:
+		logger.Info("已删除 Instagram Cookie（Instagram 改为免登录抓取）")
+	}
+}
+
 // buildVersion 由链接期注入（Dockerfile / release workflow 传 -X main.buildVersion=v1.2.3）；
 // 本机 go build 不带它，就沿用 config 里的默认版本。留着是为了让 /healthz 直接说出
 // 「这个容器是哪个 release」，排查「镜像到底更新没更新」时不用去比对 image digest。
@@ -126,6 +142,7 @@ func main() {
 	}
 	defer st.Close()
 	reportKeyState(st, box, logger)
+	retireInstagramCookie(st, logger)
 
 	// 代理解析器只建一次：所有 HTTP 客户端都通过它取代理，于是「设置里改代理」即时生效。
 	px := proxying.New(st, cfg)
@@ -292,15 +309,6 @@ func buildSocialRegistry(cfg *config.Config, st *store.Store, box *secret.Box, l
 	px *proxying.Resolver) (*social.Registry, error) {
 	reg := social.NewRegistry()
 
-	// 设置读取：Cookie 这类敏感值存的是密文，读不到再退回明文（兼容老数据）。
-	setting := func(key string) string {
-		if v, err := st.GetSecret(box, key); err == nil && v != "" {
-			return v
-		}
-		v, _ := st.GetSetting(key)
-		return v
-	}
-
 	xClient, err := platform.NewDynamicHTTPClient(proxyFunc(px, "x"), 25*time.Second)
 	if err != nil {
 		log.Warn("X 客户端初始化失败，改用直连", "err", err)
@@ -315,7 +323,8 @@ func buildSocialRegistry(cfg *config.Config, st *store.Store, box *secret.Box, l
 		log.Warn("Instagram 客户端初始化失败，改用直连", "err", err)
 		igClient = nil
 	}
-	reg.Register(igram.New(igClient, setting))
+	// Instagram 不需要任何凭证：2026-11-04 起只走免登录（设置里的 Cookie 一并删掉了）。
+	reg.Register(igram.New(igClient))
 
 	return reg, nil
 }

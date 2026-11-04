@@ -938,9 +938,6 @@
             {/if}
           </span>
           <div class="ml-auto flex items-center gap-2">
-            {#if moments && !moments.hasInstagramCookie}
-              <span class="text-meta text-dim">Instagram 未配置 Cookie，加不了 IG 博主</span>
-            {/if}
             <button type="button" class="btn btn-ghost h-8" onclick={() => void loadMoments()}>刷新</button>
             <button type="button" class="btn h-8" onclick={() => navigate('/moments')}>打开照片墙</button>
           </div>
