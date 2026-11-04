@@ -72,6 +72,16 @@ type Adapter struct {
 	// 跨轮次则重新抓（令牌跟着页面加载走，久放会被轮换掉）。
 	mu  sync.Mutex
 	tok tokenCache
+	// anon 是免登录路径（anon.go）的首屏缓存：资料 + 最新 ≤100 条帖子。
+	anon *anonCache
+	// anonPosts 是免登录单帖详情的缓存（pk → 帖子），免得每轮重拉同一批轮播帖。
+	anonPosts map[string]anonPostCache
+}
+
+// anonPostCache 是单帖详情缓存的一条。
+type anonPostCache struct {
+	post social.Post
+	at   time.Time
 }
 
 func New(client *http.Client, setting social.SettingFunc) *Adapter {
@@ -91,8 +101,10 @@ func New(client *http.Client, setting social.SettingFunc) *Adapter {
 func (a *Adapter) Key() string  { return "instagram" }
 func (a *Adapter) Name() string { return "Instagram" }
 
-// NeedsCookie 为 true：这个站没有免登录路径。
-func (a *Adapter) NeedsCookie() bool { return true }
+// NeedsCookie 为 false：2026-11-04 量出来免登录能抓（冒充爬虫 UA 的公开页，
+// 见 anon.go 文件头），只是拿不到第 101 条往前的历史。所以界面上不该再显示
+// 「这个平台必须配 Cookie」——配了更好（能翻页追全量），不配也能上墙。
+func (a *Adapter) NeedsCookie() bool { return false }
 
 func (a *Adapter) Throttle() *social.Throttle { return a.throttle }
 
@@ -495,15 +507,31 @@ func (a *Adapter) GetProfile(ctx context.Context, handle string) (*social.Accoun
 	if err == nil {
 		return acct, nil
 	}
-	if social.KindOf(err) != social.KindStaleParser {
-		return nil, err
+	sessionErr := err
+	if social.KindOf(err) == social.KindStaleParser {
+		acct, restErr := a.restProfile(ctx, handle)
+		if restErr == nil {
+			return acct, nil
+		}
+		sessionErr = social.StaleParser(fmt.Sprintf(
+			"Instagram 两条路都不通：GraphQL（doc_id=%s）%v；旧接口 web_profile_info %v", gqlDocID, err, restErr))
 	}
-	acct, restErr := a.restProfile(ctx, handle)
-	if restErr == nil {
+	// 登录态这条路不通（没配 Cookie / 登录失效 / 被要求验证 / 被拦 / 限流 / 接口下线）
+	// → 走免登录爬虫页。这条路径 2026-11-04 实测可用，见 anon.go 文件头。
+	if acct, anonErr := a.anonProfile(ctx, handle); anonErr == nil {
 		return acct, nil
 	}
-	return nil, social.StaleParser(fmt.Sprintf(
-		"Instagram 两条路都不通：GraphQL（doc_id=%s）%v；旧接口 web_profile_info %v", gqlDocID, err, restErr))
+	return nil, combinePaths(sessionErr, "资料")
+}
+
+// combinePaths 把「会话两条路 + 免登录」的结论合成一条错误，种类跟着会话那条走
+// （用户能动手修的是会话；免登录只是兜底）。
+func combinePaths(sessionErr error, what string) error {
+	kind := social.KindNeedsAuth
+	if sessionErr != nil {
+		kind = social.KindOf(sessionErr)
+	}
+	return &social.Error{Kind: kind, Message: sessionErr.Error() + "；免登录爬虫页也拿不到" + what}
 }
 
 // restProfile 是旧的 web_profile_info 路径，只在 GraphQL 断掉时兜底。
@@ -538,12 +566,17 @@ func (a *Adapter) restProfile(ctx context.Context, handle string) (*social.Accou
 //   - `gql:{end_cursor}`：GraphQL 路径（当前主路径）
 //   - `{userID}|{nextMaxID}`：旧的 feed/user 路径，只在 GraphQL 断掉时才会产生
 func (a *Adapter) ListPosts(ctx context.Context, handle, cursor string) (*social.Page, error) {
+	if strings.HasPrefix(cursor, anonCursorPrefix) {
+		return a.anonCursorPage(ctx, handle, cursor)
+	}
 	if strings.HasPrefix(cursor, gqlCursorPrefix) {
 		p, err := a.gqlPosts(ctx, handle, strings.TrimPrefix(cursor, gqlCursorPrefix))
-		if err != nil {
-			return nil, err
+		if err == nil {
+			return &social.Page{Posts: p.Posts, NextCursor: p.NextCursor}, nil
 		}
-		return &social.Page{Posts: p.Posts, NextCursor: p.NextCursor}, nil
+		// 会话中途断了（换 Cookie / 被风控）：别让这一轮整个失败，从免登录的第一页接着上墙。
+		// 免登录不能翻页，断点回到最新 100 条本身，已入库的帖子按 post_id 去重。
+		return a.anonFirstPage(ctx, handle, err)
 	}
 	if cursor != "" {
 		// 老断点：继续用 REST 翻，翻完自然会回到 GraphQL（NextCursor 为空即结束）。
@@ -554,15 +587,16 @@ func (a *Adapter) ListPosts(ctx context.Context, handle, cursor string) (*social
 	if err == nil {
 		return &social.Page{Posts: p.Posts, NextCursor: p.NextCursor}, nil
 	}
-	if social.KindOf(err) != social.KindStaleParser {
-		return nil, err
+	sessionErr := err
+	if social.KindOf(err) == social.KindStaleParser {
+		page, restErr := a.restPosts(ctx, handle, "")
+		if restErr == nil {
+			return page, nil
+		}
+		sessionErr = social.StaleParser(fmt.Sprintf(
+			"Instagram 两条路都不通：GraphQL（doc_id=%s）%v；旧接口 web_profile_info %v", gqlDocID, err, restErr))
 	}
-	page, restErr := a.restPosts(ctx, handle, "")
-	if restErr == nil {
-		return page, nil
-	}
-	return nil, social.StaleParser(fmt.Sprintf(
-		"Instagram 两条路都不通：GraphQL（doc_id=%s）%v；旧接口 web_profile_info %v", gqlDocID, err, restErr))
+	return a.anonFirstPage(ctx, handle, sessionErr)
 }
 
 // restPosts 是旧的 web_profile_info / feed/user 路径，只在 GraphQL 断掉时兜底。

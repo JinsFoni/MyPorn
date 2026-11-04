@@ -234,7 +234,13 @@ func TestGraphQLPartialFieldErrors(t *testing.T) {
 // 回网页壳（200 + HTML）时换一对令牌重试一次；两次都这样才报 blocked，且不设冷却。
 func TestGraphQLDegradedToHTML(t *testing.T) {
 	var gets, posts int32
+	// 只数「带会话」的请求：免登录爬虫页（anon.go）是不带 Cookie 的另一条路，
+	// 这里让它直接 404，免得把它的 1 次 GET 算进令牌重抓的次数里。
 	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("User-Agent"), "Googlebot") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if r.Method == http.MethodGet {
 			atomic.AddInt32(&gets, 1)
 			w.Write([]byte(bootstrapHTML))
@@ -337,10 +343,17 @@ func TestGraphQLAndRESTBothFailing(t *testing.T) {
 	}
 }
 
-// 没有 Cookie 时连令牌都不该去抓。
+// 没有 Cookie 时不该带着会话去敲门（连令牌都不抓）。
+//
+// 免登录爬虫页（anon.go）是另一回事：那条路不需要 Cookie，2026-11-04 起没有 Cookie 也会走它，
+// 所以这里只禁止「非爬虫 UA」的请求，并让爬虫页回 404 —— 结果是 needs_auth（会话那条的错因）。
 func TestGraphQLNeedsCookie(t *testing.T) {
 	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("没 Cookie 不该发请求: %s %s", r.Method, r.URL.Path)
+		if strings.Contains(r.Header.Get("User-Agent"), "Googlebot") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		t.Errorf("没 Cookie 不该带着会话去请求: %s %s", r.Method, r.URL.Path)
 	}, "")
 	if _, err := a.GetProfile(context.Background(), "mini"); social.KindOf(err) != social.KindNeedsAuth {
 		t.Errorf("错误种类 = %s，期望 needs_auth", social.KindOf(err))

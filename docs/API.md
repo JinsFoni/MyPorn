@@ -534,7 +534,7 @@ type Video = {
   }],
   "platforms": [
     { "key": "x", "name": "X", "needsCookie": false, "hasCookie": true, "hint": "免登录可用：新帖从主页发现，历史每次 20 帖（越同步越全）" },
-    { "key": "instagram", "name": "Instagram", "needsCookie": true, "hasCookie": false, "hint": "必须先在设置 → 动态里粘贴 Cookie" }
+    { "key": "instagram", "name": "Instagram", "needsCookie": false, "hasCookie": false, "hint": "免登录可用：资料 + 最新 100 条（含原图）；想翻更早的历史再贴 Cookie" }
   ],
   "unseen": 12
 }

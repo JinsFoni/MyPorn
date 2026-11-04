@@ -129,8 +129,12 @@ func (s *Server) handleListMomentAccounts(w http.ResponseWriter, r *http.Request
 		"platforms": []map[string]any{
 			{"key": "x", "name": "X", "needsCookie": false,
 				"hasCookie": true, "hint": "免登录可用：新帖从主页发现，历史每次 20 帖（越同步越全）"},
-			{"key": "instagram", "name": "Instagram", "needsCookie": true,
-				"hasCookie": s.hasInstagramCookie(), "hint": "必须先在设置 → 动态里粘贴 Cookie"},
+			// Instagram 2026-11-04 起免登录也能抓（冒充爬虫 UA 的公开页，见
+			// internal/social/igram/anon.go）：资料 + 最新 100 条，含原图与轮播全图。
+			// 配不配 Cookie 都能上墙，区别只在「能不能翻到第 101 条往前」。
+			{"key": "instagram", "name": "Instagram", "needsCookie": false,
+				"hasCookie": s.hasInstagramCookie(),
+				"hint": "免登录可用：资料 + 最新 100 条（含原图）；想翻更早的历史再贴 Cookie"},
 		},
 	})
 }

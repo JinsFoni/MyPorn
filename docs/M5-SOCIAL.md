@@ -1015,3 +1015,97 @@ last_error = Instagram 两条路都不通：GraphQL（doc_id=29600383452901789�
 **给用户的做法**：浏览器打开 instagram.com（用导出 cookie 时那个账号/浏览器），
 按提示把邮箱或手机号验证掉，然后重新导出 cookies 贴进设置 → 动态。
 **只重导 cookie 不做验证没用**——会话本身被标了 risky，下次还会被弹到同一个页面。
+
+### 15.18 免登录抓 Instagram：冒充爬虫 UA 能拿到资料 + 最新 100 条（2026-11-04）
+
+§15.17 的结论是「会话被要求验证联系方式，去浏览器验完再重导 cookie」。用户接着问：**账号已经被风控了，
+免登录能不能抓？** 能，而且能拿到原图。下面全是量出来的，不是猜的。
+
+**1) 先把匿名路一条条试完（同一分钟、同一个出口 IP）**
+
+| 请求 | 结果 |
+|---|---|
+| `web_profile_info`（`www`/`i.` × 带/不带 cookie） | 429（IP 被限流；几十分钟前是 404 HTML） |
+| `feed/user/{username\|pk}/username/`、`users/{pk}/info/`（iOS UA + `x-ig-app-id`） | 403 `{"message":"We're sorry, but something went wrong."}` |
+| `?__a=1&__d=dis` | 201，0 字节 |
+| `graphql/query/?query_hash=…` | 401 `{"message":"Please wait a few minutes…","require_login":true}` |
+| `POST /api/graphql` doc 29600383452901789（登录版帖子查询） | `{"message":"Rate limit exceeded","code":1675004}` |
+| 普通 Chrome UA 的 `GET /{handle}/` | 500 KB 登录壳，真号假号一个字节数 |
+| **Googlebot UA 的 `GET /{handle}/`** | **200，1162088 字节（natgeo）/ 1265407 字节（目标号），是真页面** |
+
+最后一行是整件事的转折：IG 给搜索引擎爬虫的是**无登录公开页**。页里有
+
+```
+xig_user_by_igid_v2{ full_name:"楓カレン", username, is_verified, follower_count:667700,
+                     pk:"11219506159", profile_pic_url, polaris_timeline_connection{…} }
+["LSD",[],{"token":"…"}]        ← 只有 LSD，没有 fb_dtsg，服务端照样收
+```
+
+`polaris_timeline_connection` 就是首屏网格（12 条 + `page_info`），`og:description` 里写着
+「668K Followers, 56 Following, 155 Posts」——**账号还在，不是没了**，只是我们的会话读不到。
+
+**2) 用那一页的 LSD 去调「已登出」的 GraphQL（免登录能用，键是 doc_id）**
+
+| doc_id | 名字 | 结果 |
+|---|---|---|
+| 39451372751143943 | `PolarisProfilePostsLoggedOutTabGridUIContentQuery` | **200**，`first` 上限 **100**（12→12 条/311 KB，155 与 1000 都只回 100 条/5.1 MB） |
+| 29600383452901789 | `PolarisProfilePostsQuery`（登录版） | 1675004 rate limit，换 crawler 令牌一样 |
+| 28459077533770840 | `PolarisLoggedOutDesktopWWWPostRootContentQuery` | **200**，238 KB，variables 只有 `{"media_id":pk}`，带 `taken_at` 与 `carousel_media` 全部子图 |
+
+**这条查询不能翻页**：`after`、`cursor`、`max_id`、`end_cursor`、`next_cursor`、`page_cursor`、
+`after_id`、`from_cursor`、`maxId`、`max_id_str`、`cursor_id`、`offset`、`skip` 挨个试过，
+回的全是第一页（首条 pk 4020717614598471869 不变）。所以免登录的天花板是**最新 100 条**。
+
+**3) 网格里没有 `taken_at`，时间从 pk 推**
+
+`pk` 是雪花 id：`taken_at ≈ (pk>>23) + 1314220021721 ms`。两帖对照页面上的精确值：
+
+| pk | 公式 | 页面 `taken_at` | 差 |
+|---|---|---|---|
+| 4020717614598471869 | 2026-11-01T09:55:12Z | 09:55:52Z | 40 s |
+| 4019241275077392564 | 2026-10-30T09:01:58Z | 09:01:58Z | 0.66 s |
+
+排序、显示都够用；轮播帖反正要打单帖详情，那里拿精确值。短码也从 pk 推（base64 变体）：
+`4020717614598471869 → DfMdV4oTEC9`、`4019241275077392564 → DfHNqUTk3i0`，和页面 `code` 逐字一致。
+
+**4) 接进代码：永远排在登录态后面**
+
+`internal/social/igram/anon.go`。取数顺序：GraphQL（会话）→ 旧 REST（只在 stale_parser 时）→ **免登录**。
+只有前两条都失败才落到免登录，理由很简单：有会话能翻页追全量，免登录只能拿最新 100 条，
+不该为了省事把翻页能力丢掉。免登录内部：
+
+```
+GET /{handle}/            Googlebot UA → 资料 + LSD + 首屏 12 条
+POST /api/graphql         doc 39451372751143943, first=100 → 100 条（挂了就退回首屏那 12 条）
+POST /api/graphql         doc 28459077533770840, media_id=pk → 轮播子图 + 精确时间（只对轮播帖）
+```
+
+- 断点写成 `anon:{offset}`：100 条按 `gqlPageSize=33` 在本地切页，翻页不再请求 IG。
+- 轮播帖的子图必须靠单帖详情（网格只给第一张），带 6 小时缓存，否则每轮都重拉同一批。
+- **懒解析**：第一版是「先把 100 条全解析再返回」，20 条轮播 × 3 s 间隔，害得**只要资料的
+  GetProfile 花了 3 分 39 秒**。改成按页解析后同一个请求 **4.55 s**。
+- `NeedsCookie()` 从 `true` 改成 `false`，设置里的平台提示从「必须先在设置 → 动态里粘贴 Cookie」
+  改成「免登录可用：资料 + 最新 100 条（含原图）；想翻更早的历史再贴 Cookie」。
+
+**5) 实测（真机 `:18081`，改完的二进制）**
+
+| 步骤 | 结果 |
+|---|---|
+| `TestLiveInstagramAnon`（Cookie 留空，只走免登录） | `GetProfile` **4.55 s**；第一页 **33 条 / 93 张照片**（轮播 20 条、无图 1 条、有时间 33 条）**61.8 s**；最新一条 `DfMdV4oTEC9` 2026-11-01T09:55:12Z，首图 **3072×4096** |
+| 把账号加回库（`POST /api/moments/accounts` + `sync`） | 3 页，**3 m 42 s**，「第 3 页，新增 367 张照片」 |
+| 落库结果 `social_accounts` | `post_count=100 photo_count=368 backfill_done=1 last_error=''`，帖子时间跨度 **2025-07-31 → 2026-11-01** |
+| 照片落盘 `social_photo_files` | 332 个文件（后台自动下载还在跑），`imgcache` 254 MB |
+| 动态页（先 unregister SW + 清 cache） | 红条没了；滚到底 **209 张图 / 193 张已解码 / 0 张破图** |
+
+**6) 拿不到的东西（说清楚，不假装）**
+
+- 第 101 条往前的历史：这条查询不能翻页，只有登录态能追（`PolarisProfilePostsQuery`）。
+- 视频/Reel：沿用原有约定只收静态图，帖子入库但 0 张照片。
+- 图片 URL 仍是带签名的（`oe` 参数 ≈ 4.4 天），所以**能不能长期看到取决于抓到时有没有落盘**。
+- 冒充爬虫 UA 不是 IG 承诺的接口：页面结构一变就失效，所以失败时明说「爬虫页结构可能又变了」，
+  而不是悄悄上一堵空墙。
+
+测试：`TestLiveInstagramAnon`（可选的联网冒烟）、`TestShortcodeOfPK`、`TestTakenAtOfPK`、
+`TestAnonSlicePage`（100 条切页 + 轮播详情只打一次）、`TestAnonProfileWhenSessionDead`、
+`TestAnonListPostsGridAndCarousel`、`TestAnonGridFallsBackToPageEdges`、
+`TestAnonBothPathsFailKeepsNeedsAuth`（两条路都断了，报的仍是会话那条错）。

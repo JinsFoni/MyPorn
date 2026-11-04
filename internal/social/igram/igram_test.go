@@ -87,9 +87,16 @@ func TestParseProfileURL(t *testing.T) {
 }
 
 // 没配 Cookie 必须明确报 needs_auth，不能静默返回空列表。
+//
+// 免登录爬虫页（anon.go）例外：那条路本来就不带 Cookie，没有 Cookie 也会走它，
+// 所以这里只禁止「非爬虫 UA」的请求，并让爬虫页也回 404。
 func TestNeedsAuthWithoutCookie(t *testing.T) {
 	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
-		t.Error("没有 Cookie 时不应该发请求")
+		if strings.Contains(r.Header.Get("User-Agent"), "Googlebot") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		t.Error("没有 Cookie 时不应该带着会话去请求")
 	}, "")
 	_, err := a.ListPosts(context.Background(), "mini", "")
 	if k := social.KindOf(err); k != social.KindNeedsAuth {
