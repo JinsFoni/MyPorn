@@ -76,6 +76,33 @@ const KEEP_BEHIND_SEC = 30;
 const SB_TIMEOUT_MS = 15000;
 
 /**
+ * 播放位置正等着的那一片，先只要开头这么多字节：够出第一帧就 append，剩下的边放边补。
+ *
+ * 4K 一片 12.91 MB 平均、21.48 Mbps——按字节算 **1 MB ≈ 0.37 秒画面**。实测把一片的
+ * 头 400 KB append 进去，`buffered` 立刻变成 `[0, 0.15]`、`appendBuffer → updateend` 只用
+ * **45 毫秒**，剩下的字节到了再 append 一次，Chrome 会接着解析（`buffered` 补到 `[0, 5.00]`、
+ * `readyState` 4）。也就是说「画面出现」和「这一片下载完」可以脱钩。
+ *
+ * 定 768 KB 而不是 400 KB：4K 一片 0.29 秒的垫子，第一帧出来到画面接着走之间不留空档。
+ */
+const PREFIX_BYTES = 768 * 1024;
+
+/**
+ * 一片切成几段并行取。实测（本地 18081，单片 12.10~15.67 MB，同一片连续量）：
+ *
+ *	整片一条连接   1.20~1.52 秒      ≈10.5 MB/s（单连接上限，和直连上游一样）
+ *	切 2 段并发    0.58~0.79 秒      2.0x
+ *	切 4 段并发    0.31~0.40 秒      3.8x
+ *	切 6 段并发    0.22~0.28 秒      5.4x，但偶尔有一段卡在 20 秒上（实测 1/6 轮）
+ *
+ * 6 段那点收益换不来「偶尔有一片卡 20 秒」的尾巴，所以取 4。加上音频轨同一时刻最多 5 条连接，
+ * 远低于实测开始互相拖垮的那条线（8 条并发合计 61 MB/s 仍然正常）。
+ */
+const SEG_PARTS = 4;
+/** 太小的分片不值得切（音频一片才 40 KB，切了全是握手开销） */
+const SEG_PART_MIN_BYTES = 2 << 20;
+
+/**
  * 编码族（`avc1.640033` → `avc1`）。同族换档只需要 changeType；
  * 跨族（AV1↔H.264）才必须重建 SourceBuffer。
  */
@@ -116,6 +143,11 @@ function once(target: EventTarget, event: string, timeoutMs: number): Promise<vo
  *
  * `signal` 是拖动进度条时的那把刹车：4K 一片 1~1.4 MB，用户拖到别处以后这一片已经没有用了，
  * 让它拉完再丢掉，等于每拖一次都要先白等一秒多（实测见 #seeked 的注释）。
+ *
+ * 单片要几秒：B 站 4K 一档（3840×2026/avc1.640034/21.48 Mbps）实测 198 秒切成 **41 片**，
+ * 平均 **12.91 MB**、最大 16.49 MB。一条连接拉 12~16 MB 要 **1.2~1.5 秒**
+ * （本地代理实测 10.3 MB/s，同一时刻直连上游也是 9.5~10.7 MB/s，说明这一段不是在等服务端），
+ * 而用户等的就是这一片。所以分片取流都走 rangeFetchParts：切成几段并发，见下面的实测表。
  */
 async function rangeFetch(
   url: string,
@@ -133,6 +165,41 @@ async function rangeFetch(
     throw new Error(`Range 长度不对：要 ${String(want)} 拿到 ${String(buf.byteLength)}`);
   }
   return buf;
+}
+
+/**
+ * 同一段字节用几条连接并行取，按顺序拼回去（见 SEG_PARTS 的实测表）。
+ *
+ * 只影响「多久拿全」，不改任何一个字节：每一段都还是整段校验过长度才拼。
+ * `signal` 一样会掐掉所有在飞的那几段——拖动进度条时这一片立刻作废。
+ */
+async function rangeFetchParts(
+  url: string,
+  start: number,
+  end: number,
+  parts: number,
+  signal?: AbortSignal,
+): Promise<ArrayBuffer> {
+  const total = end - start + 1;
+  if (parts <= 1 || total < SEG_PART_MIN_BYTES) return rangeFetch(url, start, end, signal);
+  const n = Math.max(2, Math.min(parts, Math.floor(total / (SEG_PART_MIN_BYTES / 2))));
+  const step = Math.ceil(total / n);
+  const jobs: Promise<ArrayBuffer>[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const from = start + i * step;
+    const to = Math.min(end, from + step - 1);
+    if (from > to) break;
+    jobs.push(rangeFetch(url, from, to, signal));
+  }
+  const bufs = await Promise.all(jobs);
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const b of bufs) {
+    out.set(new Uint8Array(b), at);
+    at += b.byteLength;
+  }
+  if (at !== total) throw new Error(`分片拼接长度不对：要 ${String(total)} 拿到 ${String(at)}`);
+  return out.buffer;
 }
 
 interface Box {
@@ -493,9 +560,37 @@ export class DashMsePlayer {
     const gen = t.gen;
     const ctrl = new AbortController();
     t.abort = ctrl;
+    // 播放位置正等着这一片（后面一秒都没有垫子）吗？是就把「开头一小段」先单独拿来 append：
+    // 画面出来只要 768 KB ≈ 0.29 秒画面的字节，剩下的边放边补（见 PREFIX_BYTES）。
+    const urgent = this.#ahead(sb) < 0.5;
     let buf: ArrayBuffer;
     try {
-      buf = await rangeFetch(t.track.url, seg.offset, seg.offset + seg.size - 1, ctrl.signal);
+      if (urgent && seg.size > PREFIX_BYTES) {
+        const head = await rangeFetch(
+          t.track.url,
+          seg.offset,
+          seg.offset + PREFIX_BYTES - 1,
+          ctrl.signal,
+        );
+        if (this.#destroyed || t.sb !== sb || t.gen !== gen) return false;
+        await this.#append(t, head);
+        if (this.#destroyed || t.sb !== sb || t.gen !== gen) return false;
+        buf = await rangeFetchParts(
+          t.track.url,
+          seg.offset + PREFIX_BYTES,
+          seg.offset + seg.size - 1,
+          SEG_PARTS,
+          ctrl.signal,
+        );
+      } else {
+        buf = await rangeFetchParts(
+          t.track.url,
+          seg.offset,
+          seg.offset + seg.size - 1,
+          SEG_PARTS,
+          ctrl.signal,
+        );
+      }
     } catch (err) {
       // seek 把这一片掐了：不是错误，交给新的泵从目标点重新取
       if (ctrl.signal.aborted) return false;
