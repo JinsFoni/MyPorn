@@ -67,21 +67,12 @@ type PlaybackResolver interface {
 
 // VideoURLResolver 是可选接口：从「影片页地址」直接认出是哪条片子。
 //
-// 只有 krx18 这种**影片站**需要它：站上没有艺人主页（整站只有 /movies、/genre、
-// /release 三种链接），订阅那条路走不通，影片只能靠粘一条地址进来
-// （见 httpapi.handleImportVideo）。实现了它的平台会出现在「解析链接」里。
+// krx18 需要它：那个站的订阅源是 tag 归档页（/tag/<女优名>/），影片页（/movies/<片名>-<年份>）
+// 不在任何归档的父子关系里，要单独吃一条地址进来（见 httpapi.handleImportVideo）。
+// 实现了它的平台会出现在「解析链接」里。
 type VideoURLResolver interface {
 	// ParseVideoURL 从影片页地址取出平台侧 id；不是本平台的地址就返回错误。
 	ParseVideoURL(raw string) (string, error)
-}
-
-// MovieSite 标记「影片站」：站上没有艺人主页，只有影片页（krx18）。
-//
-// 这类平台不进「发现艺人」的平台筛选、也不参与跨站头像/资料补齐——它的
-// ParsePerformerURL / SearchPerformers 只会返回错误，摆在筛选里就是让人点出错误。
-type MovieSite interface {
-	// IsMovieSite 恒为 true，存在即声明（方法只是为了让接口能跨包实现）。
-	IsMovieSite() bool
 }
 
 // SitePlaylistProvider 是可选接口：播放清单不是一条能直接 GET 的上游地址，得现做一份。

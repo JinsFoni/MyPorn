@@ -176,11 +176,15 @@
     />
   </a>
 
-  <CardDownloadButton
-    label={`下载 ${video.title}`}
-    title="下载到本地库"
-    onclick={openDownload}
-  />
+  <!-- krx18 这一站没有下载：它的播放清单是服务端现做的（上游只给 m3u8 正文、
+       不下发地址），没有可交给下载器的直链。按钮留着只会点出一个失败的任务。 -->
+  {#if video.platform !== 'krx18'}
+    <CardDownloadButton
+      label={`下载 ${video.title}`}
+      title="下载到本地库"
+      onclick={openDownload}
+    />
+  {/if}
 
   <DownloadDialog videoId={video.id} open={downloadOpen} onClose={() => (downloadOpen = false)} />
 </article>

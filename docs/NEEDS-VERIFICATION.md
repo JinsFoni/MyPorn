@@ -257,3 +257,24 @@ poster 1000×1500 / thumb 1280×720 / fanart 1920×1080 / nfo（含 `uniqueid ty
 | 4K 冷启动耗时 | AV1 554 MB 约 49 秒（官方 CDN）／7 分半（PCDN）；HEVC 657 MB 约 75 秒；H.264 1.77 GB 约 3 分钟 | 超过 10 分钟 → `504 mux_timeout`，同时清该片画质缓存；换线路重试 |
 | 登录态 | 设置 → B 站 → Cookie，`normalizeBiliCookie` 认三种：整段 Cookie 头 / 裸 `SESSDATA` 值 / 浏览器导出的 `cookies.txt`（Netscape，含 `#HttpOnly_` 行）；同名只留最后一个 | 填了还是 720P → 解密库里那条看是不是 `SESSDATA=…; buvid3=…` 这种正经键值对；出现几十上百个同名 `SESSDATA=` 就是又被按「裸值」拆了 |
 | 限流语义 | `platform.ErrRateLimited`：翻页途中被限流不算失败（已抓入库、断点保留、退避 3 小时） | 每天红一次且回填不动 → 哨兵没被 `errors.Is` 认出（各家必须包在 `platform.ErrRateLimited` 外面） |
+
+## 八、krx18 导入与 tag 订阅（M8，`internal/platform/krx18/`）
+
+> 2026-11-04 已真机核对（家宽直连、无代理）：影片页导入 → 播放 1920×1080 走通；
+> tag 归档页订阅 → 3 页 92 部 6 秒回填 → `/krx18` 墙上点开静音实播（冷启动 9.4 s、预热 0.22 s）。
+> 记录见 `docs/M8-KRX18.md`。下表是站点改版或换机器（换出口 IP）时的自查点。
+
+| 核对点 | 当前实现 | 对不上时的症状 |
+|---|---|---|
+| Cloudflare | 只有 `krx18.com` 被挑战：裸 Go/curl 是 403 + `cf-mitigated: challenge`；`utls.HelloChrome_Auto` + `http2.Transport{DialTLSContext}` 拿 200 | 一律 `上游返回 403` → 指纹失效或被升级成 Turnstile（这时要换 uTLS 指纹串再量）；**只能走 HTTP/2**，写成 `http://` 会报 `http2: unencrypted HTTP/2 not enabled` |
+| 影片页 | `GET /movies/<slug>`（1.4~1.9 s）抠 `post_id` + iframe 播放器域名 | 报「页面上没找到播放器」→ 模板改了，先看 `-debug-parse` 打出来的 iframe |
+| 中间跳 | `POST /wp-admin/admin-ajax.php`，`action=doo_player_ajax&post=<id>&nume=<n>&type=movie`，要 `X-Requested-With: XMLHttpRequest` + `Referer`（0.7~1.4 s） | `{"embed_url":""}` → 少了这两个头，或 `nume` 编号变了 |
+| 清单 | embed 页里 `videoHash:` / `videoToken:` → `POST cdn.loadvid.com/videos/resolve-token` 回 m3u8 **正文** | 401/403 → token 过期（同一次解析内有效）；注意正文里没有 `#EXT-X-MAP`，分片是 `.png` 后缀的 TS（首字节 `0x47`） |
+| 覆盖面 | **只有 `cdn.loadvid.com` 这一家能起播**，抽样 34 部里 1 部；`play.playkrx18.site` / `mov18plus.cloud` 明确报「暂不支持在线播放」 | 点开就报「暂不支持」→ 不是 bug，是还没啃那两家播放器（见 M8 §7） |
+| tag 归档页 | `/tag/<slug>/`，每页 **39 部**，`/page/N/`；总页数从 `.pagination` 的 `Page 1 of 3` 读 | 列表空了 → `article.item.movies` 那套选择器变了（`.poster img` / `.data h3 a` / `.data span` 日期 / `.metadata` 播放数） |
+| tag 的 slug 形态 | `/wp-json/wp/v2/tags` 回的 `slug` **本身是 percent-encoded**（`do-hee-%eb%8f%84%ed%9d%ac`），入库/比较/拼地址一律用解码态（`canonicalTagSlug`） | 报「没有这个 tag」→ 两种形态没归一；归档页 404 → 编码态被 `PathEscape` 二次转义成 `%25` |
+| 「翻完了」的判定 | 翻过末页是 **HTTP 404**（不是空列表，正文是 137 KB 的整站模板）→ `*statusError` → `platform.ErrNotFound` | 回填停在最后一页不结束 → 404 被当成普通错误，或者 `page > 1` 那条判断被去掉 |
+| 影片的其它接口 | `/wp-json/wp/v2/posts`、`/wp-json/wp/v2/krx_photo` 都回 `[]`（关了），列表只能抓 HTML；tag 接口是开的 | 想换 REST 拿列表 → 拿不到，别试第二次 |
+| 列表没有时长 | 归档页只给标题/日期/播放数/封面，`durationSec` 一开始是 0，播过或预热过才有真值 | 墙上显示 `0:00` → 前端把 0 当成了时长 |
+| 封面 | `cdnupload.com/wp-content/uploads/...jpg`（353×500，22.7 KB），不校验 Referer，**不需要 CF 指纹** | 封面裂开 → 图床域名换了，`/api/img?p=krx18` 那条普通客户端要跟着改 |
+| 下载 | **不支持**：上游只给清单正文、不下发地址，档位 `url` 为空 | 点了报 `Error opening input file .` → 空地址掉进了 ffmpeg（现在入口处就拦下，文案是「这个站暂不支持下载…」；前端不显示下载键） |

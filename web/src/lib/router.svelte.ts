@@ -27,6 +27,7 @@ export type RouteName =
   | 'youtube'
   | 'ytvideo'
   | 'bilibili'
+  | 'krx18'
   | 'manage'
   | 'video'
   | 'settings'
@@ -48,6 +49,8 @@ const ROUTES: readonly RouteDef[] = [
   // 参数是 YouTube 自己的视频 id（`dQw4w9WgXcQ` 那种字符串），不是 `yt_videos` 的行 id。
   { name: 'ytvideo', pattern: '/youtube/:videoId', title: '播放' },
   { name: 'bilibili', pattern: '/bilibili', title: 'B 站' },
+  // krx18：订阅源是 tag 归档页（/tag/<女优名>/），和 B 站/YouTube 同一类的独立一页
+  { name: 'krx18', pattern: '/krx18', title: 'krx18' },
   { name: 'manage', pattern: '/manage', title: '管理' },
   { name: 'video', pattern: '/video/:id', title: '播放' },
   { name: 'settings', pattern: '/settings', title: '设置' },

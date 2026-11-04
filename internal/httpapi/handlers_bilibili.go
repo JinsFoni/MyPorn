@@ -48,7 +48,7 @@ type biliChannelDTO struct {
 
 func (s *Server) biliChannelDTO(c *store.BiliChannel) biliChannelDTO {
 	return biliChannelDTO{
-		ID: c.ID, MID: c.MID, Name: c.Name, AvatarURL: imgProxy(platformBilibili, c.AvatarURL),
+		ID: c.ID, MID: c.PlatformID, Name: c.Name, AvatarURL: imgProxy(platformBilibili, c.AvatarURL),
 		URL: c.URL, SubscriberCount: c.SubscriberCount, VideoCount: c.VideoCount,
 		UnseenCount: c.UnseenCount, Downloaded: c.Downloaded, SubscriptionID: c.SubscriptionID,
 		Enabled: c.Enabled, BackfillDone: c.BackfillDone, BackfillPage: c.BackfillPage,

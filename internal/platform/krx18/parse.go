@@ -46,7 +46,8 @@ func (p *pageInfo) video(a *Adapter) *model.Video {
 	}
 }
 
-var viewCountRe = regexp.MustCompile(`^([\d,\.]+)\s*Views?$`)
+// 归档页写小写（"44117 views"），影片页的 #playernotice 写大写（"151301 Views"），两边都认。
+var viewCountRe = regexp.MustCompile(`(?i)^([\d,\.]+)\s*Views?$`)
 
 // parsePage 从影片页 HTML 里抠元数据。
 //
@@ -295,4 +296,128 @@ func highestChildPlaylist(text string, base *url.URL) *url.URL {
 		}
 	}
 	return best
+}
+
+// ---------- tag 归档页：订阅源 ----------
+
+// tagListing 是 tag 归档页（= 一位女优/一个系列的影片列表）的一页。
+type tagListing struct {
+	Slug       string
+	Name       string
+	TotalPages int
+	Items      []model.Video
+}
+
+// tagDateLayouts 是归档页上那行日期的两种写法（"Sep. 19, 2026" / "Sep 19, 2026"）。
+var tagDateLayouts = []string{"Jan. 2, 2006", "Jan 2, 2006"}
+
+// pageOfRe 抠 "Page 1 of 3" 里的总页数。
+var pageOfRe = regexp.MustCompile(`Page\s+\d+\s+of\s+(\d+)`)
+
+// movieSlugRe 从影片页地址里抠 slug（归档页里的链接有两种：带 id 前缀的和不带的）。
+var movieSlugRe = regexp.MustCompile(`/movies/([^/]+)/?`)
+
+// parseTagPage 从 tag 归档页里抠影片列表。
+//
+// DooPlay 的 archive 模板，实测 /tag/do-hee-%eb%8f%84%ed%9d%ac/（3 页 / 92 部 / 每页 39）：
+//
+//	article.item.movies
+//	  .poster img[src]                 封面
+//	  .poster .quality                 画质角标（HD-ENG / HD）
+//	  .poster a[href]                  影片页地址 → slug
+//	  .data h3 a                       标题
+//	  .data span                       发布日期（"Sep. 19, 2026"）
+//	  .metadata span                   年份 + "44117 views"
+//	  .texto                           简介（截断成三行）
+//	  .genres .mta a[rel=tag]          分类（Eng Sub / Korea）
+//	.pagination > span                 "Page 1 of 3" → 总页数
+//
+// 这一页**没有时长**（列表模板不写），所以 DurationSec 一律留 0；
+// 点开播放时 ResolvePlayback 会从清单的 #EXTINF 累加出来并落库。
+func parseTagPage(htmlText, pageURL string) (*tagListing, error) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlText))
+	if err != nil {
+		return nil, err
+	}
+	out := &tagListing{Slug: tagSlugFromURL(pageURL)}
+	// h1 是 "Tag Archives: Do Hee (도희)"，名字从 tags 接口拿更干净，这里只当兜底。
+	if h1 := strings.TrimSpace(doc.Find("h1").First().Text()); h1 != "" {
+		out.Name = strings.TrimSpace(strings.TrimPrefix(h1, "Tag Archives:"))
+	}
+	doc.Find(".pagination > span").EachWithBreak(func(_ int, s *goquery.Selection) bool {
+		if m := pageOfRe.FindStringSubmatch(s.Text()); m != nil {
+			out.TotalPages, _ = strconv.Atoi(m[1])
+			return false
+		}
+		return true
+	})
+
+	doc.Find("article.item").Each(func(_ int, art *goquery.Selection) {
+		link, _ := art.Find(".poster a[href]").First().Attr("href")
+		slug := slugOfMovieURL(link)
+		if slug == "" {
+			link, _ = art.Find("h3 a[href]").First().Attr("href")
+			slug = slugOfMovieURL(link)
+		}
+		title := strings.TrimSpace(art.Find(".data h3 a").First().Text())
+		if slug == "" || title == "" {
+			return
+		}
+		item := model.Video{
+			PlatformVideoID: slug,
+			Title:           title,
+			URL:             link,
+			ThumbURL:        strings.TrimSpace(art.Find(".poster img").First().AttrOr("src", "")),
+			Description:     strings.TrimSpace(art.Find(".texto").First().Text()),
+		}
+		if item.URL == "" {
+			item.URL = "https://krx18.com/movies/" + slug + "/"
+		}
+		if d := strings.TrimSpace(art.Find(".data span").First().Text()); d != "" {
+			for _, layout := range tagDateLayouts {
+				if t, err := time.Parse(layout, d); err == nil {
+					utc := t.UTC()
+					item.PublishedAt = &utc
+					break
+				}
+			}
+		}
+		// .metadata 里是「年份 + 播放量」两格，年份不认 Views 那个正则，正好当过滤器。
+		art.Find(".metadata span").Each(func(_ int, s *goquery.Selection) {
+			if item.ViewCount == nil {
+				if n := parseViews(s.Text()); n != nil {
+					item.ViewCount = n
+				}
+			}
+		})
+		art.Find(".genres .mta a").Each(func(_ int, s *goquery.Selection) {
+			if t := strings.TrimSpace(s.Text()); t != "" {
+				item.Tags = append(item.Tags, t)
+			}
+		})
+		out.Items = append(out.Items, item)
+	})
+	return out, nil
+}
+
+// slugOfMovieURL 从 /movies/<slug>/ 里取 slug；不是影片页地址就返回空。
+func slugOfMovieURL(raw string) string {
+	m := movieSlugRe.FindStringSubmatch(raw)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// tagSlugFromURL 从 /tag/<slug>/ 里取 slug（tag 页地址本身就是订阅标识）。
+func tagSlugFromURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) >= 2 && parts[0] == "tag" {
+		return parts[1]
+	}
+	return ""
 }

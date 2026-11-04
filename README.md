@@ -2,8 +2,9 @@
 
 单用户自托管的视频聚合站：订阅艺人 → 在线看最高画质 → 下载进本地库 → 生成 Emby 元数据 → 上传 OpenList 生成 strm。
 
-当前进度：**M7 bilibili**（订阅 UP 主 → 投稿墙 → 站内播 → 下载入库）。前六期：M1 订阅/播放、
-M2 本地库/下载、M3 OpenList（部分）、M4 xHamster/beeg、M5 社交动态、M6 YouTube。
+当前进度：**M8 krx18**（贴影片页导入 → 在线播；贴 tag 归档页订阅 → 女优影片墙）。
+前七期：M1 订阅/播放、M2 本地库/下载、M3 OpenList（部分）、M4 xHamster/beeg、
+M5 社交动态、M6 YouTube、M7 bilibili。
 新片通知、Emby 自动扫库按要求暂缓。
 
 - 需求：`REQUIREMENTS.md`
@@ -11,6 +12,7 @@ M2 本地库/下载、M3 OpenList（部分）、M4 xHamster/beeg、M5 社交动�
 - 接口契约：`docs/API.md`
 - 上线前必读：`docs/NEEDS-VERIFICATION.md`（解析选择器需在能访问站点的机器上核对）
 - bilibili 一期：`docs/M7-BILIBILI.md`（实测记录、两条列表通道、分轨合流都在这里）
+- krx18：`docs/M8-KRX18.md`（四跳解析链路、Cloudflare 指纹、tag 订阅、播放器覆盖面只有 1/34）
 
 ## 当前状态（三个站都能用）
 
@@ -88,6 +90,14 @@ M4 的 xHamster / beeg 适配器、M6 的 YouTube 频道订阅、M7 的 bilibili
   4K/HDR 要大会员。分轨的音视频是两条独立 m4s，浏览器播不了，
   所以点播到那一档时服务端用 ffmpeg 合成一份 mp4 缓存起来（`/api/videos/{id}/remux?v=…`，
   单飞 + 7 天 TTL，实测 25 分钟 480P 约 15 秒、44 分钟 PCDN 源约 2 分钟），下载走同一条路。
+
+- **krx18 也是独立一页**（侧边栏「krx18」）：站上没有艺人主页，但每部片子都打了女优 tag，
+  所以订阅单位是**tag 归档页**（`https://krx18.com/tag/<女优名>/`，一位女优一条订阅）。
+  贴影片页地址则是「单部导入」（发现页同样认）。实测订阅 `do-hee` 那个 tag：3 页 / 92 部 /
+  6 秒回填完，墙上点开静音实播通过（1920×1080，冷启动 9.4 s、预热后 0.2 s）。
+  **不给下载**：上游 `resolve-token` 只回清单正文、不下发地址，没有能交给下载器的直链。
+  已知短板：只有 `loadvid` 这一家播放器能起播（抽样 34 部里 1 部），其它的点开会明确报
+  「暂不支持在线播放」。详见 `docs/M8-KRX18.md`。
 
 未开始：M3（OpenList 上传 + strm + `/d/` 直链 spike）。
 
@@ -189,7 +199,9 @@ internal/platform/pornhub/  Pornhub 解析（随站点改版维护的地方）
 internal/platform/xhamster/  xHamster 解析（window.initials JSON + 播放地址解密）
 internal/platform/beeg/      beeg 解析（store.externulls.com 公开接口）
 internal/platform/bilibili/  bilibili 解析（App cursor + wbi 签名 arc/search 列表、playurl 合并）
-internal/store/bilibili.go   B 站页面取数（UP 主 / 未看 / 已看；复用 performers + videos，不另建表）
+internal/platform/krx18/     krx18 解析（uTLS 过 CF、四跳拿清单、tag 归档页列表）
+internal/store/platform_channels.go  按平台取数（B 站 UP 主 / krx18 tag 的频道、未看、已看；
+                             复用 performers + videos，不另建表）
 internal/muxcache/          DASH 分轨合流的单飞缓存（ffmpeg 出一份 mp4 给浏览器播）
 internal/hls/                HLS master 清单解析（三个站共用，保证编码偏好一致）
 internal/jobs/         任务队列：同步、下载、进度与取消

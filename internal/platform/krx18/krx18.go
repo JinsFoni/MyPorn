@@ -1,9 +1,9 @@
 // Package krx18 是 krx18.com（韩国成人影片站，DooPlay 主题的 WordPress）的适配器。
 //
 // 它和另外几家不一样：站上**没有艺人主页**——实测整站首页只有 /movies、/genre、/release
-// 三种链接（62 + 46 + 5 条），一条 actor/pornstar 都没有，所以「订阅艺人 → 回填影片」
-// 那条路在这里走不通。影片是靠**影片页地址**进来的（见 httpapi.handleImportVideo），
-// 进来之后照常走 /api/videos/{id}/playback 在线播放。
+// 三种链接（62 + 46 + 5 条），一条 actor/pornstar 都没有。能当「订阅源」的是 **tag 归档页**
+// （/tag/<女优名>/，见下面「订阅源」那一节），影片也可以靠**影片页地址**单独导入
+// （见 httpapi.handleImportVideo）；两条路进来之后都照常走 /api/videos/{id}/playback 在线播放。
 //
 // 站点前面是 Cloudflare 的 managed challenge，只放行浏览器的 TLS 指纹
 // （Go 自己的 ClientHello 一律 403，实测见 platform.NewBrowserHTTPClient）。
@@ -110,9 +110,6 @@ var deadEmbedders = map[string]string{
 	"streamcherry.com": "streamcherry（已关站）",
 }
 
-// errNoPerformerPages 说明这个站没有艺人主页可订阅。
-var errNoPerformerPages = errors.New("krx18 只有影片页，没有艺人主页")
-
 // Adapter 实现 platform.Adapter，另外实现 VideoURLResolver 与 SitePlaylistProvider。
 type Adapter struct {
 	base    string
@@ -175,22 +172,203 @@ func (a *Adapter) BaseURL() string { return a.base }
 
 func (a *Adapter) HTTPClient() *http.Client { return a.client }
 
-// IsMovieSite 声明这是影片站（见 platform.MovieSite）：没有艺人主页可订阅。
-func (a *Adapter) IsMovieSite() bool { return true }
+// ---------- 订阅源：tag 归档页 ----------
+//
+// 站上没有艺人主页，但**每部片子都打了 tag**，而 tag 归档页 /tag/<slug>/ 就是
+// 「这位女优的全部片子」——实测 /tag/do-hee-%eb%8f%84%ed%9d%ac/ 共 3 页 92 部
+// （第 1 页 39 部，每页 39）。所以这条路上「艺人」= 一个 tag：
+// 订阅一个 /tag/… 地址，就是订阅这位女优后续的片子。
+//
+// 元数据走 WordPress 的标签接口（影片的 /wp-json/wp/v2/posts 是空的，被站点关了，
+// 标签接口却开着，实测 200 + [{id,count,name,slug,link}]）：
+//
+//	GET /wp-json/wp/v2/tags?slug=<slug>            单个标签（名字 / 片数 / 归档地址）
+//	GET /wp-json/wp/v2/tags?search=<q>&page=<n>    按名字搜（「发现」页的搜索用它）
 
-// ParsePerformerURL 永远报错：站上没有艺人主页（见包注释）。
-func (a *Adapter) ParsePerformerURL(raw string) (string, error) { return "", errNoPerformerPages }
+const (
+	tagsAPIPath = "/wp-json/wp/v2/tags"
+	// tagFields 只取用得上的字段：整行 900 多字节，四倍冗余没必要。
+	tagFields = "id,count,name,slug,link"
+	// tagSearchPerPage 是「发现」页一次搜索返回多少个候选。
+	tagSearchPerPage = 24
+)
 
-func (a *Adapter) GetPerformer(context.Context, string) (*model.Performer, error) {
-	return nil, errNoPerformerPages
+// tagInfo 是 /wp-json/wp/v2/tags 的一条。
+type tagInfo struct {
+	ID    int    `json:"id"`
+	Count int    `json:"count"`
+	Name  string `json:"name"`
+	Slug  string `json:"slug"`
+	Link  string `json:"link"`
 }
 
-func (a *Adapter) ListPerformerVideos(context.Context, string, int) (*platform.Page, error) {
-	return nil, errNoPerformerPages
+// performer 把标签转成「艺人」行。片数是站点自己给的 count（标签下的全部影片），
+// 不是本地已收录数——这和 B 站 UP 主的 video_count 同口径。
+func (t tagInfo) performer(a *Adapter) *model.Performer {
+	vc := t.Count
+	link := t.Link
+	if link == "" {
+		// 接口没给 link（_fields 里漏了就是这种）时自己拼：tag 地址里的非 ASCII
+		// 要按 URL 编码，否则有的客户端拿着裸 UTF-8 拼请求会 404。
+		link = a.base + "/tag/" + url.PathEscape(canonicalTagSlug(t.Slug)) + "/"
+	}
+	return &model.Performer{
+		Platform:    a.Key(),
+		PerformerID: canonicalTagSlug(t.Slug),
+		Name:        t.Name,
+		URL:         link,
+		VideoCount:  &vc,
+	}
 }
 
-func (a *Adapter) SearchPerformers(context.Context, string, int) ([]*model.Performer, bool, error) {
-	return nil, false, errNoPerformerPages
+// ParsePerformerURL 从 /tag/<slug>/ 里取订阅标识。
+//
+// 只认 tag 归档页：影片页走 ParseVideoURL（贴链接导入那一套），两者不能混，
+// 否则「贴一个影片页」会被当成订阅一个叫那片名的 tag。
+func (a *Adapter) ParsePerformerURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("不是合法地址: %s", truncate([]byte(raw), 80))
+	}
+	if !a.hostMatches(u) {
+		return "", fmt.Errorf("不是 %s 的地址", a.Name())
+	}
+	// u.Path 是**解过码**的：地址栏里是 do-hee-%EB%8F%84%ED%9D%AC，标签接口回的 slug 是
+	// do-hee-도희，两边必须用同一种形态才能对上（存库也只存解码后的这一份）。
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	// /tag/<slug> 或 /tag/<slug>/page/3（后面的 page 段忽略）
+	if len(parts) < 2 || parts[0] != "tag" || parts[1] == "" {
+		return "", fmt.Errorf("不是 tag 归档页地址（应形如 %s/tag/<女优名>/）", a.base)
+	}
+	return parts[1], nil
+}
+
+// GetPerformer 用标签接口取名字、片数和归档地址。头像是空的：tag 页上没有图，
+// 由同步任务的「站外头像源」按名字补（对不上就留占位图）。
+func (a *Adapter) GetPerformer(ctx context.Context, slug string) (*model.Performer, error) {
+	tags, err := a.tags(ctx, url.Values{"slug": {slug}})
+	if err != nil {
+		return nil, err
+	}
+	slug = canonicalTagSlug(slug)
+	for _, t := range tags {
+		// 标签接口回的 slug 是编码态，我们存的是解码态（见 canonicalTagSlug）。
+		if canonicalTagSlug(t.Slug) == slug {
+			return t.performer(a), nil
+		}
+	}
+	// 标签被删了（片子下架、tag 合并）：按 404 处理，别把同步永久卡在错误里。
+	return nil, fmt.Errorf("%w: 没有这个 tag：%s", platform.ErrNotFound, slug)
+}
+
+// ListPerformerVideos 抓一页 tag 归档页。
+func (a *Adapter) ListPerformerVideos(ctx context.Context, slug string, page int) (*platform.Page, error) {
+	if page < 1 {
+		page = 1
+	}
+	// slug 里带非 ASCII（do-hee-도희），拼回地址时要按 URL 编码（PathEscape）。
+	esc := url.PathEscape(canonicalTagSlug(slug))
+	pageURL := a.base + "/tag/" + esc + "/"
+	if page > 1 {
+		pageURL = fmt.Sprintf("%s/tag/%s/page/%d/", a.base, esc, page)
+	}
+	body, err := a.getText(ctx, pageURL, map[string]string{
+		"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+	})
+	if err != nil {
+		// 翻过末页时 WP 回 404（实测 do-hee 的 /page/4/ 是 404，正文是整站模板的 137 KB），
+		// 同步任务靠 ErrNotFound 认「到头了」（见 jobs.syncSubscription）。
+		var se *statusError
+		if errors.As(err, &se) && se.Code == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: %s", platform.ErrNotFound, pageURL)
+		}
+		return nil, err
+	}
+	list, err := parseTagPage(body, pageURL)
+	if err != nil {
+		return nil, err
+	}
+	for i := range list.Items {
+		list.Items[i].Platform = a.Key()
+	}
+	return &platform.Page{
+		Items:      list.Items,
+		Page:       page,
+		TotalPages: list.TotalPages,
+		HasMore:    list.TotalPages == 0 || page < list.TotalPages,
+	}, nil
+}
+
+// SearchPerformers 按名字搜标签（「发现」页那一排候选）。
+func (a *Adapter) SearchPerformers(ctx context.Context, query string, page int) ([]*model.Performer, bool, error) {
+	if page < 1 {
+		page = 1
+	}
+	tags, err := a.tags(ctx, url.Values{
+		"search":  {query},
+		"page":    {strconv.Itoa(page)},
+		"orderby": {"count"},
+		"order":   {"desc"},
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]*model.Performer, 0, len(tags))
+	for _, t := range tags {
+		out = append(out, t.performer(a))
+	}
+	return out, len(tags) >= tagSearchPerPage, nil
+}
+
+// canonicalTagSlug 把 tag slug 归一成**解码后**的那一份。
+//
+// 实测这个站有个坑：/wp-json/wp/v2/tags 回的 `slug` 字段本身就是 percent-encoded 的
+// （"do-hee-%eb%8f%84%ed%9d%ac"），而地址栏那条进到 u.Path 时是解码态
+// （"do-hee-도희"）。两种形态混用会出两个后果：
+//   - 拿解码态去比 t.Slug，永远不相等，「贴地址订阅」报「没有这个 tag」；
+//   - 拿编码态去 url.PathEscape，% 会被再转义成 %25，拼出来的归档页 404。
+//
+// 所以入库、比较、拼地址一律走解码后的这一份。
+func canonicalTagSlug(s string) string {
+	if dec, err := url.PathUnescape(s); err == nil {
+		return dec
+	}
+	return s
+}
+
+// hostMatches 判断地址是不是本站（带不带 www 都算）。
+//
+// 比较的是 Hostname()，所以 a.base 里写了端口也不影响（测试里指向本地 httptest 时就这样）。
+func (a *Adapter) hostMatches(u *url.URL) bool {
+	base, err := url.Parse(a.base)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	want := strings.ToLower(base.Hostname())
+	return host == want || host == "www."+want
+}
+
+// tags 调一次标签接口。
+func (a *Adapter) tags(ctx context.Context, extra url.Values) ([]tagInfo, error) {
+	q := url.Values{"_fields": {tagFields}, "per_page": {strconv.Itoa(tagSearchPerPage)}}
+	for k, vs := range extra {
+		for _, v := range vs {
+			q.Set(k, v)
+		}
+	}
+	body, err := a.getText(ctx, a.base+tagsAPIPath+"?"+q.Encode(), map[string]string{
+		"Accept": "application/json",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("查标签失败: %w", err)
+	}
+	var tags []tagInfo
+	if err := json.Unmarshal([]byte(body), &tags); err != nil {
+		return nil, fmt.Errorf("标签接口回了看不懂的东西: %s", truncate([]byte(body), 120))
+	}
+	return tags, nil
 }
 
 // ParseVideoURL 从影片页地址里取出 slug：/movies/{slug} 或 /movies/{slug}/。
@@ -199,9 +377,7 @@ func (a *Adapter) ParseVideoURL(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("不是合法地址: %w", err)
 	}
-	host := strings.ToLower(u.Hostname())
-	want := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(a.base, "https://"), "http://"))
-	if host != want && host != "www."+want {
+	if !a.hostMatches(u) {
 		return "", fmt.Errorf("不是 %s 的地址", a.Name())
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
@@ -550,9 +726,23 @@ func (a *Adapter) do(req *http.Request) ([]byte, error) {
 		if resp.StatusCode == http.StatusForbidden && strings.Contains(string(body), "Just a moment") {
 			return nil, errors.New("被 Cloudflare 拦住了（TLS 指纹不被放行）")
 		}
-		return nil, fmt.Errorf("上游返回 %d: %s", resp.StatusCode, truncate(body, 120))
+		return nil, &statusError{Code: resp.StatusCode, Body: body}
 	}
 	return body, nil
+}
+
+// statusError 是上游的 4xx/5xx 响应。
+//
+// 单独一个类型是为了让「翻过末页时 WordPress 回 404」能被 errors.As 认出来、
+// 翻译成 platform.ErrNotFound（同步任务靠它判断「到头了」，见 jobs.syncSubscription），
+// 而不是拿错误文案做 strings.Contains。
+type statusError struct {
+	Code int
+	Body []byte
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("上游返回 %d: %s", e.Code, truncate(e.Body, 120))
 }
 
 func embedOrigin(embedURL string) string {

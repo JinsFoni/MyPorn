@@ -43,7 +43,7 @@ func TestListBiliChannels(t *testing.T) {
 		t.Fatalf("只该列出 B 站那一位，实际 %d 位", len(channels))
 	}
 	c := channels[0]
-	if c.MID != "946974" || c.Name != "影视飓风" {
+	if c.PlatformID != "946974" || c.Name != "影视飓风" {
 		t.Fatalf("UP 主认错了：%+v", c)
 	}
 	if c.VideoCount != 3 || c.UnseenCount != 2 || c.Downloaded != 1 {

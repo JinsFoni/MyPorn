@@ -1,9 +1,14 @@
 package krx18
 
 import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
 // fixturePage 是影片页的骨架（2026-11-04 从那台机器上抓到的真页面里摘出来的形状，
@@ -224,6 +229,207 @@ func TestCodecTag(t *testing.T) {
 	for in, want := range map[string]string{"h264": "avc1", "hevc": "hev1", "av1": "av01", "mpeg4": "mpeg4"} {
 		if got := codecTag(in); got != want {
 			t.Errorf("codecTag(%q) = %q，想要 %q", in, got, want)
+		}
+	}
+}
+
+// fixtureTag 是 tag 归档页的真片段（/tag/do-hee-%eb%8f%84%ed%9d%ac/ 的第 1、2 条 + 分页行），
+// 实测那一页共 3 页 92 部、第 1 页 39 部。
+const fixtureTag = `<article id="post-89610" class="item movies"><div class="poster"><img src="https://cdnupload.com/wp-content/uploads/2026/09/secret-sex-life-of-a-married-woman-who-has-explosive-orgasms-e7ac.jpg" alt="Secret Sex Life of a Married Woman Who Has Explosive Orgasms"><div class="rating">0</div><div class="mepo"> <span class="quality">HD-ENG</span></div><a href="https://krx18.com/movies/89610-secret-sex-life-of-a-married-woman-who-has-explosive-orgasms-2026/"><div class="see play4"></div></a></div><div class="data"><h3><a href="https://krx18.com/movies/89610-secret-sex-life-of-a-married-woman-who-has-explosive-orgasms-2026/">Secret Sex Life of a Married Woman Who Has Explosive Orgasms</a></h3> <span>Sep. 19, 2026</span></div> <div class="animation-1 dtinfo"> <div class="title"> <h4>Secret Sex Life of a Married Woman Who Has Explosive Orgasms</h4> </div> <div class="metadata"> <span>2026</span> <span>44117 views</span> </div> <div class="texto">A married woman leads a dangerous double life, using her social club activities as an excuse to sneak out and carry on secret affairs with other ...</div> <div class="genres"><div class="mta"><a href="https://krx18.com/genre/eng-sub/" rel="tag">Eng Sub</a><a href="https://krx18.com/genre/korea/" rel="tag">Korea</a></div></div> </div> </article>
+<article id="post-89267" class="item movies"><div class="poster"><img src="https://cdnupload.com/wp-content/uploads/2026/09/fortress-of-desire-2026-49c1.jpg" alt="Fortress of Desire"><div class="rating">0</div><div class="mepo"> <span class="quality">HD-ENG</span></div><a href="https://krx18.com/movies/fortress-of-desire-2026/"><div class="see play4"></div></a></div><div class="data"><h3><a href="https://krx18.com/movies/fortress-of-desire-2026/">Fortress of Desire</a></h3> <span>Sep. 13, 2026</span></div> <div class="animation-1 dtinfo"> <div class="title"> <h4>Fortress of Desire</h4> </div> <div class="metadata"> <span>2026</span> <span>51168 views</span> </div> <div class="texto">&#8220;To have that man, I joined hands with his wife&#8221; A deadly adult melodrama thriller about four men and women driven by an unstoppable ...</div> <div class="genres"><div class="mta"><a href="https://krx18.com/genre/eng-sub/" rel="tag">Eng Sub</a><a href="https://krx18.com/genre/korea/" rel="tag">Korea</a></div></div> </div> </article>
+<div class="pagination"><span>Page 1 of 3</span><span class="current">1</span><a href='https://krx18.com/tag/do-hee-%EB%8F%84%ED%9D%AC/page/2/' class="inactive">2</a><a href='https://krx18.com/tag/do-hee-%EB%8F%84%ED%9D%AC/page/3/' class="inactive">3</a></div>`
+
+func TestParseTagPage(t *testing.T) {
+	page, err := parseTagPage(fixtureTag, "https://krx18.com/tag/do-hee-%EB%8F%84%ED%9D%AC/")
+	if err != nil {
+		t.Fatalf("parseTagPage 报错: %v", err)
+	}
+	// u.Path 解过码，slug 就是站点自己的那一份（do-hee-도희），标签接口回的也是它。
+	if page.Slug != "do-hee-도희" {
+		t.Errorf("slug = %q", page.Slug)
+	}
+	if page.TotalPages != 3 {
+		t.Errorf("总页数 = %d，想要 3（分页行写着 Page 1 of 3）", page.TotalPages)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("条数 = %d，想要 2", len(page.Items))
+	}
+	first := page.Items[0]
+	if first.PlatformVideoID != "89610-secret-sex-life-of-a-married-woman-who-has-explosive-orgasms-2026" {
+		t.Errorf("slug = %q", first.PlatformVideoID)
+	}
+	if first.Title == "" || first.ThumbURL == "" || first.URL == "" {
+		t.Errorf("标题/封面/地址有空的: %+v", first)
+	}
+	if first.PublishedAt == nil || first.PublishedAt.Format("2006-01-02") != "2026-09-19" {
+		t.Errorf("发布日期 = %v，想要 2026-09-19（页面上是 Sep. 19, 2026）", first.PublishedAt)
+	}
+	if first.ViewCount == nil || *first.ViewCount != 44117 {
+		t.Errorf("播放量 = %v，想要 44117", first.ViewCount)
+	}
+	if len(first.Tags) != 2 || first.Tags[0] != "Eng Sub" || first.Tags[1] != "Korea" {
+		t.Errorf("分类 = %v", first.Tags)
+	}
+	// 列表页不写时长：留 0，等播放时从清单的 #EXTINF 补。
+	if first.DurationSec != 0 {
+		t.Errorf("时长 = %d，列表页不写时长，应该留 0", first.DurationSec)
+	}
+}
+
+func TestParsePerformerURL(t *testing.T) {
+	a := &Adapter{base: "https://krx18.com"}
+	// 地址栏里是 percent-encoded，u.Path 解过码：返回的是站点自己那份 slug（do-hee-도희），
+	// 标签接口回的 slug 字段也是这一份，两边才对得上。
+	ok := map[string]string{
+		"https://krx18.com/tag/do-hee-%EB%8F%84%ED%9D%AC/":            "do-hee-도희",
+		"https://krx18.com/tag/do-hee-%EB%8F%84%ED%9D%AC":             "do-hee-도희",
+		"https://www.krx18.com/tag/do-hee-%EB%8F%84%ED%9D%AC/page/2/": "do-hee-도희",
+		"https://krx18.com/tag/big-tits/":                             "big-tits",
+	}
+	for in, want := range ok {
+		got, err := a.ParsePerformerURL(in)
+		if err != nil || got != want {
+			t.Errorf("ParsePerformerURL(%q) = %q, %v；想要 %q", in, got, err, want)
+		}
+	}
+	// 影片页不是订阅源（那是 ParseVideoURL 的活），别让它被误当成一个 tag。
+	for _, in := range []string{
+		"https://krx18.com/movies/office-wifes-affair-2026/",
+		"https://krx18.com/tag/",
+		"https://example.com/tag/x/",
+	} {
+		if got, err := a.ParsePerformerURL(in); err == nil {
+			t.Errorf("ParsePerformerURL(%q) 该报错，却给了 %q", in, got)
+		}
+	}
+}
+
+func TestSlugOfMovieURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://krx18.com/movies/fortress-of-desire-2026/": "fortress-of-desire-2026",
+		"https://krx18.com/movies/89724-tisay-2016":         "89724-tisay-2016",
+		"https://krx18.com/tag/x/":                          "",
+		"":                                                  "",
+	} {
+		if got := slugOfMovieURL(in); got != want {
+			t.Errorf("slugOfMovieURL(%q) = %q，想要 %q", in, got, want)
+		}
+	}
+}
+
+// TestAdapterSubscription 用本地 httptest 顶替 krx18，把「订阅一个 tag」这条路走一遍：
+// 地址 → slug → 标签接口 → 归档页 → 最后翻过末页时 404 变 ErrNotFound。
+//
+// 断言的几个点都是真机上踩过的：
+//   - slug 是 percent-decoded 的那一份（do-hee-도희），拼回地址时必须重新编码；
+//   - 名字/片数走 /wp-json/wp/v2/tags（影片的 posts 接口是空的，标签接口有货）；
+//   - 翻过末页 WordPress 回 404，同步任务靠 ErrNotFound 认「到头了」。
+func TestAdapterSubscription(t *testing.T) {
+	var gotTagURL, gotPageURL string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/wp-json/wp/v2/tags", func(w http.ResponseWriter, r *http.Request) {
+		gotTagURL = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("slug") == "do-hee-도희" {
+			// 真机就是编码态（实测 /wp-json/wp/v2/tags?search=do%20hee 回的 slug 是
+			// "do-hee-%eb%8f%84%ed%9d%ac"，小写十六进制）。
+			_, _ = w.Write([]byte(`[{"id":5247,"count":92,"name":"Do Hee (도희)",` +
+				`"slug":"do-hee-%eb%8f%84%ed%9d%ac",` +
+				`"link":"https://krx18.com/tag/do-hee-%eb%8f%84%ed%9d%ac/"}]`))
+			return
+		}
+		if r.URL.Query().Get("search") == "do hee" {
+			_, _ = w.Write([]byte(`[{"id":5247,"count":92,"name":"Do Hee (도희)",` +
+				`"slug":"do-hee-%eb%8f%84%ed%9d%ac","link":""}]`))
+			return
+		}
+		_, _ = w.Write([]byte(`[]`))
+	})
+	mux.HandleFunc("/tag/do-hee-도희/", func(w http.ResponseWriter, r *http.Request) {
+		gotPageURL = r.URL.EscapedPath()
+		_, _ = w.Write([]byte(fixtureTag))
+	})
+	mux.HandleFunc("/tag/do-hee-도희/page/2/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "<html>nothing here</html>", http.StatusNotFound)
+	})
+	// 用 TLS 的 httptest：适配器那条 uTLS 传输只讲 HTTP/2，明文 http:// 会报
+	// 「http2: unencrypted HTTP/2 not enabled」，所以这里换成测试服务器自己的客户端。
+	srv := httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	a, err := New(srv.URL, "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	a.client = srv.Client()
+
+	slug, err := a.ParsePerformerURL(srv.URL + "/tag/do-hee-%EB%8F%84%ED%9D%AC/")
+	if err != nil || slug != "do-hee-도희" {
+		t.Fatalf("ParsePerformerURL = %q, %v", slug, err)
+	}
+
+	p, err := a.GetPerformer(t.Context(), slug)
+	if err != nil {
+		t.Fatalf("GetPerformer: %v", err)
+	}
+	if p.Name != "Do Hee (도희)" || p.VideoCount == nil || *p.VideoCount != 92 {
+		t.Errorf("艺人 = %+v，想要「Do Hee (도희)」/ 92 部", p)
+	}
+	// 接口回的 slug 是编码态，入到我们这边的标识必须是解码态：地址栏、入库、拼
+	// 归档页地址三处只有一种形态才对得上（见 canonicalTagSlug 的注释）。
+	if p.Platform != "krx18" || p.PerformerID != "do-hee-도희" {
+		t.Errorf("平台 / 标识 = %q / %q", p.Platform, p.PerformerID)
+	}
+	if !strings.Contains(gotTagURL, "_fields=") {
+		t.Errorf("标签接口的查询串 = %q，_fields 没带上（整行 900 多字节没必要）", gotTagURL)
+	}
+
+	page, err := a.ListPerformerVideos(t.Context(), slug, 1)
+	if err != nil {
+		t.Fatalf("ListPerformerVideos: %v", err)
+	}
+	if len(page.Items) != 2 || page.TotalPages != 3 || !page.HasMore {
+		t.Errorf("第 1 页 = %d 条 / 总页数 %d / 还有更多 %v", len(page.Items), page.TotalPages, page.HasMore)
+	}
+	if page.Items[0].Platform != "krx18" {
+		t.Errorf("入参没写 platform，同步任务会把它当别的站: %+v", page.Items[0])
+	}
+	// 非 ASCII 的 slug 拼回地址时必须重新编码，否则服务器 404。
+	if gotPageURL != "/tag/do-hee-%EB%8F%84%ED%9D%AC/" {
+		t.Errorf("请求路径 = %q，想要 /tag/do-hee-%%EB%%8F%%84%%ED%%9D%%AC/", gotPageURL)
+	}
+
+	// 最后一页之后的 404 = 「到头了」，必须是 ErrNotFound（同步任务据此收工）。
+	if _, err := a.ListPerformerVideos(t.Context(), slug, 2); !errors.Is(err, platform.ErrNotFound) {
+		t.Errorf("翻过末页的错 = %v，想要 platform.ErrNotFound", err)
+	}
+
+	// 标签没了也是 ErrNotFound，不能变成「同步永久失败」。
+	if _, err := a.GetPerformer(t.Context(), "gone-tag"); !errors.Is(err, platform.ErrNotFound) {
+		t.Errorf("不存在的 tag 的错 = %v，想要 platform.ErrNotFound", err)
+	}
+
+	list, more, err := a.SearchPerformers(t.Context(), "do hee", 1)
+	if err != nil || len(list) != 1 || more {
+		t.Fatalf("SearchPerformers = %d 条 / 还有更多 %v / %v", len(list), more, err)
+	}
+	if list[0].PerformerID != "do-hee-도희" {
+		t.Errorf("候选的标识要归一成解码态（存库/拼地址都用它），实际 %q", list[0].PerformerID)
+	}
+	if list[0].URL != srv.URL+"/tag/do-hee-%EB%8F%84%ED%9D%AC/" {
+		t.Errorf("标签接口没给 link 时要用 a.base 拼一个归档地址（非 ASCII 要编码），实际 %q", list[0].URL)
+	}
+}
+
+func TestCanonicalTagSlug(t *testing.T) {
+	for in, want := range map[string]string{
+		"do-hee-%eb%8f%84%ed%9d%ac": "do-hee-도희", // 标签接口回的形态
+		"do-hee-도희":                 "do-hee-도희", // 地址栏解出来的形态
+		"big-tits":                  "big-tits",  // 纯 ASCII 不受影响
+		"":                          "",
+	} {
+		if got := canonicalTagSlug(in); got != want {
+			t.Errorf("canonicalTagSlug(%q) = %q，想要 %q", in, got, want)
 		}
 	}
 }

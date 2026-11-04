@@ -241,6 +241,14 @@ func (r *Runner) runDownloadJob(ctx context.Context, j *model.Job, c *Ctl) error
 func (r *Runner) downloadAndMux(ctx context.Context, c *Ctl, video *model.Video, best model.Variant,
 	workDir, binPath, outBase, referer string, estimated int64, ad platform.Adapter) (string, error) {
 
+	// 有的平台清单是**服务端现做的**（krx18：上游 resolve-token 回的是 m3u8 正文，
+	// 不下发地址），这类影片的档位 url 是空的。必须当场说清楚，否则空地址会一路
+	// 掉进 ffmpeg，用户看到的是「Error opening input file .」（2026-11-04 实测）。
+	if strings.TrimSpace(best.URL) == "" {
+		return "", fmt.Errorf("这个站暂不支持下载：%s 的播放清单由服务端现做，上游只给正文不给地址",
+			ad.Name())
+	}
+
 	// 音画分轨（B 站 1080P 以上）：画面一条流、声音一条流，交给 ffmpeg 两路输入合流。
 	// 这一档不能走自研分段下载器——它按「一条清单」下分片，装不下两条独立的流。
 	if best.AudioURL != "" {

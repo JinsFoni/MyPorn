@@ -184,6 +184,12 @@ func (r *Runner) syncSubscription(ctx context.Context, c *Ctl, p syncPayload) er
 					hitKnown = true
 					break
 				}
+				// 全量回填时把「早先以别的身份进来」的那部也挂到这位订阅源名下：
+				// krx18 可以先贴影片页地址导入、之后才订阅女优 tag，那片子已经在库里
+				// 但没有关联，按 tag 筛的墙上就看不到（见 store 里的同名函数）。
+				if lerr := r.st.LinkVideoToPerformerByPlatform(item.Platform, item.PlatformVideoID, perf.ID); lerr != nil {
+					r.log.Warn("补挂影片与订阅源失败", "video", item.PlatformVideoID, "err", lerr)
+				}
 				continue
 			}
 			vid, _, err := r.st.UpsertVideo(&item)

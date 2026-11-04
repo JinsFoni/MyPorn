@@ -295,6 +295,13 @@ func (s *Server) Routes() http.Handler {
 			pr.Get("/bilibili/login/qrcode", s.handleBiliQrcodePoll)
 			pr.Get("/manage/bilibili", s.handleManageBili)
 
+			// krx18（M8）：订阅源 = tag 归档页（/tag/<女优名>/），独立一页。
+			// 和 B 站同构：数据在 videos / performers 里（platform='krx18'），
+			// 播放复用 /api/videos/{id}/playback + /api/krx18/playlist.m3u8（见 handlers_krx18.go）。
+			pr.Get("/krx18/channels", s.handleListKrxChannels)
+			pr.Get("/krx18/videos", s.handleListKrxVideos)
+			pr.Post("/krx18/seen", s.handleKrxSeen)
+
 			pr.Get("/settings", s.handleGetSettings)
 			pr.Put("/settings", s.handlePutSettings)
 

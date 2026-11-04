@@ -53,6 +53,10 @@ class LiveStore {
   biliUnseen = $state(0);
   /** 有新投稿进来就 +1，B 站墙据此刷新 */
   biliVersion = $state(0);
+  /** krx18：还有多少部影片没点开过（侧边栏角标） */
+  krxUnseen = $state(0);
+  /** 有新影片进来就 +1，krx18 墙据此刷新 */
+  krxVersion = $state(0);
   /** performerId -> 头像（影片卡左侧那颗圆头像；只拉一次订阅艺人） */
   performerAvatars = $state<Record<number, string>>({});
   private avatarsRequested = false;
@@ -122,6 +126,24 @@ class LiveStore {
     try {
       const res = await api.biliChannels();
       this.biliUnseen = res.stats.unseen;
+    } catch {
+      /* 忽略 */
+    }
+  }
+
+  bumpKrx(): void {
+    this.krxVersion += 1;
+  }
+
+  setKrxUnseen(n: number): void {
+    this.krxUnseen = n;
+  }
+
+  /** 拉一次 krx18 的未看计数（启动时与进入页面后用）。失败静默：角标不值得弹错。 */
+  async refreshKrxUnseen(): Promise<void> {
+    try {
+      const res = await api.krxChannels();
+      this.krxUnseen = res.stats.unseen;
     } catch {
       /* 忽略 */
     }

@@ -43,14 +43,10 @@ func (s *Server) handlePlatforms(w http.ResponseWriter, _ *http.Request) {
 		if proxy == "" && proxyRequired[a.Key()] {
 			status = "no_proxy"
 		}
-		// movieOnly：只有影片页的站（krx18）。「发现艺人」的平台筛选据此把它滤掉，
-		// 否则点进去搜索只会拿到错误。
-		_, movieOnly := a.(platform.MovieSite)
 		out = append(out, map[string]any{
 			"key":       a.Key(),
 			"name":      a.Name(),
 			"enabled":   true,
-			"movieOnly": movieOnly,
 			"baseUrl":   a.BaseURL(),
 			"hasProxy":  proxy != "",
 			"hasCookie": false,

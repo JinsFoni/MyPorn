@@ -8,8 +8,9 @@
  * bilibili（M7）。列表里没有的新平台仍会照原样显示代号，不至于露出空白。
  */
 /**
- * krx18 是「影片站」：站上没有艺人主页，影片靠粘影片页地址入库
- * （见 api.importVideo），所以它不会出现在艺人的平台筛选里。
+ * krx18 站上没有艺人主页，但它有 tag 归档页（/tag/<女优名>/）——一位女优 = 一个 tag，
+ * 所以它照样能「按名字搜 + 订阅」，只是订阅单位是 tag。影片页地址也能单独粘进来
+ * （见 api.importVideo），导入后直接在线播放。
  */
 export type PlatformKey = 'pornhub' | 'xhamster' | 'beeg' | 'xcom' | 'bilibili' | 'youtube' | 'krx18';
 
@@ -212,6 +213,42 @@ export interface BiliChannel {
 export interface BiliChannelsResponse {
   items: BiliChannel[];
   stats: { unseen: number };
+}
+
+// ---- krx18（M8）----
+/**
+ * 一个订阅源。站上没有艺人主页，能订阅的是 **tag 归档页**（/tag/<女优名>/）：
+ * 每部片子都打了女优 tag，所以一位女优 = 一个 tag = performers 的一行。
+ * 和 B 站同构（详见 internal/store/platform_channels.go 顶部）。
+ */
+export interface KrxChannel {
+  id: number;
+  /** tag 的 slug（do-hee-도희），拼地址时要编码 */
+  platformId: string;
+  name: string;
+  avatarUrl: string | null;
+  url: string;
+  /** 站点自己给的片数（标签的 count），不是本地收录数 */
+  siteCount: number;
+  subscriberCount: number | null;
+  /** 本地已收录 */
+  videoCount: number;
+  unseenCount: number;
+  downloaded: number;
+  subscriptionId: number;
+  enabled: boolean;
+  backfillDone: boolean;
+  /** 归档页每页 39 部 */
+  backfillPage: number;
+  totalPages: number | null;
+  lastSyncAt: string | null;
+  nextSyncAt: string | null;
+  lastError: string;
+}
+
+export interface KrxChannelsResponse {
+  items: KrxChannel[];
+  stats: { channels: number; videos: number; unseen: number; downloaded: number; errors: number };
 }
 
 /** B 站「为什么画质只有 720P / 为什么这档放不了」的答案 */

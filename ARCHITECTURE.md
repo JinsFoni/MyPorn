@@ -925,7 +925,15 @@ bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源�
   且视频要在入库前筛一遍要不要下）。B 站不需要：UP 主有 `performers` 行，投稿直接是 `videos`。
 
 代价是取数多一层「按平台过滤」，所以每个通用列表接口都显式带着这个条件，并各自有测试
-（`internal/store/bilibili_test.go` 里 `TestFeedPlatformFilter` 就是这个约束的看门人）。
+（`internal/store/platform_channels_test.go` 里 `TestFeedPlatformFilter` 就是这个约束的看门人；
+该文件原名 `bilibili_test.go`，2026-11-04 krx18 也要这套视图时改成了平台无关的一层）。
+
+**krx18（M8，2026-11-04）也走这条老路，但有一处刻意不同**：它同样有自己的页面 `/krx18`
+（订阅单位是 tag 归档页，tag = 一位女优），订阅源同样是 `performers` 的一行
+（`performer_id` = tag slug）、影片同样是 `videos` 的一行，取数同样是
+`internal/store/platform_channels.go` 那层视图——但它**不在关注流里被排除**：
+tag 背后是真人女优、影片就是她的片，属于「追艺人的片」，而 B 站投稿 / YouTube 频道不是。
+`store.FeedExcludedPlatforms` 因此仍然只有 `bilibili` + `youtube`。
 
 ### 13.6 筛选状态写在地址栏（?up= / ?channel= / ?mode=）
 

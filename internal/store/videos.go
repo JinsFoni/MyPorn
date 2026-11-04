@@ -191,6 +191,20 @@ func (s *Store) HasLongerSameTitle(platform, title string, durationSec int) (boo
 }
 
 // LinkVideoPerformer 建立影片与艺人关联。
+// LinkVideoToPerformerByPlatform 把一条**已经入库**的影片挂到订阅源名下
+// （片子不在库里就什么都不做）。
+//
+// 为什么要有它：同一部片子可能先以别的身份进来——krx18 可以先贴影片页地址导入
+// （/api/videos/import），过些天才订阅那位女优的 tag 页；这时影片已经在库里、
+// 却没有 video_performers 关联，按 tag 筛的墙上就看不到它。
+// 2026-11-04 实测就丢了一条：tag 里 92 部，墙上只挂上 91 部。
+func (s *Store) LinkVideoToPerformerByPlatform(platform, platformVideoID string, performerID int64) error {
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO video_performers (video_id, performer_id)
+		SELECT id, ? FROM videos WHERE platform = ? AND platform_video_id = ?`,
+		performerID, platform, platformVideoID)
+	return err
+}
+
 func (s *Store) LinkVideoPerformer(videoID, performerID int64) error {
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO video_performers (video_id, performer_id) VALUES (?,?)`,
 		videoID, performerID)

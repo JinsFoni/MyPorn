@@ -4,9 +4,13 @@
 > `https://krx18.com/movies/office-wifes-affair-2026` 现在贴进「发现」就能在站内播：
 > **1920×1080 / h264 / 1:00:08 / 静音实播通过**，不用再下 1.4 GB。
 >
-> 与 M6/M7 的关系：这次没有「订阅」这一层——krx18 只有 `/movies`、`/genre`、`/release`，
-> 没有艺人主页。所以入口换成**贴影片链接导入**，横切设施（代理转发 `/api/stream`、
-> 变体表 `video_streams`、播放页、画质选择）全部复用。
+> **2026-11-04 续**：加了独立的 `/krx18` 页面，订阅单位是 **tag 归档页**（`/tag/<女优名>/`）——
+> 站上确实没有艺人主页，但每部片子都打了女优 tag，所以一位女优 = 一个 tag = 一条订阅。
+> 实测订阅 `do-hee-%eb%8f%84%ed%9d%ac`：**3 页 / 92 部，6 秒回填完**，墙上点开静音实播通过
+> （1920×1080，冷启动 9.4 s / 预热后 221 ms）。见 §11。
+>
+> 与 M6/M7 的关系：krx18 没有艺人主页，入口是**贴影片链接导入**（§9）+ **贴 tag 归档页订阅**（§11），
+> 横切设施（代理转发 `/api/stream`、变体表 `video_streams`、播放页、画质选择、同步调度）全部复用。
 
 一句话：**贴一个 krx18 影片页链接 → 解析出 HLS 清单 → 站内直接播（1080p），分片走本机代理。**
 
@@ -16,7 +20,8 @@
 
 | 做 | 不做 |
 |---|---|
-| 贴影片页链接导入（`krx18.com/movies/<slug>`）→ 落库 → 跳详情页 → 在线播 | 影片/分类浏览、搜索、批量导入 |
+| 贴影片页链接导入（`krx18.com/movies/<slug>`）→ 落库 → 跳详情页 → 在线播 | 批量导入、按分类浏览（`/genre`、`/release`） |
+| 贴 tag 归档页订阅（`/tag/<女优名>/`）→ 分页回填 → `/krx18` 墙上点开就播 | 下载（上游只给清单正文、不下发地址，见 §11.4） |
 | HLS 清单改写 + 分片代理（`/api/krx18/playlist.m3u8` → `/api/stream?p=krx18&u=…`） | 站内没有的播放器（见 §7） |
 | 分辨率/码率实测探测（`ffprobe` 首段 1 MB） | 字幕（站点自己挂 Eng Sub，拿不到独立字幕轨） |
 | Cloudflare 指纹绕过（uTLS + HTTP/2） | 登录态 / 会员内容（本站不需要登录） |
@@ -163,8 +168,8 @@ krx18 上量得很清楚（首段 2,695,785 B）：被掐的那次**只发出 30
 
 - 「发现」页的输入框现在同时认三种东西：艺人名字、艺人主页链接、**影片页链接**。
   贴影片页 → `POST /api/videos/import` → toast「已导入《…》，正在打开」→ 跳 `/video/<id>`。
-- 平台 chip 用 `movieOnly` 过滤：krx18 没有艺人主页，不该出现在「搜艺人」的平台选择里
-  （`GET /api/platforms` 新增 `movieOnly` 字段）。
+- ~~平台 chip 用 `movieOnly` 过滤~~：**2026-11-04 已撤掉**。krx18 现在能按名字搜 tag、能订阅
+  归档页，`GET /api/platforms` 不再回 `movieOnly`，`platform.MovieSite` 接口一起删了（见 §11.1）。
 - 新平台图标 `web/src/assets/platform/krx18.svg`（红底白「18」+ 虚线环，照站点 logo 的调子）。
 - 已知小瑕疵：发现页对任何链接都先试 `/api/performers/resolve`，影片链接那一次会 400
   （浏览器控制台会留一条 `Failed to load resource: 400`），随后才走导入。功能无影响。
@@ -190,3 +195,106 @@ curl -s -b .tmp/cookie.txt 'localhost:18081/api/krx18/playlist.m3u8?v=office-wif
 
 单测：`go test ./internal/platform/krx18/`（解析影片页 / embed 配置 / 清单 / iframe 抠地址 /
 播放器判别，夹具是抓下来的真 HTML 片段）。
+
+---
+
+## 11. 续：tag 归档页订阅 + `/krx18` 独立页面（2026-11-04）
+
+用户要的是「和 B 站 / YouTube 一样的单独一页，订阅单位是
+`https://krx18.com/tag/do-hee-%eb%8f%84%ed%9d%ac/` 这种 tag 页」。
+
+### 11.1 「艺人」在这里就是一个 tag
+
+站上确实没有艺人主页（整站首页只有 `/movies`、`/genre`、`/release` 三种链接），
+但**每部片子都打了 tag**，而 tag 归档页 `GET /tag/<slug>/` 就是「这位女优的全部片子」。
+所以订阅这条路上「艺人」= 一个 tag，`performers.performer_id` 存的是 tag 的 slug。
+
+| 数据 | 从哪来 | 实测 |
+|---|---|---|
+| 名字 / 片数 / 归档地址 | `GET /wp-json/wp/v2/tags?slug=<slug>` | 0.96 ~ 1.02 s，153 B（`_fields=id,count,name,slug,link`） |
+| 按名字搜 | `GET /wp-json/wp/v2/tags?search=<q>&orderby=count&order=desc` | 0.80 ~ 0.99 s，774 B（`q=do hee` 命中 3 个 tag） |
+| 影片列表 | 抓 `/tag/<slug>/`、`/tag/<slug>/page/<n>/` 的 HTML | 0.51 ~ 0.97 s / 150 ~ 181 KB / **每页 39 部** |
+
+**影片的 `/wp-json/wp/v2/posts` 是空的**（2 字节 `[]`，站点把 posts 接口关了），
+所以列表只能抓 HTML；tag 接口却开着，正好拿来解析订阅源的名字与总数。
+
+两个坑（都踩过）：
+
+1. **`slug` 字段本身是 percent-encoded 的**：标签接口回的是 `do-hee-%eb%8f%84%ed%9d%ac`
+   （小写十六进制），而地址栏那条进 `url.Path` 是解码态 `do-hee-도희`。两种形态混用会出两个后果：
+   比较永远不相等（「贴地址订阅」报「没有这个 tag」，实测就卡在这里），
+   编码态再 `PathEscape` 会把 `%` 转成 `%25`、归档页 404。现在入库 / 比较 / 拼地址
+   一律走解码后的这一份（`canonicalTagSlug`）。
+2. **翻过末页是 404，不是空页**：`/page/4/` 实测 404 + 137 KB 的整站模板。
+   适配器把上游 4xx 包成 `*statusError`，404 → `platform.ErrNotFound`，
+   同步任务据此认「到头了」（`jobs.syncSubscription` 里那条 `page > 1 && errors.Is(...)`）。
+
+### 11.2 回填与同步（复用现成调度，没有新表）
+
+订阅源是 `performers` 的一行、影片是 `videos` 的一行（`platform='krx18'`），
+所以调度、回填断点、限流退避、增量同步全是现成的那套（见 `internal/store/platform_channels.go` 顶部）。
+唯一为它改的共用代码：全量回填遇到「库里已有的片」时补挂一次 `video_performers` 关联——
+先贴影片页导入、后订阅 tag 的那部片子否则不会出现在 tag 的墙上（实测丢了一条：92 部只挂上 91 部）。
+
+实测（本机家宽，无代理）：
+
+| 动作 | 耗时 | 结果 |
+|---|---|---|
+| 订阅 `do-hee`（首次全量，3 页） | **6 s**（`14:06:08 → 14:06:14`） | 91 部入库（第 92 部此前已导入过） |
+| 全量重扫（补挂关联） | 8 s | 92 部全部挂上 |
+| 增量同步（第 1 页就撞到已知片即停） | 5 s | 新增 0 |
+| 订阅 `do-hee-i`（单页 tag，10 部） | 4 s | 10 部入库，第 2 页 404 → 「翻到末页」收工 |
+
+### 11.3 `/krx18` 页面（前端）
+
+和 `/bilibili` 同构：顶部是按订阅源筛的头像条（点谁筛谁），下一行是「全部 / 未看」+
+「全部标为已看」+「添加订阅」，主体是封面墙（`InfiniteList` + `VideoCard`），
+筛选状态写在地址栏（`?tag=<performers.id>&mode=unseen`），点开是整页 `/video/<id>`。
+侧边栏多一项 `krx18` 和未看角标（SSE 的 `video.new` 带 `platform`，只刷这一页的墙）。
+
+- 添加订阅只认 tag 归档页地址（`/tag/…`）；贴影片页地址不会被当成 tag
+  （`ParsePerformerURL` 与 `ParseVideoURL` 各认各的）。
+- 「发现」页现在也能选 krx18 并按名字搜 tag：`movieOnly` / `platform.MovieSite` 已删除。
+- **这一页没有下载键**（`VideoCard` 与 `/video/:id` 都对 krx18 隐藏）：原因见 11.4。
+
+播放实测（从 `/krx18` 墙上点开 `office-wifes-affair-2026`，静音）：
+
+| 指标 | 值 |
+|---|---|
+| 分辨率 / 时长 | 1920×1080 / 3608.14 s（h264） |
+| 冷启动到 `readyState 4`（服务端清单缓存为空） | **9.39 s**（含四跳解析 4~6 s + 首段） |
+| 预热后同一部再打开 | **221 ms** |
+| 播放 25 s 时缓冲领先 | 59.3 s |
+
+### 11.4 不支持下载
+
+上游 `resolve-token` 回的是 m3u8 **正文**、不是地址，档位的 `url` 因此是空的
+（见 `variant()` 的注释）。原来的空地址会一路掉进 ffmpeg，报
+`Error opening input file .`（2026-11-04 实测 job 744 失败原文）。
+现在：① 下载任务在入口处直接回「这个站暂不支持下载…」；② 前端不显示下载键。
+
+### 11.5 覆盖面还是那个老问题
+
+§7 的结论没变：**只支持 `loadvid` 这一个播放器**（抽样 34 部里 1 部）。
+`do-hee` 这个 tag 的 92 部里，点开会明确报「Server 2 用的是 mov18plus.cloud 播放器（暂不支持在线播放）；
+Server 1 用的是 play.playkrx18.site 播放器（暂不支持在线播放）」——不是静默失败，但确实是少数能播。
+要真正用起来，得先啃掉那两家播放器（§7 末）。
+
+### 11.6 复现
+
+```bash
+# 订阅一个 tag（会立刻回填）
+curl -s -b .tmp/cookie.txt -X POST localhost:18081/api/subscriptions \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://krx18.com/tag/do-hee-%EB%8F%84%ED%9D%AC/"}'
+# 订阅源列表（含未看计数）
+curl -s -b .tmp/cookie.txt localhost:18081/api/krx18/channels
+# 墙（channelId = 上面 items[].id）
+curl -s -b .tmp/cookie.txt 'localhost:18081/api/krx18/videos?channelId=152&limit=36'
+# 全部标为已看
+curl -s -b .tmp/cookie.txt -X POST localhost:18081/api/krx18/seen -d '{"channelId":152}'
+```
+
+单测：`go test ./internal/platform/krx18/` 里的 `TestParseTagPage`（真 HTML 夹具）、
+`TestParsePerformerURL`、`TestAdapterSubscription`（httptest 顶替整站，把「地址 → slug →
+标签接口 → 归档页 → 末页 404 变 ErrNotFound」走一遍）、`TestCanonicalTagSlug`。

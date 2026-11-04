@@ -1155,6 +1155,79 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
 | 影片 DTO 的 `performers[]` | 多一个 `avatarUrl`（已代理）。B 站墙上每张卡的圆头像靠它：「订阅艺人头像表」不含 B 站 |
 | SSE `video.new` | 多一个 `platform` 字段；前端据此只刷 B 站墙，不动「关注」流 |
 
+## 附：M8 —— krx18 独立页面（`/krx18`）
+
+和 B 站那一节同构：**订阅源 = `performers` 的一行**（`platform='krx18'`，
+`performer_id` = tag 的 slug，**解码态**，例如 `do-hee-도희`），影片 = `videos` 的一行。
+订阅单位是**tag 归档页**（`https://krx18.com/tag/<女优名>/`）——站上没有艺人主页，
+但每部片子都打了女优 tag。解析链路/覆盖面见 `docs/M8-KRX18.md` §11。
+
+和 B 站的两处差别：
+
+- **krx18 的片子会出现在关注流**（`/api/videos` 的固定排除名单只有 `bilibili,youtube`）：
+  tag 背后是真人女优、影片就是她的片，属于「追艺人的片」；B 站投稿不算。
+- **不能下载**：上游 `resolve-token` 只回清单正文、不下发地址，档位 `url` 为空。
+  下载任务会在入口直接回「这个站暂不支持下载…」，前端也不显示下载键。
+
+### E1. `GET /api/krx18/channels`
+
+```
+→ 200 {
+    "items": [{
+      "id": 152,                  // performers.id
+      "platformId": "do-hee-도희", // tag 的 slug（解码态），拼归档页地址时再 PathEscape
+      "name": "Do Hee (도희)",
+      "avatarUrl": "",            // 站上没有头像位；为空时前端画首字母
+      "url": "https://krx18.com/tag/do-hee-%eb%8f%84%ed%9d%ac/",
+      "subscriberCount": null,    // 本站没有订阅数概念
+      "siteCount": 92,            // 站上这个 tag 的总片数（来自 /wp-json/wp/v2/tags 的 count）
+      "videoCount": 92,           // 本地已收录
+      "unseenCount": 0,           // 其中 is_new = 1
+      "downloaded": 0,            // 永远 0（不能下载），字段保留是为了和 D1 同形
+      "subscriptionId": 11,
+      "enabled": true,
+      "backfillDone": true,
+      "backfillPage": 2,          // 已翻到第几页；totalPages 是站上总页数（每页 39 部）
+      "totalPages": 3,
+      "lastSyncAt": "2026-11-04T14:06:14Z",
+      "nextSyncAt": "2026-11-04T20:06:14Z",
+      "lastError": ""
+    }],
+    "stats": { "channels": 1, "videos": 92, "unseen": 0, "downloaded": 0, "errors": 0 }
+  }
+```
+
+`siteCount` 和 `videoCount` 一般相等，差两条时值得看一眼：订阅之前单独导入过、或者
+站上删了片都会让它们不一致。只列「还订阅着」的 tag（取消订阅是软删）。
+
+### E2. `GET /api/krx18/videos?cursor=&channelId=&unseen=1&limit=36&q=`
+
+```
+→ 200 { "items": [<与 §3 影片结构一致>], "nextCursor": "…" | null }
+```
+
+`platform='krx18'` 的影片，按发布时间倒序 keyset 分页；`channelId` 是 **E1 的 `id`**。
+和 D2 同一把尺子：只出「所属 tag 还在订阅里」的片（同一条 `liveSubFilter`）。
+列表页没有时长，`durationSec` 一开始是 0，播过（或预热过）才有真值——**前端不要拿 0 当时长展示**。
+
+### E3. `POST /api/krx18/seen`
+
+```
+请求：{ "ids": [3256], "channelId": 152 }   // 两者都可省
+→ 200 { "unseen": 0 }
+```
+
+语义与 D3 完全一致（`ids` 只标这几条，`channelId` > 0 只标这个 tag，都不给 = 全站 krx18）。
+
+### E4. 通用接口上的相关改动
+
+| 改动 | 说明 |
+|---|---|
+| `GET /api/platforms` **不再回 `movieOnly`** | 字段连同 `platform.MovieSite` 接口一起删了：krx18 现在既能按名字搜 tag、也能订阅归档页 |
+| `GET /api/search/performers?platform=krx18&q=…` | 走 `/wp-json/wp/v2/tags?search=`，`performerId` 回**解码态** slug，`url` 回站上的归档地址 |
+| `POST /api/performers/resolve` / `POST /api/subscriptions` | 认 `https://krx18.com/tag/<slug>/`；贴 `/movies/<slug>` 不会被当成 tag（各认各的） |
+| `GET /api/img?p=krx18&u=…` | 封面走 `cdnupload.com`，不需要 CF 指纹，普通客户端即可（实测 200 / 22.7 KB / image/jpeg） |
+
 ## 附：媒体库（本地已下载的影片）
 
 「下载」页看的是**任务队列**（排队中 / 下载中 / 失败 / 历史），这一组接口看的是

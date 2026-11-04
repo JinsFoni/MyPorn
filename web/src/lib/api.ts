@@ -7,6 +7,7 @@ import type {
   ApiErrorCode,
   ApiErrorBody,
   BiliChannelsResponse,
+  KrxChannelsResponse,
   BiliHealth,
   BiliManageResponse,
   BiliQrcode,
@@ -560,6 +561,38 @@ export const api = {
   },
   manageBili(): Promise<BiliManageResponse> {
     return request<BiliManageResponse>('/api/manage/bilibili');
+  },
+
+  // ---- krx18（M8）----
+  /**
+   * 订阅源列表（tag 归档页 + 未看计数）。krx18 的影片同步时就落进 videos，
+   * 所以墙上翻页用的是通用的 /api/videos 那套形状，只是多一个 platform 过滤。
+   */
+  krxChannels(): Promise<KrxChannelsResponse> {
+    return request<KrxChannelsResponse>('/api/krx18/channels');
+  },
+  krxVideos(
+    params: {
+      cursor?: string | null;
+      channelId?: number | null;
+      unseen?: boolean;
+      q?: string;
+      limit?: number;
+    } = {},
+  ): Promise<{ items: Video[]; nextCursor: string | null }> {
+    return request<{ items: Video[]; nextCursor: string | null }>(
+      `/api/krx18/videos${qs({
+        cursor: params.cursor,
+        channelId: params.channelId,
+        unseen: params.unseen ? 1 : null,
+        q: params.q,
+        limit: params.limit,
+      })}`,
+    );
+  },
+  /** ids 只标这几条；channelId 只标这个 tag 的；都不给 = 整个 krx18 */
+  krxSeen(payload: { ids?: number[]; channelId?: number }): Promise<{ unseen: number }> {
+    return request<{ unseen: number }>('/api/krx18/seen', { method: 'POST', body: payload });
   },
 
   // ---- YouTube 订阅（M6）----

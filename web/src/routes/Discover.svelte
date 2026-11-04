@@ -153,8 +153,9 @@
     void (async () => {
       try {
         const list = await api.platforms();
-        // 影片站（krx18）没有艺人库，摆在筛选里点一下只会拿到错误。
-        platforms = list.filter((p) => p.movieOnly !== true);
+        // 现在每个平台都能「按名字搜 + 订阅主页」：krx18 订阅的是 tag 归档页
+        // （/tag/<女优名>/），它的搜索走 WordPress 的标签接口，所以不再需要把谁滤掉。
+        platforms = list;
       } catch {
         /* 平台列表只是辅助，拿不到就只显示默认那几个 */
       }
@@ -327,7 +328,7 @@
   {:else if !searched && !resolved}
     <EmptyState
       title="搜艺人，或者直接贴链接"
-      hint="输入名字按所选平台搜索（名字要写全）；粘贴艺人主页链接可直接解析并订阅，贴影片页链接（如 krx18 的 /movies/…）会导入并在站内在线播放。"
+      hint="输入名字按所选平台搜索（名字要写全）；粘贴艺人主页链接可直接解析并订阅（krx18 贴的是 tag 归档页 /tag/…）；贴影片页链接（如 krx18 的 /movies/…）会导入并在站内在线播放。"
       icon="search"
     />
   {:else if searched}

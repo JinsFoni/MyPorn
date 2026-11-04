@@ -66,6 +66,13 @@
     return bilibiliPage;
   }
 
+  /** krx18 影片墙同样懒加载（订阅源是 tag 归档页，添加/筛选都在里面） */
+  let krx18Page: Promise<{ default: PlainPage }> | null = null;
+  function loadKrx18(): Promise<{ default: PlainPage }> {
+    krx18Page ??= import('./routes/Krx18.svelte') as Promise<{ default: PlainPage }>;
+    return krx18Page;
+  }
+
   /** YouTube 视频墙同样懒加载（频道筛选、下载入口都在里面；单条播放已经搬去 `/youtube/:videoId`，
    *  那一页由 ID_PAGE_LOADERS 里的 `ytvideo` 懒加载） */
   let youtubePage: Promise<{ default: PlainPage }> | null = null;
@@ -93,6 +100,8 @@
     // 跟着筛选行待在页面里。页面叫什么由侧边栏高亮 + 浏览器标题（路由表）负责。
     youtube: '',
     bilibili: '',
+    // krx18 同理：顶部直接是 tag 头像条，不画页面名
+    krx18: '',
     manage: '管理',
     video: '',
     ytvideo: '',
@@ -204,6 +213,15 @@
       {:then mod}
         {@const BilibiliPage = mod.default}
         <BilibiliPage />
+      {:catch}
+        <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
+      {/await}
+    {:else if shown.name === 'krx18'}
+      {#await loadKrx18()}
+        <p class="py-16 text-center text-ui text-dim">正在载入…</p>
+      {:then mod}
+        {@const Krx18Page = mod.default}
+        <Krx18Page />
       {:catch}
         <p class="py-16 text-center text-ui text-brick" role="alert">页面载入失败，刷新再试。</p>
       {/await}

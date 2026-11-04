@@ -794,7 +794,9 @@
                   </svg>
                 {/if}
               </button>
-            {:else}
+            {:else if video.platform !== 'krx18'}
+              <!-- krx18 不给下载键：它的播放清单是服务端现做的（上游只给 m3u8 正文、
+                   不下发地址），没有能交给下载器的直链，点了只会排出一个必败的任务。 -->
               <button
                 type="button"
                 class="icon-act"

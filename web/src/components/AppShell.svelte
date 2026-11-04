@@ -28,6 +28,7 @@
       | 'moments'
       | 'youtube'
       | 'bilibili'
+      | 'krx18'
       | 'performers'
       | 'discover'
       | 'downloads'
@@ -46,6 +47,8 @@
     { href: '/youtube', label: 'YouTube', icon: 'youtube', isActive: (p) => p.startsWith('/youtube') },
     // B 站和 YouTube 是同一件事的两种形态：各自一页，管理里也各有一个页签。
     { href: '/bilibili', label: 'B 站', icon: 'bilibili', isActive: (p) => p.startsWith('/bilibili') },
+    // krx18 和它们同一件事：订阅一个内容源（那边订阅的是 tag 归档页）。
+    { href: '/krx18', label: 'krx18', icon: 'krx18', isActive: (p) => p.startsWith('/krx18') },
     { href: '/discover', label: '发现', icon: 'discover', isActive: (p) => p.startsWith('/discover') },
     { href: '/downloads', label: '下载', icon: 'downloads', isActive: (p) => p.startsWith('/downloads') },
     // 媒体库：已经下到磁盘上的片子（下载页是任务队列，两件事分开放）
@@ -124,6 +127,12 @@
             live.setBiliUnseen(live.biliUnseen + 1);
             return;
           }
+          // krx18 同理：它的影片只出现在自己那一页的墙上。
+          if (data?.platform === 'krx18') {
+            live.bumpKrx();
+            live.setKrxUnseen(live.krxUnseen + 1);
+            return;
+          }
           scheduleBump();
         },
         'photo.new': () => {
@@ -161,6 +170,7 @@
     void live.refreshMomentsUnseen();
     void live.refreshYtUnseen();
     void live.refreshBiliUnseen();
+    void live.refreshKrxUnseen();
 
     const onOffline = (): void => live.toast('网络已断开，实时更新暂停', 'error');
     const onOnline = (): void => live.toast('网络已恢复', 'info');
@@ -208,6 +218,11 @@
       <path d="M7 3.2 9.6 6M17 3.2 14.4 6" />
       <rect x="3" y="6" width="18" height="13.5" rx="4" />
       <path d="M10.6 10.4v5l4.3-2.5z" fill="currentColor" stroke="none" />
+    {:else if name === 'krx18'}
+      <!-- krx18：一张「18」字样的小票根形状——24px 下比再画一块屏幕更能区分，
+           毕竟 YouTube/B 站两页已经各占一块屏幕了。 -->
+      <rect x="3" y="6" width="18" height="12" rx="2.5" />
+      <path d="M9.5 10.2v3.6M14.5 10.2v3.6M9.5 12h5" />
     {:else if name === 'performers'}
       <circle cx="9" cy="9" r="3" />
       <path d="M3.5 19a5.5 5.5 0 0 1 11 0" />
@@ -282,6 +297,13 @@
         aria-hidden="true"
       >
         {live.ytUnseen > 9 ? '9+' : live.ytUnseen}
+      </span>
+    {:else if item.href === '/krx18' && live.krxUnseen > 0}
+      <span
+        class="absolute -right-2 -top-1 min-w-[0.9375rem] rounded-full bg-hi px-1 text-[0.625rem] font-medium leading-[0.9375rem] text-ink tabular-nums"
+        aria-hidden="true"
+      >
+        {live.krxUnseen > 9 ? '9+' : live.krxUnseen}
       </span>
     {:else if item.href === '/moments' && live.momentsUnseen > 0}
       <span
@@ -407,6 +429,13 @@
               aria-label={`${String(live.biliUnseen)} 条未看的 B 站投稿`}
             >
               {live.biliUnseen > 99 ? '99+' : live.biliUnseen}
+            </span>
+          {:else if item.href === '/krx18' && live.krxUnseen > 0}
+            <span
+              class="rounded-full bg-hi px-[0.3rem] text-[0.6875rem] font-medium leading-4 tabular-nums text-ink"
+              aria-label={`${String(live.krxUnseen)} 部未看的 krx18 影片`}
+            >
+              {live.krxUnseen > 99 ? '99+' : live.krxUnseen}
             </span>
           {:else if item.href === '/moments' && live.momentsUnseen > 0}
             <span
