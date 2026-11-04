@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 	"time"
 
 	"github.com/JinsFoni/MyPorn/internal/imgcache"
@@ -48,8 +49,15 @@ func (r *Runner) EnqueueSocialSync(accountID int64, mode string) (int64, error) 
 // 不设上限的话，刚添加博主时会连着几十次请求，直接吃 429。
 const socialPagesPerRun = 5
 
-// maxSyncErrorLen 是写进 social_accounts.last_error 的最大长度。
-const maxSyncErrorLen = 300
+// maxSyncErrorLen 是写进 social_accounts.last_error 的最大字节数。
+//
+// 按字节是因为这个字段要能塞进日志和列表；但**不能直接 msg[:300]**：
+// 中文一个字 3 字节，硬切会把最后一个字劈成半个，写进 SQLite 就是非法 UTF-8，
+// 读出来是「…贴回设␦」这种残字（2026-11-04 Instagram 那条 needs_auth 文案正好被切在「设置」中间）。
+//
+// 300 抬到 400 也是那天量的：那条 Instagram 文案（症状 + 落地地址 + 怎么办）实测 321 字节，
+// 300 会把最后一句「怎么恢复」截掉——恰好是用户唯一要照着做的那句。
+const maxSyncErrorLen = 400
 
 // runSocialSyncJob 是 social_sync 的执行入口。
 func (r *Runner) runSocialSyncJob(ctx context.Context, j *model.Job, c *Ctl) error {
@@ -157,7 +165,12 @@ func (r *Runner) recordSocialError(accountID int64, err error) {
 	if err != nil {
 		msg = err.Error()
 		if len(msg) > maxSyncErrorLen {
-			msg = msg[:maxSyncErrorLen]
+			// 退到合法的字符边界再加省略号，别把汉字劈成半个。
+			cut := msg[:maxSyncErrorLen]
+			for len(cut) > 0 && !utf8.ValidString(cut) {
+				cut = cut[:len(cut)-1]
+			}
+			msg = cut + "…"
 		}
 	}
 	if err := r.st.SetSocialAccountError(accountID, msg); err != nil {

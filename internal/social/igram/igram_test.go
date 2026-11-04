@@ -3,6 +3,7 @@ package igram
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -342,5 +343,109 @@ func TestThrottleClearAllowsImmediateRetry(t *testing.T) {
 	}
 	if err := a.throttle.Wait(context.Background()); err != nil {
 		t.Errorf("Clear 之后应当可以直接请求，实际 %v", err)
+	}
+}
+
+// TestFetchTokensLoginRedirect 覆盖 2026-11-04 的那次误诊：会话有问题时 IG 不报错，
+// 而是 302 走人，Go 自动跟完，我们手里是一张 472KB、标题也叫 Instagram、
+// 但**没有 dtsg** 的页面。以前一律说「网页版改版或登录墙」，用户查不出原因。
+// 现在按落地地址判定，并且报 needs_auth（不是 stale_parser）——别再去试已经下线的旧接口。
+func TestFetchTokensLoginRedirect(t *testing.T) {
+	cases := []struct {
+		name     string
+		landing  string
+		wantWord string
+	}{
+		{"登录页", "/accounts/login/?next=%2Fnatgeo%2F", "登录页"},
+		{"要验证联系方式", "/accounts/update_risky_contactpoint/?challenge_context=abc", "验证邮箱/手机号"},
+		{"人机验证", "/challenge/?next=%2Fnatgeo%2F", "人机验证"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/accounts/") || strings.HasPrefix(r.URL.Path, "/challenge/") {
+					// 落地页长得跟主页一样：200、HTML、标题 Instagram、没有令牌。
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					_, _ = io.WriteString(w, `<!DOCTYPE html><html><head><title>Instagram</title></head>
+						<body class="no-js not-logged-in">验证一下</body></html>`)
+					return
+				}
+				http.Redirect(w, r, c.landing, http.StatusFound)
+			}, cookieJSON)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, _, err := a.fetchTokens(ctx, "natgeo")
+			if err == nil {
+				t.Fatal("被 302 到登录/验证页时必须报错")
+			}
+			if k := social.KindOf(err); k != social.KindNeedsAuth {
+				t.Fatalf("应当是 %s，得到 %s（%v）", social.KindNeedsAuth, k, err)
+			}
+			if !strings.Contains(err.Error(), c.wantWord) {
+				t.Fatalf("文案里要说清「%s」: %v", c.wantWord, err)
+			}
+			if !strings.Contains(err.Error(), "/accounts/") && !strings.Contains(err.Error(), "/challenge") {
+				t.Errorf("文案里要带上落地地址，方便排查: %v", err)
+			}
+		})
+	}
+}
+
+// 真的登录态好、页面也是主页，只是令牌注入变了：仍然报 stale_parser（可以降级），
+// 别把「会话没了」也算进这一类。
+func TestFetchTokensShellIsStale(t *testing.T) {
+	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, `<!DOCTYPE html><html><head><title>natgeo</title></head>
+			<body><script>window.__x = 1;</script></body></html>`)
+	}, cookieJSON)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _, err := a.fetchTokens(ctx, "natgeo")
+	if k := social.KindOf(err); k != social.KindStaleParser {
+		t.Fatalf("应当是 %s，得到 %s（%v）", social.KindStaleParser, k, err)
+	}
+}
+
+// TestDeadLegacyEndpointIsNotNotFound 覆盖同一轮误诊里那句「Instagram 上没有这个账号」：
+// 旧接口 web_profile_info 现在对**任何** username 都回同一个 404 HTML 页面
+// （2026-11-04 实测 natgeo / 真号 / 瞎编的号、i. 与 www. 各两份、带 cookie 与否，全一样）。
+// 把接口下线说成「博主不存在」，会让人白删订阅。
+func TestDeadLegacyEndpointIsNotNotFound(t *testing.T) {
+	const notFoundHTML = `<!DOCTYPE html><html><head><title>Page Not Found • Instagram</title></head>
+		<body><h2>Sorry, this page isn't available.</h2></body></html>`
+	a := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, notFoundHTML)
+	}, cookieJSON)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := a.restProfile(ctx, "natgeo")
+	if err == nil {
+		t.Fatal("404 HTML 应当报错")
+	}
+	if k := social.KindOf(err); k == social.KindNotFound {
+		t.Fatalf("404 的 HTML 页说明接口下线了，不能说成「没有这个账号」: %v", err)
+	}
+	if k := social.KindOf(err); k != social.KindStaleParser {
+		t.Fatalf("应当是 %s（可降级/可诊断），得到 %s（%v）", social.KindStaleParser, k, err)
+	}
+	if !strings.Contains(err.Error(), "下线") {
+		t.Fatalf("文案里要说清是接口下线: %v", err)
+	}
+
+	// JSON 的 404 仍然算「没有这个账号」——别把这条也一起改死。
+	aJSON := newTestAdapter(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"message":"user not found","status":"fail"}`)
+	}, cookieJSON)
+	_, err = aJSON.restProfile(ctx, "natgeo")
+	if k := social.KindOf(err); k != social.KindNotFound {
+		t.Fatalf("JSON 404 应当是 %s，得到 %s（%v）", social.KindNotFound, k, err)
 	}
 }

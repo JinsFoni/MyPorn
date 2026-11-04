@@ -1,8 +1,9 @@
 // Instagram 网页版自己用的 GraphQL 端点（POST /api/graphql + doc_id 持久化查询）。
 //
-// 为什么改用这条：2026-11-04 实测旧的 `web_profile_info` 已经全线 429
-// （带 Cookie、不带 Cookie、`i.` 与 `www.` 两个主机都一样，返回的是「找不到页面」的 HTML），
-// 而网页版真正在用的 GraphQL 端点在同一天、同一个出口 IP、同一份 Cookie 下 6/6 全通：
+// 为什么改用这条：2026-11-04 实测旧的 `web_profile_info` 已经下线
+// （带 Cookie、不带 Cookie、`i.` 与 `www.` 两个主机、真号与假号，全回同一个 20942 字节的
+// 404「Page Not Found」HTML），而网页版真正在用的 GraphQL 端点在同一天、
+// 同一个出口 IP、同一份 Cookie 下 6/6 全通：
 // 一次 `PolarisProfilePostsQuery` 就能拿 33 条帖子（服务端上限，传 count=50 也只回 33），
 // 155 条全量 5 次请求 9.2 s（含 4×1.2 s 人为间隔），一起把资料（`node.user.full_name` 等）带回来。
 //
@@ -18,6 +19,11 @@
 //     （本机算出来 26448，与 IG 页面里自己写的 qm 参数逐位一致）。
 //  3. **`variables` 里那 5 个 `__relay_internal__pv__…relayprovider` 布尔值是必填**：
 //     少一个就回 `missing_required_variable_value`（code 1675012），而且文案长得像服务端抽风。
+//  4. **会话出问题时 IG 是 302，不是报错**。令牌那一跳（GET /{handle}/）会被重定向到
+//     /accounts/login、/accounts/update_risky_contactpoint 或 /challenge；Go 默认跟完，
+//     我们手里就剩一张同样 200、同样叫 Instagram、但只有半个令牌的页面。
+//     所以判定必须按**落地地址**做（`loginRedirectError`），只看「有没有令牌」只能得出
+//     「网页版改版或登录墙」这种查不出原因的结论（2026-11-04 就是这样误诊的）。
 package igram
 
 import (
@@ -230,13 +236,60 @@ func (a *Adapter) fetchTokens(ctx context.Context, handle string) (string, strin
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return "", "", social.NeedsAuth("Instagram 登录态失效：请在设置 → 动态里换一个 sessionid")
 	}
+	// 会话有问题时 IG 不报错，而是 302 走人（Go 会自动跟完，我们手里于是是一张
+	// 和主页毫无关系的页面）。**必须按落地地址判定**，否则只能笼统说「没找到令牌」：
+	// 2026-11-04 实测库里的会话被 302 到 /accounts/update_risky_contactpoint/，
+	// 落地页 472KB、标题也是 Instagram，`LSD` 锚点还出现 1 次但没有 `dtsg`，
+	// 于是被当成「网页版改版或登录墙」，用户看到的是一句查不出原因的废话。
+	if landed := resp.Request.URL.Path; landed != "/"+url.PathEscape(handle)+"/" && landed != "/"+url.PathEscape(handle) {
+		return "", "", loginRedirectError(landed, resp.Request.URL.RawQuery)
+	}
 	html := string(body)
 	lsd := matchToken(html, lsdPattern)
 	dtsg := matchToken(html, dtsgPattern)
 	if lsd == "" || dtsg == "" {
-		return "", "", social.StaleParser("Instagram 主页里没找到 lsd/fb_dtsg 令牌（网页版改版或登录墙），无法走 GraphQL")
+		// 200 却两个令牌都没有：这次登录态是好的、页面也是主页，那就是网页壳的
+		// 令牌注入真的改了（或未登录被降级成壳）。留一句能查的话，别把「会话没了」
+		// 也塞进这个分支——那个由上面的 302 判定负责。
+		return "", "", social.StaleParser(fmt.Sprintf(
+			"Instagram 主页（%d，%d 字节）里没找到 lsd/fb_dtsg 令牌：网页版可能又改版了，无法走 GraphQL",
+			resp.StatusCode, len(body)))
 	}
 	return lsd, dtsg, nil
+}
+
+// loginRedirectError 把「主页被 302 到哪里」翻成用户能照着做的事。
+//
+// 三种落地页对应三种完全不同的处置，混成一句「登录墙」等于没说：
+//   - /accounts/login/                       → sessionid 已经不认了，重新导一份就能好；
+//   - /accounts/update_risky_contactpoint/    → 会话被判定有风险，**得去网页版验证邮箱/手机号**，
+//     光换一份 cookie 也没用（同一个账号下次还会被拦到这里）；
+//   - /challenge/ 或 /checkpoint/            → 人机验证，去浏览器过一次。
+//
+// 其余落地页（广告/隐私政策跳转之类）不猜，报 blocked：这条路今天确实拿不到令牌，
+// 但原因不是「改版」，别让上层当成 stale_parser 去走已经下线的旧接口。
+func loginRedirectError(landed, rawQuery string) error {
+	extra := ""
+	if strings.Contains(rawQuery, "__coig_challenge_redirected") {
+		extra = "（带着 __coig_challenge_redirected=1：过完挑战被弹回来）"
+	}
+	switch {
+	case strings.HasPrefix(landed, "/accounts/update_risky_contactpoint"):
+		return social.NeedsAuth("Instagram 要求这个会话先验证邮箱/手机号：主页 302 到了 " + landed + "。" +
+			"去浏览器打开 instagram.com 按提示验证完，再重新导出 cookies 贴回设置 → 动态" +
+			"（不验证只换 cookie 没用）。" + extra)
+	case strings.HasPrefix(landed, "/accounts/login"):
+		return social.NeedsAuth("Instagram 登录态失效：主页把请求 302 到了登录页（" + landed + "）。" +
+			"去设置 → 动态里重新贴一份 sessionid。" + extra)
+	case strings.HasPrefix(landed, "/challenge"), strings.HasPrefix(landed, "/checkpoint"):
+		return social.NeedsAuth("Instagram 要求过人机验证（302 到 " + landed + "）：" +
+			"去浏览器过一次验证，再重新导出 cookies 贴回设置 → 动态。" + extra)
+	case strings.HasPrefix(landed, "/accounts/suspended"):
+		return social.NeedsAuth("Instagram 停用了这个账号（302 到 " + landed + "），这个博主抓不到了。" + extra)
+	default:
+		return social.Blocked("Instagram 把主页 302 到了 " + landed +
+			"：既不是登录页也不是验证页，这条会话/出口 IP 现在拿不到令牌。隔一会儿再试，或看设置里的出口代理。" + extra)
+	}
 }
 
 // matchToken 用「锚点 + 截取」的方式取令牌，避免为一对字段引入正则依赖。

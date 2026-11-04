@@ -2,17 +2,24 @@
 //
 // **主路径是网页版的 GraphQL 端点**（`POST www.instagram.com/api/graphql` + doc_id 持久化查询），
 // 细节与实测数字写在 graphql.go 的文件头。旧的两条 REST 路径（`web_profile_info`、
-// `feed/user/{id}/?max_id=`）留着当降级：2026-11-04 实测它们已经全线 429（带 Cookie、
-// 不带 Cookie、`i.` 与 `www.` 两个主机一样，返回的是「找不到页面」的 HTML），但 IG 的
-// `igweb_rollout` 灰度按 IP 浮动，同一天别的 IP 上曾经 200 过（docs/M5-SOCIAL.md §15.11），
-// 所以 GraphQL 一旦因为 doc_id 过期报 stale_parser，就回退到 web_profile_info 再试一次。
+// `feed/user/{id}/?max_id=`）留着当降级：2026-11-04 实测它们已经下线——`web_profile_info`
+// 对**任何** username 都回同一个 20942 字节的 404 HTML（natgeo / 真号 / 瞎编的号、`i.` 与 `www.`、
+// 带 Cookie 与否，四个组合完全一样），`feed/user` 同样。所以 404 的 HTML 现在归 `stale_parser`，
+// 只有 JSON 的 404 才可能是「没有这个账号」——把接口下线说成博主不存在会让人白删订阅。
+// GraphQL 报 stale_parser 时仍然回退试一次 `web_profile_info`：IG 的 `igweb_rollout` 灰度按 IP 浮动，
+// 同一天别的 IP 上曾经 200 过（docs/M5-SOCIAL.md §15.11）。
 //
 // Cookie 仍然是必需项：同样的 GraphQL 请求不带登录态直接回
 // `{"message":"Rate limit exceeded","code":1675004}`（匿名额度），带上就能翻完 155 条。
 // 拿不到 Cookie 明确报 needs_auth，绝不静默返回空列表。
 //
 // 三种请求（按顺序出现）：
-//  1. GET https://www.instagram.com/{handle}/     —— 只为拿 lsd / fb_dtsg 这对令牌
+//  1. GET https://www.instagram.com/{handle}/     —— 只为拿 lsd / fb_dtsg 这对令牌。
+//     会话有问题时这一跳会被 302 到登录/验证页（Go 自动跟完），落地地址决定报什么错，
+//     见 graphql.go 的 loginRedirectError：/accounts/login → needs_auth，
+//     /accounts/update_risky_contactpoint → 要先去浏览器验证邮箱/手机号，/challenge → 人机验证。
+//     2026-11-04 库里的会话就卡在 update_risky_contactpoint 上，而当时只报了句
+//     「没找到 lsd/fb_dtsg（网页版改版或登录墙）」，查不出原因。
 //  2. POST https://www.instagram.com/api/graphql  —— doc_id=PolarisProfilePostsQuery，首页 33 条
 //  3. 同上，variables.after={上一页 end_cursor}   —— 后续页
 //
@@ -360,6 +367,17 @@ func (a *Adapter) get(ctx context.Context, path string, dst any) error {
 		a.throttle.CoolUntil(until)
 		return social.RateLimited("Instagram 限流", until)
 	case http.StatusNotFound:
+		// 404 有两种，必须分开看：**HTML 的 404 页面说明这个接口自己没了**，
+		// 不是「没有这个账号」。2026-11-04 实测 web_profile_info 对
+		// kaedekaren0825 / natgeo / 一个瞎编的号，四个组合（i. 与 www.、带 cookie 与不带）
+		// 全是同一个 20942 字节的「Page Not Found」HTML——真号假号一样，所以它证明不了任何账号的事。
+		// 以前这里直接报「Instagram 上没有这个账号」，把一次接口下线说成「这个博主不存在」，
+		// 害得人去删订阅。JSON 的 404（`{"message":"…"}`）才可能是账号层的事。
+		if isBlockPage(resp, body) {
+			return social.StaleParser("Instagram 的旧接口 " + strings.SplitN(path, "?", 2)[0] +
+				" 已经下线：404 的 HTML 页面，换哪个 username 都一样（实测 natgeo 也 404），" +
+				"不是「没有这个账号」")
+		}
 		return social.NotFound("Instagram 上没有这个账号")
 	default:
 		return social.Upstream(fmt.Sprintf("Instagram 返回 %d", resp.StatusCode), nil)

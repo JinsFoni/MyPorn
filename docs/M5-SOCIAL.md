@@ -946,3 +946,72 @@ type Discoverer interface {
 
 设置里「动态 → 发现间隔（分钟）」，键 `social_discover_minutes`（0–720，0 = 关）。
 改小能少漏帖，代价是每小时多几打请求；账号多时按「每账号每轮约 1 + ≤8 次请求」估。
+
+### 15.17 「两条路都不通：主页里没找到 lsd/fb_dtsg；旧接口上没有这个账号」（2026-11-04 15:0x）
+
+用户贴的就是 动态页上那行红字，主语是 `@kaedekaren0825`。看着像「这个博主没了 + Instagram 改版了」，
+实际两句话都在胡说——真因是**库里的 Instagram 会话被上游要求先做联系方式验证**。
+
+**现场**
+
+```
+social_accounts.id=131 @kaedekaren0825  155 条帖子 / 721 张照片（以前一直能抓）
+last_error = Instagram 两条路都不通：GraphQL（doc_id=29600383452901789）Instagram 主页里没找到
+             lsd/fb_dtsg 令牌（网页版改版或登录墙），无法走 GraphQL；旧接口 web_profile_info
+             Instagram 上没有这个账号
+日志：抓取博主资料失败，继续尝试抓帖子 account=131（09:45 / 10:16 / 14:01 每轮都报）
+```
+
+**量出来的是两件事**
+
+1. 带库里的 Cookie 抓主页，IG **302** 走人，Go 自动跟完，我们手里是一张 472302 字节、
+   标题也叫 Instagram、`LSD` 锚点出现 1 次但**没有 `dtsg`** 的页面：
+
+   ```
+   curl -b <库里的 cookie> https://www.instagram.com/kaedekaren0825/
+   → 302 https://www.instagram.com/accounts/update_risky_contactpoint/?challenge_context=…
+        &next=https%3A%2F%2Fwww.instagram.com%2Fkaedekaren0825%2F%3F__coig_challenge_redirected%3D1
+   → 跟到最后 200 / 472302 字节，dtsg 0 次
+   ```
+
+   换成**任意**账号（`natgeo`）一样 302 到同一个地方——所以不是这个博主的事，是**会话**的事。
+   也就是说：会话还在（没被踢到登录页），但被判定需要「确认联系方式」才能继续读。
+
+2. 旧接口 `web_profile_info` 现在对谁都是 404：`kaedekaren0825` / `natgeo` / 一个瞎编的号 ×
+   （`i.` / `www.`）×（带 cookie / 不带）= 全 404，**且字节数一模一样（20942）**。
+   我们的代码把 404 一律翻成「Instagram 上没有这个账号」，于是一次接口下线被说成「博主不存在」，
+   照着这个提示做就是白删订阅。
+
+   顺带复核了免登录这条路（都在同一分钟量）：匿名主页是 500KB 登录壳（真号假号一个字节数）、
+   匿名 GraphQL 对三个号一律 `{"errors":[{"message":"Rate limit exceeded","code":1675004}]}`、
+   匿名 `web_profile_info` 404、`/embed/` 也是同一个 500KB 壳 —— **Instagram 现在没有免登录路径**，
+   所以只能把「会话坏了」说清楚，不能假装还能抓。
+
+**改了什么**
+
+- `igram.loginRedirectError`：令牌那一跳改为按**落地地址**判定，而不是只看「有没有令牌」：
+  - `/accounts/login` → `needs_auth`「登录态失效，重新贴 sessionid」
+  - `/accounts/update_risky_contactpoint` → `needs_auth`「先去浏览器验证邮箱/手机号，再重导 cookies
+    （只换 cookie 不验证没用）」——这次就是这一条
+  - `/challenge`、`/checkpoint` → `needs_auth`「去过人机验证」
+  - `/accounts/suspended` → `needs_auth`「账号被停用」
+  - 其余落地页 → `blocked`，文案带上落地路径（不猜、也不当成 stale_parser 去走死掉的旧接口）
+  文案里带上 `__coig_challenge_redirected=1` 这种旁证，方便下次判断是不是「过完挑战被弹回来」。
+- `a.get` 的 404 分流：**HTML 404 = 接口下线**（`stale_parser`，文案写「换哪个 username 都一样」），
+  **JSON 404** 才继续当 `notfound`。这样 `GetProfile` 不会再拼出「两条路都不通」那句假结论。
+- `jobs.maxSyncErrorLen` 300 → 400，并且**按字符边界截断**（原来 `msg[:300]` 把汉字劈成半个，
+  写进 SQLite 就是非法 UTF-8）。这次这条文案实测 321 字节，300 会把最后一句「怎么恢复」切掉——
+  恰好是用户唯一要照着做的那句。
+
+**实测（改完的二进制，`:18081`）**
+
+| 步骤 | 结果 |
+|---|---|
+| `go test` 新增三条 | `TestFetchTokensLoginRedirect`（三种落地页各一条，含「必须带落地地址」）、`TestFetchTokensShellIsStale`（真·改版仍归 stale_parser）、`TestDeadLegacyEndpointIsNotNotFound`（HTML 404 ≠ 没有账号，JSON 404 仍是 notfound） |
+| `POST /api/moments/accounts/131/sync` | job 632 11 s 完成，消息：`@kaedekaren0825 失败：Instagram 要求这个会话先验证邮箱/手机号：主页 302 到了 /accounts/update_risky_contactpoint/。去浏览器打开 instagram.com 按提示验证完，再重新导出 cookies 贴回设置 → 动态（不验证只换 cookie 没用）。` |
+| `social_accounts.last_error` | 同样的新文案，长度 244 字节，UTF-8 完整（不再有残字） |
+| 整轮行为 | `needs_auth` → 整轮立即收工（`jobs/social.go` 原有逻辑），不再每轮撞三次 1.3MB 页面 |
+
+**给用户的做法**：浏览器打开 instagram.com（用导出 cookie 时那个账号/浏览器），
+按提示把邮箱或手机号验证掉，然后重新导出 cookies 贴进设置 → 动态。
+**只重导 cookie 不做验证没用**——会话本身被标了 risky，下次还会被弹到同一个页面。
