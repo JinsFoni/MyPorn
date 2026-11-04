@@ -255,6 +255,10 @@ curl -s -b .tmp/cookie.txt 'localhost:18081/api/krx18/playlist.m3u8?v=office-wif
 - 添加订阅只认 tag 归档页地址（`/tag/…`）；贴影片页地址不会被当成 tag
   （`ParsePerformerURL` 与 `ParseVideoURL` 各认各的）。
 - 「发现」页现在也能选 krx18 并按名字搜 tag：`movieOnly` / `platform.MovieSite` 已删除。
+- 手机底栏跟着加到 **10 格**（关注 / 艺人 / 动态 / YouTube / B 站 / krx18 / 下载 / 媒体库 /
+  管理 / 设置）。320px 实测每格 32px，带文字时「动态 / YouTube / B 站」会粘成一串、
+  「媒体库」还会断成两行，所以标签在 ≤360px 改成 `sr-only`（只留图标，读屏照样念得出名字）、
+  360~400px 字号降到 10px 且禁止折行；实测 390 / 430px 无溢出、320px 只留图标。
 - **这一页没有下载键**（`VideoCard` 与 `/video/:id` 都对 krx18 隐藏）：原因见 11.4。
 
 播放实测（从 `/krx18` 墙上点开 `office-wifes-affair-2026`，静音）：

@@ -314,7 +314,12 @@
       </span>
     {/if}
   </span>
-  <span class="text-[0.6875rem] leading-none">{item.label}</span>
+  <!-- 底栏现在是 10 格（2026-11-04 加 krx18）：390px 上每格 39px，320px 上只剩 32px。
+       标签不许折行（「媒体库」原来会断成两行把整栏顶高），窄到 360px 以下干脆只留图标——
+       文字用 sr-only 留着，读屏和 aria-label 一样能念出名字，视觉上不再糊成一团。 -->
+  <span class="whitespace-nowrap text-[0.6875rem] leading-none max-[400px]:text-[0.625rem] max-[360px]:sr-only">
+    {item.label}
+  </span>
 {/snippet}
 
 <!-- isolate：让 -z-10 的环境光留在这一层里，否则会被 body 的画布底色盖掉 -->
