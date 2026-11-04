@@ -32,9 +32,17 @@
     video: Video;
     /** 首屏前几条用 eager，其余 lazy */
     eager?: boolean;
+    /**
+     * 竖版封面：站上给的海报就是 5:7 的竖图（实测 353×500，主题里 `.poster{padding-top:140%}`），
+     * 塞进 16:9 的框里只会被裁掉上下两头。这里把封面框换成 5:7，和原站归档页一致。
+     *
+     * 默认值跟着平台走（krx18 = 竖版）：这条规矩属于**上游数据长什么样**，不属于某一条墙——
+     * 同一部 krx18 片子在 /krx18 墙、播放页「相关影片」、艺人页上不该有三种裁法。
+     */
+    portrait?: boolean;
   }
 
-  let { video, eager = false }: Props = $props();
+  let { video, eager = false, portrait = video.platform === 'krx18' }: Props = $props();
 
   /**
    * 点进影片时把「现在这一页」记进链接：`/video/62?back=%2Fbilibili%3Fup%3D10`。
@@ -130,7 +138,13 @@
   });
 </script>
 
-<article class="group relative min-w-0 [contain-intrinsic-size:auto_16rem] [content-visibility:auto]">
+<!-- contain-intrinsic-size 要给一个和卡片实际高度接近的估值，否则离屏页回填时版面会跳；
+     竖版卡比 16:9 高得多，估 16rem 会让滚动条位置整体偏掉。 -->
+<article
+  class="group relative min-w-0 [content-visibility:auto] {portrait
+    ? '[contain-intrinsic-size:auto_26rem]'
+    : '[contain-intrinsic-size:auto_16rem]'}"
+>
   <a
     href={`/video/${String(video.id)}${backQuery}`}
     data-link
@@ -141,7 +155,7 @@
     onpointerleave={stopPreview}
     onfocusin={prefetchPlayback}
   >
-    <div class="relative aspect-video overflow-hidden rounded-xl bg-panel">
+    <div class="relative overflow-hidden rounded-xl bg-panel {portrait ? 'aspect-[5/7]' : 'aspect-video'}">
       <CoverArt src={thumb} {eager} scaleClass="transition-transform duration-300 group-hover:scale-[1.02]" />
 
       {#if previewOn && video.previewUrl}

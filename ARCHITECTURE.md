@@ -928,12 +928,19 @@ bilibili 和 YouTube 是同一个位置的东西——「订阅一个内容源�
 （`internal/store/platform_channels_test.go` 里 `TestFeedPlatformFilter` 就是这个约束的看门人；
 该文件原名 `bilibili_test.go`，2026-11-04 krx18 也要这套视图时改成了平台无关的一层）。
 
-**krx18（M8，2026-11-04）也走这条老路，但有一处刻意不同**：它同样有自己的页面 `/krx18`
-（订阅单位是 tag 归档页，tag = 一位女优），订阅源同样是 `performers` 的一行
-（`performer_id` = tag slug）、影片同样是 `videos` 的一行，取数同样是
-`internal/store/platform_channels.go` 那层视图——但它**不在关注流里被排除**：
-tag 背后是真人女优、影片就是她的片，属于「追艺人的片」，而 B 站投稿 / YouTube 频道不是。
-`store.FeedExcludedPlatforms` 因此仍然只有 `bilibili` + `youtube`。
+**krx18（M8，2026-11-04）走的也是这条老路**：它有自己的页面 `/krx18`（订阅单位是 tag
+归档页，tag = 一位女优），订阅源同样是 `performers` 的一行（`performer_id` = tag slug）、
+影片同样是 `videos` 的一行，取数同样是 `internal/store/platform_channels.go` 那层视图，
+`store.FeedExcludedPlatforms` 里同样收着它（`bilibili` + `youtube` + `krx18`）。
+
+一开始是**故意不排除**的——理由写在当时的注释里：tag 背后是真人女优，影片就是她的片，
+属于「追艺人的片」。同一天用户就纠正了这一点（「关注页不要显示 krx18 的视频」），
+真正的理由更简单：订阅一个 tag 一次回填就是几十上百部，关注流那一页装的是「这两天谁发了新片」，
+塞进来之后整页都是同一个人的片库。
+
+排除只针对**没有指定艺人**的列表（`GET /api/videos`）。带上 `performerId` 时不排任何平台：
+艺人页问的是「这个人的片子」，答案不该因为片子出自被排掉的站而变空——这条同时修好了
+B 站 UP 主的艺人页（`/performer/147` 之前也是 0 条，现在 100 条）。
 
 ### 13.6 筛选状态写在地址栏（?up= / ?channel= / ?mode=）
 

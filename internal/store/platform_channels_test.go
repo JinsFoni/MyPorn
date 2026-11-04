@@ -133,6 +133,41 @@ func TestFeedPlatformFilter(t *testing.T) {
 		t.Fatalf("关注流新片计数该只算 pornhub 那 1 条，实际 %d", n)
 	}
 
+	// krx18 也一样：2026-11-04 用户要求「关注页不要显示 krx18 的视频」。
+	// 这里守两件事：① 排除名单里有它；② CountNewVideos 跟着同一份名单走
+	// （它原来自己抄了份 'bilibili','youtube' 字面量，正是这么漏的）。
+	if _, _, err := st.UpsertVideo(&model.Video{
+		Platform: "krx18", PlatformVideoID: "office-wifes-affair-2026",
+		Title: "office-wifes-affair-2026", URL: "https://krx18.com/movies/office-wifes-affair-2026/",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.CountNewVideos(); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatalf("krx18 的新片不该算进关注流角标，实际 %d", n)
+	}
+	// 但指定了艺人就不能排：艺人页问的是「这个人的片子」，答案不该因为出自哪个站而变空
+	// （实测 /performer/147 是 B 站 UP 主、/performer/152 是 krx18 tag，两个都曾经是 0 条）。
+	krxPerformer := mustPerformer(t, st, "krx18", "do-hee-도희", "Do Hee (도희)")
+	krxVideo, _, err := st.UpsertVideo(&model.Video{
+		Platform: "krx18", PlatformVideoID: "taste-of-swapping-2",
+		Title: "taste-of-swapping-2", URL: "https://krx18.com/movies/taste-of-swapping-2/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkVideoPerformer(krxVideo, krxPerformer); err != nil {
+		t.Fatal(err)
+	}
+	scoped, _, err := st.ListFeed(FeedQuery{PerformerID: krxPerformer, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scoped) != 1 || scoped[0].Platform != "krx18" {
+		t.Fatalf("艺人页（带 performerId）不该排 krx18：%+v", scoped)
+	}
+
 	wall, _, err := st.ListFeed(FeedQuery{Platform: "bilibili", Limit: 10})
 	if err != nil {
 		t.Fatal(err)

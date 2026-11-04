@@ -278,3 +278,5 @@ poster 1000×1500 / thumb 1280×720 / fanart 1920×1080 / nfo（含 `uniqueid ty
 | 列表没有时长 | 归档页只给标题/日期/播放数/封面，`durationSec` 一开始是 0，播过或预热过才有真值 | 墙上显示 `0:00` → 前端把 0 当成了时长 |
 | 封面 | `cdnupload.com/wp-content/uploads/...jpg`（353×500，22.7 KB），不校验 Referer，**不需要 CF 指纹** | 封面裂开 → 图床域名换了，`/api/img?p=krx18` 那条普通客户端要跟着改 |
 | 下载 | **不支持**：上游只给清单正文、不下发地址，档位 `url` 为空 | 点了报 `Error opening input file .` → 空地址掉进了 ffmpeg（现在入口处就拦下，文案是「这个站暂不支持下载…」；前端不显示下载键） |
+| 竖版海报 | 原站主题 `.poster{padding-top:140%}` → 封面 5:7，我们照抄（`VideoCard` 的 `portrait`），栅格 `poster-grid` 2/3/3/4/5/6 列 | 封面被裁掉上下两头（露出韩文标题被切一半）→ `portrait` 默认值没跟上平台，或列数断点被 Tailwind 的 `sm/lg` 覆盖 |
+| 关注流 | 不收 krx18（`store.FeedExcludedPlatforms` = bilibili/youtube/krx18）；带 `performerId` 的艺人页反而**不排**任何平台 | 关注页冒出 krx18 的片 → 排除名单没生效；艺人页空着 → 把排除名单也套到了 `performerId` 上（B 站 UP 主的艺人页曾经因此一直是 0 条） |

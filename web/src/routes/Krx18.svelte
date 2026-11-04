@@ -16,7 +16,7 @@
    * 所以这一页只读、不排下载。
    */
   import { onMount } from 'svelte';
-  import InfiniteList from '../components/InfiniteList.svelte';
+  import InfiniteList, { POSTER_GRID } from '../components/InfiniteList.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import AvatarRail from '../components/AvatarRail.svelte';
   import VideoCard from '../components/VideoCard.svelte';
@@ -298,10 +298,16 @@
       {/snippet}
     </EmptyState>
   {:else}
-    <InfiniteList load={loadPage} keyOf={(video: Video) => video.id} reloadKey={wallKey} maxLoadedPages={6}>
+    <InfiniteList
+      load={loadPage}
+      keyOf={(video: Video) => video.id}
+      reloadKey={wallKey}
+      maxLoadedPages={6}
+      gridClass={POSTER_GRID}
+    >
       {#snippet placeholder()}
         <div class="flex flex-col gap-2">
-          <div class="aspect-video w-full rounded-xl bg-panel"></div>
+          <div class="aspect-[5/7] w-full rounded-xl bg-panel"></div>
           <div class="h-3 w-4/5 rounded bg-panel"></div>
           <div class="h-3 w-2/5 rounded bg-panel"></div>
         </div>
@@ -320,7 +326,7 @@
       {/snippet}
 
       {#snippet children(video: Video)}
-        <VideoCard {video} />
+        <VideoCard {video} portrait />
       {/snippet}
     </InfiniteList>
   {/if}

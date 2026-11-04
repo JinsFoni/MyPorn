@@ -232,13 +232,17 @@ type FeedQuery struct {
 }
 
 // FeedExcludedPlatforms 是「关注」流固定不收的平台：它们各自有独立页面
-// （/bilibili、/youtube），那边的片子是 UP 主/频道投稿，和「追艺人新片」不是同一件事。
+// （/bilibili、/youtube、/krx18），那边的片子按「那个站」的节奏看，和「追艺人新片」
+// 不是同一件事；混进这一流之后同一个新片会在两处各出现一次。
 //
 // YouTube 这条是 2026-11-03 补的：YouTube 的 videos 行只在**下载**时才建，媒体库里删掉下载
 // 之后按设计保留 videos 行（页面还能回落到在线播放），于是那 5 条（id 1/2/3/15/60）又从
 // 关注流里冒了出来——用户看到的就是「关注页出现了 YouTube 的视频」。根子上是这一流本来
 // 就不该收 YouTube，而不是删除逻辑漏了什么。
-var FeedExcludedPlatforms = []string{"bilibili", "youtube"}
+//
+// krx18 是 2026-11-04 按用户要求补的（「关注页不要显示 krx18 的视频」）：订阅一个 tag
+// 一次回填就是几十上百部，全塞进关注流会把「关注的艺人这两天发的片」整页顶掉。
+var FeedExcludedPlatforms = []string{"bilibili", "youtube", "krx18"}
 
 // liveSubFilter 生成「这条片所属的艺人里，至少还有一位在订阅里」这个条件；idExpr 是影片 id 的列（如 "v.id"）。
 //
@@ -572,11 +576,20 @@ func (s *Store) MarkVideoSeen(id int64) error {
 	return err
 }
 
-// CountNewVideos 数「关注」流里的新片；B 站和 YouTube 都不算（它们各有自己那条未看计数）。
+// CountNewVideos 数「关注」流里的新片；B 站、YouTube、krx18 都不算（它们各有自己那条未看计数）。
 // 口径必须和 ListFeed 一致，否则侧边栏角标会比流里实际能看到的片多。
+//
+// 排除名单直接取 FeedExcludedPlatforms，不再抄一份字面量——抄一次就会漏一次
+// （krx18 加进这一流时，侧边栏角标原本还在数它，正是这里第二份清单没跟上）。
 func (s *Store) CountNewVideos() (int, error) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(FeedExcludedPlatforms)), ",")
+	args := make([]any, 0, len(FeedExcludedPlatforms))
+	for _, p := range FeedExcludedPlatforms {
+		args = append(args, p)
+	}
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE is_new = 1 AND platform NOT IN ('bilibili', 'youtube')`).Scan(&n)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM videos WHERE is_new = 1 AND platform NOT IN (`+placeholders+`)`,
+		args...).Scan(&n)
 	return n, err
 }
 

@@ -249,6 +249,41 @@
   padding-right: max(env(safe-area-inset-right), 0px);
 }
 
+/* 海报墙的列数（krx18 的墙用它，见 InfiniteList 的 POSTER_GRID）。
+ *
+ * 为什么不写成 `3xl:grid-cols-5` 这种断点变体：自定义断点（@theme 里的 --breakpoint-3xl）
+ * 被 Tailwind 4 排到 sm/lg/xl **之前**，同一元素上两条 grid-template-columns 谁后出现谁赢，
+ * 于是 1440 上仍然是 4 列（实测：CSS 里 1400px 那条在 40rem/64rem/80rem 前面）。
+ * 这里自己写媒体查询，顺序完全可控。
+ *
+ * 列数是量出来的，不是猜的（内容区 = 视口 − 侧边栏 240 − 页面左右各 32）：
+ *   390  → 2 列 × 177px（再窄标题和日期就没法看了，原站手机 3 列是因为它卡上只有标题）
+ *   1024 → 3 列 × 224px（这一档刚冒出侧边栏、内容区反而变窄，所以只给 3 列）
+ *   1280 → 4 列 × 229px
+ *   1400 → 5 列 × 210px（原站同宽 232px，最接近的一档）
+ *   1700 → 6 列 × 222px（原站全宽布局也是 6 列）
+ * 封面本身是 5:7（= 原站主题里的 .poster{padding-top:140%}），由 VideoCard 的 portrait 给。
+ */
+@utility poster-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  @media (width >= 40rem) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  @media (width >= 64rem) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  @media (width >= 80rem) {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  @media (width >= 87.5rem) {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  @media (width >= 106.25rem) {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
 @utility no-scrollbar {
   scrollbar-width: none;
   &::-webkit-scrollbar {

@@ -8,6 +8,20 @@
    * 现在三处共用这一个常量。手机上一行 1 个、sm 起 2 个、xl 3 个、2xl 4 个。
    */
   export const WALL_GRID = 'grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4';
+
+  /**
+   * krx18 的墙用**竖版海报**，列数得比 16:9 的墙多：封面是 5:7（站上 `.poster` 就是
+   * `padding-top:140%`），同样一列宽度下它比 16:9 高一倍多，四列在 1440 上就是每格
+   * 340×476 的四张巨幅海报。
+   *
+   * 列数对着原站量：它的归档页桌面 5 列（全宽布局 6 列）、≤1130px 4 列、≤667px 3 列。
+   * 列数（2/3/3/4/5/6）和它为什么是手写媒体查询而不是 `xl:grid-cols-4` 这种变体，
+   * 都写在 app.css 的 `poster-grid` 那个 @utility 上——一句话：自定义断点会被 Tailwind 4
+   * 排到 sm/lg/xl 之前，两条 grid-template-columns 打架时变成「一路 4 列到 1920」（实测踩过）。
+   * 这里只有手机这一档刻意不同——2 列而不是原站的 3 列：我们的卡片封面下面还挂着头像 + 标题
+   * + 观看数 + 日期一整行（原站只有标题和日期），390px 上 3 列每格只剩 ~115px，那行字就没法看了。
+   */
+  export const POSTER_GRID = 'poster-grid gap-x-3 gap-y-5';
 </script>
 
 <script lang="ts" generics="T">

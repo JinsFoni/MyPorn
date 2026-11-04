@@ -553,7 +553,7 @@
   });
 
   /** 关注流固定排掉的平台，和服务端 store.FeedExcludedPlatforms 一处一个口径 */
-  const FEED_EXCLUDED = 'bilibili,youtube';
+  const FEED_EXCLUDED = 'bilibili,youtube,krx18';
 
   /**
    * 播放器「上一个 / 下一个」按哪份列表算：跟着 `?back=` 走——它记着用户是从哪一页点进来的。

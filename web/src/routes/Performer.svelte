@@ -1,5 +1,5 @@
 <script lang="ts">
-  import InfiniteList from '../components/InfiniteList.svelte';
+  import InfiniteList, { POSTER_GRID, WALL_GRID } from '../components/InfiniteList.svelte';
   import PlatformIcon from '../components/PlatformIcon.svelte';
   import PerformerProfile from '../components/PerformerProfile.svelte';
   import ProfileIcon from '../components/ProfileIcon.svelte';
@@ -342,7 +342,14 @@
 
   <section class="mt-6">
     <h3 class="mb-3 text-title font-medium text-fg">影片</h3>
-    <InfiniteList load={loadVideos} keyOf={(v: Video) => v.id} reloadKey={listKey}>
+    <!-- krx18 的封面是 5:7 的竖海报（见 VideoCard 的 portrait），列数也得跟着换成海报墙的；
+         16:9 那套列数套在竖版上，1440 下会变成四张 340×476 的巨幅海报。 -->
+    <InfiniteList
+      load={loadVideos}
+      keyOf={(v: Video) => v.id}
+      reloadKey={listKey}
+      gridClass={performer?.platform === 'krx18' ? POSTER_GRID : WALL_GRID}
+    >
       {#snippet children(video)}
         <VideoCard video={video} />
       {/snippet}

@@ -22,14 +22,23 @@ const variantCacheTTL = 5 * time.Minute
 func (s *Server) handleListVideos(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	performerID, _ := strconv.ParseInt(q.Get("performerId"), 10, 64)
-	// B 站和 YouTube 各有自己的页面（/bilibili、/youtube），不混进「关注」流：那边的片子是
-	// UP 主/频道投稿，和「追艺人的片」不是同一件事。它们的接口是 /api/bilibili/videos 与 /api/yt/*。
+	// B 站、YouTube、krx18 各有自己的页面（/bilibili、/youtube、/krx18），不混进「关注」流：
+	// 那边的片子是 UP 主投稿 / tag 归档，和「追艺人的片」不是同一件事。
+	// 它们的接口是 /api/bilibili/videos、/api/yt/*、/api/krx18/videos。
+	//
+	// 但**指定了 performerId 就不排**：艺人页问的是「这个人的片子」，答案不该因为片子来自哪个站
+	// 而变空。2026-11-04 实测：krx18 刚加进排除名单，/performer/152（Do Hee，库里有 92 部）
+	// 立刻变成「还没有同步到影片」；B 站 UP 主的艺人页其实一直是空的（/performer/147 也是 0 条）。
+	excludePlatforms := store.FeedExcludedPlatforms
+	if performerID > 0 {
+		excludePlatforms = nil
+	}
 	items, next, err := s.st.ListFeed(store.FeedQuery{
 		PerformerID:      performerID,
 		Cursor:           q.Get("cursor"),
 		Limit:            queryInt(r, "limit", 30),
 		Query:            q.Get("q"),
-		ExcludePlatforms: store.FeedExcludedPlatforms,
+		ExcludePlatforms: excludePlatforms,
 		// 「关注」流要的：已经下到本地库的片子不再出现（媒体库那一页才是它们的去处）
 		HideDownloaded: q.Get("hideDownloaded") == "1",
 	})
