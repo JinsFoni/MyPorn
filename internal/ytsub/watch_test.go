@@ -1,6 +1,11 @@
 package ytsub
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/JinsFoni/MyPorn/internal/social"
+)
 
 // 真实 watch 页里那几段被裁下来（键名、引号、转义都照原样），
 // 顺便混进日志噪音：`"viewCount":"0"` 出现在没开放播放量的视频上，不该被当成有效值。
@@ -116,5 +121,50 @@ func TestParseWatchMetaMembersOnly(t *testing.T) {
 	}
 	if got3.MembersOnly {
 		t.Error("普通视频被误判成会员抢先看")
+	}
+}
+
+// 登录墙：2026-11-04 从出口 13.158.71.17 匿名抓 `/watch?v=<id>&hl=en` 的真实形状——
+// 页面照样 1.25~1.34MB（推荐位都在），但**一个 lengthSeconds、一个 publishDate 都没有**，
+// 只剩 `"playabilityStatus":{"status":"LOGIN_REQUIRED"}`。
+//
+// 这种页面必须报成「要登录」（social.KindBlocked，调用方会停下整批），
+// 不能报成 NotFound——以前就报的 NotFound，任务于是每条都撞一次，
+// 界面上还写成「3 条这次没拿到（可能已删除）」，把人往「视频没了」的方向带。
+func TestParseWatchMetaLoginWall(t *testing.T) {
+	page := `<html><head><title>4K 美女万圣节外拍｜小yomi - YouTube</title></head><body>
+		"dateText":{"simpleText":"Nov 3, 2026"},
+		"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"登录以确认你不是机器人"},
+		"lengthText":{"accessibility":{"accessibilityData":{"label":"9 minutes, 16 seconds"}}}
+	</body></html>`
+	_, err := parseWatchMeta(page)
+	if err == nil {
+		t.Fatal("登录墙页面应当报错，不能凭空造出时长")
+	}
+	if k := social.KindOf(err); k != social.KindBlocked {
+		t.Fatalf("登录墙应当是 %s，得到 %s（%v）", social.KindBlocked, k, err)
+	}
+	if !strings.Contains(err.Error(), "要求登录") {
+		t.Fatalf("错误里要说清是「要登录」: %v", err)
+	}
+
+	// 同一批里也有「playabilityStatus 是 LOGIN_REQUIRED 但 lengthSeconds 仍在」的页面
+	// （实测 QuFre08pGq8）：那种就该照常收下时长，别一起当登录墙丢掉。
+	okPage := `<html><body>"playabilityStatus":{"status":"LOGIN_REQUIRED"},
+		"videoDetails":{"lengthSeconds":"10"}</body></html>`
+	got, err := parseWatchMeta(okPage)
+	if err != nil {
+		t.Fatalf("有时长的页面不该报错: %v", err)
+	}
+	if got.DurationSec != 10 {
+		t.Fatalf("时长 = %d，期望 10", got.DurationSec)
+	}
+
+	// 真的没了 / 被删掉的页面仍然是 NotFound（不是登录墙），文案也要分开。
+	gone := `<html><head><title>已删除 - YouTube</title></head><body>
+		"playabilityStatus":{"status":"ERROR","reason":"This video isn't available anymore"}</body></html>`
+	_, err = parseWatchMeta(gone)
+	if k := social.KindOf(err); k != social.KindNotFound {
+		t.Fatalf("已删除的视频应当是 %s，得到 %s", social.KindNotFound, k)
 	}
 }

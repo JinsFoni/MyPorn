@@ -275,7 +275,7 @@ yt-dlp --no-playlist --newline --socket-timeout 20 --retries 3 --concurrent-frag
 | 深度回填 | `yt_sync`（`deep=true` 参数） | 1 | 添加频道时自动跑；管理页可手动重跑 |
 | 下载 | `yt_download` | 由现有下载并发控制 | §6 |
 | 单条补时间 | 不是任务：`POST /api/yt/videos/{id}/refresh` | — | 点开一条没有时间的视频时同步调一次（4 秒） |
-| 整批补元信息 | `yt_meta` | 1 | 走观看页（`internal/ytsub/watch.go`），不依赖 yt-dlp；补**发布时间 / 时长 / 播放量**三样（两条抓取通道各缺一半：RSS 不给时长、yt-dlp flat 不给时间戳）。墙上「补齐」按钮 = `POST /api/yt/fill-meta`；每轮 `yt_sync` 结束时缺的行 ≤ 40 条会自动排一次 |
+| 整批补元信息 | `yt_meta` | 1 | 两遍：先按频道拉 yt-dlp 的 flat 列表批量补**时长**（2026-11-04 加，见 §14.24），剩下的再走观看页（`internal/ytsub/watch.go`）补**发布时间 / 播放量**。两条抓取通道各缺一半：RSS 不给时长、yt-dlp flat 不给时间戳。墙上「补齐」按钮 = `POST /api/yt/fill-meta`；每轮 `yt_sync` 结束时缺的行 ≤ 40 条会自动排一次；补不到的记 `meta_tries`，3 次后不再算缺口 |
 
 调度沿用现有 scheduler；`enabled=0` 跳过。SSE 新增 `yt.new`（`{channelId, title, count}`），侧边栏未看角标复用 `live`。
 
@@ -409,7 +409,7 @@ yt-dlp -J --flat-playlist --playlist-end 200 https://www.youtube.com/channel/<UC
 | 风险 | 说明 | 应对 |
 |---|---|---|
 | yt-dlp 版本 | 两周不升级就可能全线 403 | 界面显示版本 + 过期警告；`stale_parser` 文案直接指向升级 |
-| 深挖条目没日期 | flat 模式不给时间；走 yt-dlp 逐条补太慢（4.1s/条） | 走观看页批量补（1.5s/条，`yt_meta`），墙上一条提示 + 一个按钮 |
+| 深挖条目没日期 | flat 模式不给时间；走 yt-dlp 逐条补太慢（4.1s/条） | 走观看页批量补（1.5s/条，`yt_meta`），墙上一条提示 + 一个按钮。**注意**：匿名观看页现在只剩登录墙（§14.24），这条只能救「RSS 没给时长」的那半 |
 | 首次回填 200 条上限 | 老频道历史远多于此 | 可配；管理页提供「再拉一批」（改 `--playlist-start` 续接） |
 | AV1 只有视频轨 | 必须封装一次 | 已是既定方案；`-c copy` 不损画质，产物单 mp4 兼容 Chrome / Firefox / Safari 17+ / Emby |
 | 高分辨率体积 | 8K AV1 90 秒就有 358 MB（实测），整频道批量下载很容易把盘吃满 | 不设高度上限（用户要「最高画质」）；`CheckSpace` 兜底 + 只做手动/整频道批量，不做全自动 |
@@ -1477,3 +1477,86 @@ __Secure-1PAPISID, __Secure-1PSID, __Secure-1PSIDCC        ← 只剩 __Secure-3
 | `TestCookieJarRejectsTornWrite` | 写断的 jar（无结尾换行）不能被采用，否则一次并发写坏就把好 cookie 覆盖成半截 |
 | `TestLoginCookieCount` / `TestLoginAlive` | 8 条 / 0 条 / 只剩空壳 / SID 过期 —— 数和结论都得对 |
 | `TestResolveStreamPersistsRotatedCookies` | 端到端：假 yt-dlp 跑的时候往 `--cookies` 那个文件里追加一行，跑完必须存回设置，第二轮发的就是存回去的那份 |
+
+### 14.24 「YouTube 页总是显示有 N 条没有时长」：观看页那条路被登录墙堵了（2026-11-04）
+
+**起因**：用户的原话是「YouTube 页为什么总是显示：卡片没有时长，缺的这些卡片上就没有时长或显示
+「时间未知」」。整句就是墙上那条提示条的文字——不是偶发，是**一直挂着**。
+
+**现场（改之前，`:18081`，真浏览器先 unregister SW + 清 caches）**
+
+| 量法 | 结果 |
+|---|---|
+| 墙上 36 张卡，逐张看 `innerText` 有没有 `\d+:\d` | 36 张里 **3 张没有时长**，正好是最新的那 3 条 |
+| 提示条 | `有 3 条没有时长（缺的这些卡片上就没有时长或显示「时间未知」）。` |
+| `GET /api/yt/health` | `missingDates: 0, missingDurations: 3` |
+| 库里 177 行 | 只有这 3 行 `duration_sec = 0`，其余 174 行都有 |
+| `jobs` 表（yt_meta 历史） | 每条都是`补完 0 条，3 条这次没拿到（可能已删除，也可能只是这次请求失败，可以再点一次）`，**每隔一轮同步重跑一遍、每次都是 0** |
+
+**那 3 条是什么、为什么补不到**
+
+`OwlJSV_R564`（ch9 8K摄影大玩家）、`H__uebwbFq0` / `144AIwtR4S4`（ch12 4kaamg）。
+它们都是 RSS 增量那条通道进来的（`date_source = rss`：有发布时间、没有时长）。
+
+逐条量下来有两个各自独立的坑：
+
+1. **观看页匿名已经拿不到播放器数据了**。`yt_meta` 原来只有一条路——抓 `/watch?v=<id>&hl=en`
+   解析 `lengthSeconds` / `publishDate`。2026-11-04 实测（本机直连，UA 用 Chrome 136）：
+
+   ```
+   for v in 7rUSkyz9M0A LuaQDfY96fA v98bW21C79Y sV_jt4CXIgQ M34TIq4UBA0 QuFre08pGq8 dQw4w9WgXcQ; do
+     curl -s -A "$UA" "https://www.youtube.com/watch?v=$v&hl=en"   # 逐个 grep 三个字段
+   done
+   → 页面 1.22~1.34MB（推荐位都在），`"playabilityStatus":{"status":"LOGIN_REQUIRED"}`
+   → 6/7 条页面里 **0 个 lengthSeconds、0 个 publishDate**
+   → 只有 QuFre08pGq8 例外（状态是 LOGIN_REQUIRED 但 lengthSeconds 还在），dQw4w9WgXcQ 是 OK
+   ```
+
+   也就是说：整条链路没坏（RSS 照样进新片、flat 列表照样能列），坏的是「匿名看观看页」这一条。
+
+2. **其中一条是短视频，flat 列表里根本没有它**。`yt-dlp -J --flat-playlist` 列 ch9 的
+   `/channel/<id>/videos` 前 40 条，`OwlJSV_R564` 不在里面；它在 `/channel/<id>/shorts` 里，
+   而 shorts 那个列表**连时长字段都没有**（`duration: None`，页面 HTML 里 `lengthText` 出现 0 次）。
+
+于是「补不到 → 缺口还在 → 下一轮再补 → 还是补不到」形成死循环，提示条就永远挂着；
+而且任务文案把「要登录」写成了「可能已删除」，把人往「视频没了」的方向带。
+
+**改了什么**
+
+- **`yt_meta` 加了一遍按频道批量补时长**（`jobs.ytFillDurationsFromList`）：先用一次
+  `yt-dlp -J --flat-playlist --playlist-end N` 把一个频道的列表拉下来，按 video_id 对上就写时长。
+  实测 7 个启用频道各拉 60 条：**1.0 / 1.0 / 1.0 / 1.0 / 1.7 / 2.2 / 2.4 秒，60/60 条都带 `duration`**——
+  一次请求补一个频道里所有缺时长的行，而且不依赖登录态。flat 里没有的才进第二遍（观看页）。
+- **登录墙单独成一类错误**（`ytsub.watchLoginWallRe` → `social.Blocked`）：页面里
+  `playabilityStatus` 是 `LOGIN_REQUIRED`/`AGE_CHECK_REQUIRED` 且三个字段都没有时，
+  报「YouTube 要求登录：观看页只剩登录墙」，任务立刻停下整批（不再一条条撞 1.3MB 的页面）、
+  文案也不再写「可能已删除」。真的没了/被删的页面仍然是 `NotFound`。
+- **补不到就记账**（迁移 `0015_yt_meta_tries.sql`，`yt_videos.meta_tries`）：
+  每失败一次 +1，到 `store.YtMetaMaxTries = 3` 就不再算「缺」——墙上的提示条只数还值得试的那些，
+  试够次数的进 `missingStuck`，只在设置 → YouTube 里说明，并给一个「再试一次」（`force`）。
+  补到了（`FillYtVideoMeta`）、用户点补齐、或**Cookie 存回了新的一份**（`cmd/myporn/main.go` 的 jar 回调）
+  都会把这个记账清零——换登录态就是换了一条路，该重新试。
+- **收尾那句总结要落库**（`Ctl.FlushProgress`）：`Progress` 800ms 内的第二次调用会被丢掉，
+  而这条任务常常一两秒就结束，任务列表里留下的就是中间那句「看观看页 1/1」。
+  实测同一个任务连跑两次，一次留下总结、一次留下中间态，就差那几百毫秒。
+
+**实测（改完重启 `:18081`）**
+
+| 步骤 | 结果 |
+|---|---|
+| `POST /api/yt/fill-meta`（3 条缺口，job 610） | 4 秒完成：`补完 2 条；剩下 1 条拿不到：YouTube 要求登录：观看页只剩登录墙，拿不到这条的时间/时长` |
+| 那两条的时长 | `H__uebwbFq0` → 152 秒（卡片 2:32）、`144AIwtR4S4` → 169 秒（2:49），**全部来自 flat 列表**，没走观看页 |
+| `ytcookies/` 目录 | `total 0`（还是每轮收干净） |
+| `GET /api/yt/health`（补完） | `missingDates: 0, missingDurations: 0, missingStuck: 1` |
+| 墙上（真浏览器，先 unregister SW + 清 caches） | 提示条**消失**；36 张卡里只剩 1 张没有时长（就是那条短视频），其余 2:32 / 2:49 / 0:09 / 4:43 / 0:12 都在 |
+| 设置 → YouTube | `1 条视频补过 3 次仍没有时长/发布时间（多是短视频，频道列表里没有它；登录态失效时观看页也只剩登录墙）。再试一次` |
+| 再等一轮同步 | 库里 `meta_tries = 3` 保持不动，任务列表不再出现「补完 0 条」，提示条也不再回来 |
+
+**能补到什么程度（把话说清楚）**
+
+- 普通视频：**flat 列表就有时长**，一次请求补一个频道，跟登录态无关 → 以后新片基本不会再缺。
+- 短视频（≤60 秒、只在 `/shorts` 里）：flat 不给时长、shorts 页面也没有时长字段，只有
+  「登录态活着」时的观看页/yt-dlp 单条能拿到。所以它可能永远缺一块——卡片上就是没有时长那块，
+  不再挂提示条催人。
+- 缺发布时间（深度回填来的老条目）：flat 没有时间戳，仍然只能靠观看页/RSS。
+  观看页被登录墙挡住时，同样走「记满 3 次 → 进 `missingStuck`」这条路，不会一直挂着。

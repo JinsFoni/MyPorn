@@ -700,8 +700,11 @@ func (s *Store) EnsureVideoForYt(v *YtVideoRow) (int64, error) {
 //
 // 只补「原来没有」的字段：这些值来自 yt-dlp 的单条抓取，比 RSS/flat 更权威，
 // 但下载页展示的是历史值，别因为一次补抓把已有数据改坏。
+//
+// 不管这条补到了什么，`meta_tries` 都归零：只要有一次拿到过东西，说明这条路当下是通的，
+// 下次缺口再出现就该重新试，别被以前的失败次数挡住。
 func (s *Store) FillYtVideoMeta(id int64, publishedAt *time.Time, dateSource string, durationSec int, views int64) error {
-	sets := []string{}
+	sets := []string{"meta_tries = 0"}
 	args := []any{}
 	if publishedAt != nil {
 		sets = append(sets, "published_at = ?", "date_source = ?")
@@ -715,11 +718,42 @@ func (s *Store) FillYtVideoMeta(id int64, publishedAt *time.Time, dateSource str
 		sets = append(sets, "views = MAX(views, ?)")
 		args = append(args, views)
 	}
-	if len(sets) == 0 {
-		return nil
-	}
 	args = append(args, id)
 	_, err := s.db.Exec(`UPDATE yt_videos SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
+	return err
+}
+
+// YtMetaMaxTries 是「补了这么多次还补不到就别再算它缺」的次数。
+//
+// 3 次是留给偶发的：实测 2026-11-03 有一批行首次连接偶发失败、重跑一次就补上了。
+// 到了 3 次还在缺的那些，基本都是**结构上补不到**的（短视频：flat 列表里没有、
+// 观看页又没有长度；或者登录态失效时观看页只剩登录墙），再撞下去只是每轮白抓几个 1.3MB。
+const YtMetaMaxTries = 3
+
+// BumpYtMetaTries 给这些行的「补了几次」加一次，最多加到 YtMetaMaxTries（留着给界面认）。
+func (s *Store) BumpYtMetaTries(ids []int64, by int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if by < 1 {
+		by = 1
+	}
+	ph := make([]string, 0, len(ids))
+	args := make([]any, 0, len(ids)+2)
+	args = append(args, by, YtMetaMaxTries)
+	for _, id := range ids {
+		ph = append(ph, "?")
+		args = append(args, id)
+	}
+	_, err := s.db.Exec(`UPDATE yt_videos SET meta_tries = MIN(meta_tries + ?, ?)
+		WHERE id IN (`+strings.Join(ph, ",")+`)`, args...)
+	return err
+}
+
+// ResetYtMetaTries 把所有「补过但没补到」的记账清零：用户点「补齐」（force）或换了一份
+// Cookie（新登录态可能就补得上）时调，让那些行重新参与自动补。
+func (s *Store) ResetYtMetaTries() error {
+	_, err := s.db.Exec(`UPDATE yt_videos SET meta_tries = 0 WHERE meta_tries > 0`)
 	return err
 }
 
@@ -736,17 +770,23 @@ type YtVideoLite struct {
 // yt-dlp 的 flat 列表（深度回填）有时长但没有时间戳。所以「订阅后只跑过 RSS」的那些行
 // 卡片上就没有时长（2026-11-02 实测库里 184 条里 54 条这样，`date_source` 全是 rss），
 // 而墙上原来那条提示条只数「缺发布时间」，这批一条都不会去补。
-// 补齐的办法见 jobs 里的 yt_meta：走观看页，一次 GET 同时带回时间 / 时长 / 播放量。
+// 补齐的办法见 jobs 里的 yt_meta：先按频道拉一次 yt-dlp 的 flat 列表批量补时长，
+// 剩下的（短视频 / 列表深度以外的老条目）再逐条走观看页。
 //
 // 直播不算缺时长（本来就没有固定时长），`hidden` 的行也不补——看不见，白花请求。
-func (s *Store) ListYtVideosMissingMeta(limit int) ([]YtVideoLite, error) {
+// force=false 时跳过 `meta_tries >= YtMetaMaxTries` 的行（已经证明补不到，见 BumpYtMetaTries）。
+func (s *Store) ListYtVideosMissingMeta(limit int, force bool) ([]YtVideoLite, error) {
 	if limit <= 0 {
 		limit = 500
 	}
-	rows, err := s.db.Query(`SELECT id, video_id, channel_id FROM yt_videos
+	q := `SELECT id, video_id, channel_id FROM yt_videos
 		WHERE hidden = 0
-		  AND (COALESCE(published_at, '') = '' OR (duration_sec = 0 AND is_live = 0))
-		ORDER BY id DESC LIMIT ?`, limit)
+		  AND (COALESCE(published_at, '') = '' OR (duration_sec = 0 AND is_live = 0))`
+	if !force {
+		q += fmt.Sprintf(` AND meta_tries < %d`, YtMetaMaxTries)
+	}
+	q += ` ORDER BY id DESC LIMIT ?`
+	rows, err := s.db.Query(q, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -762,7 +802,7 @@ func (s *Store) ListYtVideosMissingMeta(limit int) ([]YtVideoLite, error) {
 	return out, rows.Err()
 }
 
-// YtMetaGaps 是「缺元信息」的三个数（墙上的提示条和补齐接口都用它）。
+// YtMetaGaps 是「缺元信息」的四个数（墙上的提示条和补齐接口都用它）。
 type YtMetaGaps struct {
 	// Rows 是要补的行数：缺时间或缺时长，一行只算一次（两样都缺不会算两遍）
 	Rows int
@@ -770,16 +810,30 @@ type YtMetaGaps struct {
 	Dates int
 	// Durations 是缺时长的行数（直播不算——直播本来就没有固定时长）
 	Durations int
+	// Stuck 是「补了 YtMetaMaxTries 次仍然缺」的行数：它们不计入上面三个数，
+	// 界面也不该再拿它们催用户，但设置页要说清楚有这么多条是真的拿不到（见 M6 §14.24）。
+	Stuck int
 }
 
 // CountYtVideosMissingMeta 数一下还有多少条缺元信息（给墙上的提示条用）。
+//
+// 分两个数：还值得试的（meta_tries < YtMetaMaxTries）进 Rows/Dates/Durations，
+// 已经试够次数的进 Stuck——墙上的「有 N 条没有时长」只数前者，否则那 3 条永远补不到的短视频
+// 会让提示条永远挂在页面顶上（2026-11-04 用户问的就是这个）。
 func (s *Store) CountYtVideosMissingMeta() (YtMetaGaps, error) {
 	var g YtMetaGaps
 	err := s.db.QueryRow(`SELECT
 		COALESCE(SUM(COALESCE(published_at, '') = '' OR (duration_sec = 0 AND is_live = 0)), 0),
 		COALESCE(SUM(COALESCE(published_at, '') = ''), 0),
 		COALESCE(SUM(duration_sec = 0 AND is_live = 0), 0)
-		FROM yt_videos WHERE hidden = 0`).Scan(&g.Rows, &g.Dates, &g.Durations)
+		FROM yt_videos WHERE hidden = 0 AND meta_tries < ?`, YtMetaMaxTries).
+		Scan(&g.Rows, &g.Dates, &g.Durations)
+	if err != nil {
+		return g, err
+	}
+	err = s.db.QueryRow(`SELECT
+		COALESCE(SUM(COALESCE(published_at, '') = '' OR (duration_sec = 0 AND is_live = 0)), 0)
+		FROM yt_videos WHERE hidden = 0 AND meta_tries >= ?`, YtMetaMaxTries).Scan(&g.Stuck)
 	return g, err
 }
 

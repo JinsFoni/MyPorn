@@ -809,7 +809,8 @@ POST /api/moments/cooldown
 
 ```json
 { "path": "/opt/ytvenv/bin/yt-dlp", "found": true, "version": "2026.10.26",
-  "ageDays": 1, "stale": false, "ffmpegOk": true, "error": "", "missingDates": 27 }
+  "ageDays": 1, "stale": false, "ffmpegOk": true, "error": "",
+  "missingDates": 27, "missingDurations": 3, "missingStuck": 1 }
 ```
 
 配置的路径用不了时（文件被删 / 是目录 / 没有可执行位 / `--version` 跑不起来）：
@@ -817,7 +818,8 @@ POST /api/moments/cooldown
 ```json
 { "path": "/tmp/ytvenv/bin/yt-dlp", "found": false, "version": "",
   "ageDays": 0, "stale": false, "ffmpegOk": false,
-  "error": "这个路径上没有可执行的 yt-dlp：/tmp/ytvenv/bin/yt-dlp", "missingDates": 27 }
+  "error": "这个路径上没有可执行的 yt-dlp：/tmp/ytvenv/bin/yt-dlp",
+  "missingDates": 27, "missingDurations": 0, "missingStuck": 0 }
 ```
 
 `found` 的语义是「**能跑通 `--version`**」，不是「设置里填了路径」或「文件存在」。
@@ -828,6 +830,11 @@ POST /api/moments/cooldown
 
 `missingDates` / `missingDurations` = 还没有发布时间 / 还没有时长的视频条数（墙上据此决定显不显示「有 N 条没有时长 · 补齐」那一条）。两样分开数是因为两条抓取通道各缺一半：RSS（增量同步）不给时长，yt-dlp 的 flat 列表（深度回填）不给时间戳。直播不算「缺时长」。
 
+`missingStuck` = **补过 3 次仍然缺**的条数（`yt_videos.meta_tries >= 3`），它们**不计入**上面两个数。
+不加这个区分的话，那几条结构上补不到的行（短视频：频道 `/videos` 列表里没有、观看页又要登录）
+会让墙上的提示条永远挂着——2026-11-04 用户问的就是这个。它们只在设置 → YouTube 里说明，
+那里给一个「再试一次」（`force`，会把记账清零重排）。
+
 `stale` 的判据是版本日期超过 90 天。这个接口给的是「为什么下载会失败」的答案：
 实测 2026.07.04 版全线 403，2026.10.26 正常——所以版本号必须能在界面上看到。
 
@@ -837,14 +844,19 @@ POST /api/moments/cooldown
 {} → 200 { "jobId": 85, "total": 54, "missingDates": 0, "missingDurations": 54 }
 ```
 
-排一个 `yt_meta` 任务，逐条打开观看页补**发布时间 / 时长 / 播放量**（一次普通 GET，实测 1.5s/条，
-54 条约 90 秒）。`total` 是「要补的行数」（缺时间或缺时长，一行只算一次），
-`missingDates` / `missingDurations` 分开给两个口径。
+排一个 `yt_meta` 任务补**发布时间 / 时长 / 播放量**。任务内部两遍：
+① 按频道拉一次 yt-dlp 的 flat 列表批量补时长（实测 7 个频道各 1.0~2.4 秒、60/60 条都带 `duration`，
+**不依赖登录态**）；② flat 里没有的那些（短视频、超列表深度的老条目、缺发布时间的行）才逐条看观看页
+（一次普通 GET、1.29MB、1.5 秒）。
+`total` 是「要补的行数」（缺时间或缺时长，一行只算一次），`missingDates` / `missingDurations` 分开给两个口径。
 一条不缺时返回 `{ "jobId": 0, "total": 0, … }`，同类型任务已在队列里时 `jobId=0`。
+点这个按钮等于 `force`：先清掉「补过几次」的记账，之前判「补不到」的行也重试一遍。
 跑完 SSE 会推 `job.updated`（`type=yt_meta, status=done`），墙上重拉并重新数那两个数。
 
-观看页偶尔会请求失败（实测 54 条一轮补上 44 条、再点两次补完剩下 10 条），
-所以任务文案写「N 条这次没拿到（可能已删除，也可能只是这次请求失败，可以再点一次）」。
+**补不到就记账**（2026-11-04 加）：每失败一次 `yt_videos.meta_tries + 1`，到 3 次就不再算「缺」，
+自动补（同步完顺手跑的那次）也不再拿它去撞；换了一份 Cookie（`yt_cookies` 存回时）会全部清零。
+文案也分清了：「N 条这次没拿到（可能只是这次请求失败）」
+vs「剩下 N 条拿不到：YouTube 要求登录：观看页只剩登录墙」——后者不是「视频没了」。
 
 ### C14. `GET /api/manage/youtube`
 

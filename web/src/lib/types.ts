@@ -1068,4 +1068,12 @@ export interface YtHealth {
   missingDates: number;
   /** 还没有时长的视频条数（只跑过 RSS 的那批；直播不算） */
   missingDurations: number;
+  /**
+   * 补过 3 次仍然缺元信息的条数（多是短视频：频道 `/videos` 列表里没有它、观看页又要登录；
+   * 以及登录态失效后被登录墙挡住的那些）。
+   *
+   * 它们**不计入**上面两个数——否则墙上那条提示条永远消不掉（2026-11-04 就是这么一直挂着的）。
+   * 放在设置页说清楚就行：点「补齐」会强制重试一次。
+   */
+  missingStuck: number;
 }

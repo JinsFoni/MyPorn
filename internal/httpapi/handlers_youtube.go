@@ -519,6 +519,8 @@ func (s *Server) handleYtHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	// 顺带把「有多少条缺元信息」带回去：墙上要靠它决定显不显示「补齐」那一条。
 	// 两样分开数——缺时间（深度回填来的老条目）和缺时长（只跑过 RSS 的条目）是两批不同的行。
+	// missingStuck 是「补过 store.YtMetaMaxTries 次还补不到」的那些（短视频 / 登录墙）：
+	// 它们不计入前两个数（否则提示条永远挂在墙上），只给设置页说明用。
 	var gaps store.YtMetaGaps
 	if g, err := s.st.CountYtVideosMissingMeta(); err == nil {
 		gaps = g
@@ -527,7 +529,9 @@ func (s *Server) handleYtHealth(w http.ResponseWriter, r *http.Request) {
 		ytsub.VersionInfo
 		MissingDates     int `json:"missingDates"`
 		MissingDurations int `json:"missingDurations"`
-	}{VersionInfo: info, MissingDates: gaps.Dates, MissingDurations: gaps.Durations})
+		MissingStuck     int `json:"missingStuck"`
+	}{VersionInfo: info, MissingDates: gaps.Dates, MissingDurations: gaps.Durations,
+		MissingStuck: gaps.Stuck})
 }
 
 // ---- 内部工具 ----
@@ -585,7 +589,7 @@ func (s *Server) handleYtFillMeta(w http.ResponseWriter, r *http.Request) {
 			"missingDates": gaps.Dates, "missingDurations": gaps.Durations})
 		return
 	}
-	jobID, err := s.runner.EnqueueYtMeta(0)
+	jobID, err := s.runner.EnqueueYtMeta(0, true)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "排队补齐元信息失败")
 		return

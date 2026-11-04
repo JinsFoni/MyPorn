@@ -318,3 +318,103 @@ func TestYtDownloadHonoursCancel(t *testing.T) {
 		t.Fatal("取消没有被及时响应：yt-dlp 还在跑")
 	}
 }
+
+// 假 yt-dlp 的 flat 模式：只认 --flat-playlist，吐一个频道列表（带时长、没有时间戳）。
+// 不碰 ffmpeg，所以这条测试在没有 ffmpeg 的机器上也能跑。
+const fakeFlatYtDlp = `#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "--flat-playlist" ]; then
+    cat <<'JSON'
+{"id":"UCtest","title":"测试频道 - Videos","entries":[
+ {"id":"vidFLAT00001","title":"一","duration":301},
+ {"id":"vidFLAT00002","title":"二","duration":42}]}
+JSON
+    exit 0
+  fi
+done
+echo '{}'
+`
+
+// TestYtMetaJobFillsDurationsFromFlatList 覆盖 2026-11-04 的修法：
+// 观看页那条路被登录墙挡住之后（匿名抓 /watch 只剩 1.3MB 的空壳、零个 lengthSeconds），
+// yt_meta 先用**频道 flat 列表**把时长一次性补掉——一次请求补一个频道，
+// 不依赖登录态。剩下的（短视频 / 超列表深度）才逐条看观看页。
+//
+// 这里两条行都在 flat 列表里，所以第二遍应当一条都不剩、一次网络请求都不发。
+func TestYtMetaJobFillsDurationsFromFlatList(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "yt-dlp")
+	if err := os.WriteFile(bin, []byte(fakeFlatYtDlp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tmp := t.TempDir()
+	st, err := store.Open(filepath.Join(tmp, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	chID, _, err := st.UpsertYtChannel(&store.YtChannel{
+		ChannelID: "UC7h5bqq_rzVxqhLyKtA7JRw", Title: "测试频道", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := time.Date(2026, 11, 3, 14, 18, 10, 0, time.UTC)
+	// RSS 那条通道给的样子：有发布时间、**没有时长**。
+	if _, err := st.UpsertYtVideos(chID, []store.YtVideoInput{
+		{VideoID: "vidFLAT00001", Title: "一", PublishedAt: pub},
+		{VideoID: "vidFLAT00002", Title: "二", PublishedAt: pub},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.Config{DataDir: tmp}
+	r := NewRunner(cfg, st, platform.NewRegistry(), nil, nil, nil, events.NewHub(), log,
+		imgcache.New(t.TempDir(), nil, "", log))
+	dlp := ytsub.NewYtDlp(
+		func() string { return bin },
+		func() string { return "" },
+		func() string { return "" },
+		func() string { return "" },
+		log,
+	)
+	r.SetYouTube(dlp, social.NewThrottle(0))
+
+	if _, err := r.EnqueueYtMeta(0, false); err != nil {
+		t.Fatalf("投递失败: %v", err)
+	}
+	job, err := st.Claim(model.JobTypeYtMeta)
+	if err != nil || job == nil {
+		t.Fatalf("领取任务失败: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ctl := &Ctl{ctx: ctx, cancel: func(error) {}, st: st, hub: events.NewHub(), log: log, job: job}
+	if err := r.runYtMetaJob(ctx, job, ctl); err != nil {
+		t.Fatalf("yt_meta 失败: %v", err)
+	}
+
+	for _, want := range []struct {
+		videoID string
+		dur     int
+	}{{"vidFLAT00001", 301}, {"vidFLAT00002", 42}} {
+		row, err := st.GetYtVideoByVideoID(want.videoID)
+		if err != nil {
+			t.Fatalf("%s 读不回来: %v", want.videoID, err)
+		}
+		if row.DurationSec != want.dur {
+			t.Errorf("%s 时长 = %d，期望 %d（flat 列表里就有）", want.videoID, row.DurationSec, want.dur)
+		}
+		if row.PublishedAt == nil {
+			t.Errorf("%s 的发布时间被补没了", want.videoID)
+		}
+	}
+	gaps, err := st.CountYtVideosMissingMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gaps.Rows != 0 || gaps.Stuck != 0 {
+		t.Fatalf("两条都补上了，不该再有缺口: %+v", gaps)
+	}
+}

@@ -43,6 +43,18 @@ var (
 var (
 	watchMembersBadgeRe = regexp.MustCompile(`BADGE_STYLE_TYPE_MEMBERS_ONLY`)
 	watchMembersOfferRe = regexp.MustCompile(`"offerId":"sponsors_only_video"`)
+
+	// watchLoginWallRe 认「登录墙」：播放器的 playabilityStatus 是 LOGIN_REQUIRED。
+	//
+	// 2026-11-04 实测（出口 13.158.71.17，匿名请求）：`/watch?v=<id>&hl=en` 照样回 1.25~1.34MB，
+	// 但页面里**一个 lengthSeconds、一个 publishDate 都没有**，只剩
+	// `"playabilityStatus":{"status":"LOGIN_REQUIRED"}` 加一堆推荐位。
+	// 同一时刻频道页 `/channel/<id>/videos` 的 flat 列表 60 条 60 条都带时长——
+	// 所以这条路挂了不等于整条链路挂了，调用方要换路（见 jobs 的 yt_meta）。
+	//
+	// 以前这里返回 NotFound「视频可能已删除」，把「YouTube 要登录」说成了「这条没了」，
+	// 任务于是每条都去撞一次、每次都在界面上写成「3 条这次没拿到（可能已删除）」。
+	watchLoginWallRe = regexp.MustCompile(`"playabilityStatus":\{"status":"(?:LOGIN_REQUIRED|CONTENT_CHECK_REQUIRED|AGE_CHECK_REQUIRED)"`)
 )
 
 func WatchMeta(ctx context.Context, client *http.Client, th *social.Throttle, videoID string) (Video, error) {
@@ -84,9 +96,14 @@ func parseWatchMeta(page string) (Video, error) {
 	}
 	// 只有时间缺、时长在的页面也要收：卡片上那块「时长」是独立补的
 	// （RSS 通道不带时长），这里拿不到时间就别连时长一起丢了。
-	// 两样都没有才是真正的「没戏」——视频不存在 / 已被删除 / 被登录墙挡住。
+	// 两样都没有才是真正的「没戏」——但**两种没戏要分开说**：
+	// 登录墙（页面还在、只是没有播放器数据）是「现在拿不到，换路或换登录态还能拿到」，
+	// 得让调用方停下整批、别一条条撞；真正的 404/已删除页才是 NotFound。
 	if v.PublishedAt.IsZero() && v.DurationSec == 0 {
-		return Video{}, social.NotFound("观看页里没有发布时间也没有时长（视频可能已删除或需要登录）")
+		if watchLoginWallRe.MatchString(page) {
+			return Video{}, social.Blocked("YouTube 要求登录：观看页只剩登录墙，拿不到这条的时间/时长")
+		}
+		return Video{}, social.NotFound("观看页里没有发布时间也没有时长（视频可能已删除）")
 	}
 	if strings.Contains(page, `"isLiveContent":true`) {
 		v.IsLive = true

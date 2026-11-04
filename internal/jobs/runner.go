@@ -371,6 +371,19 @@ func (c *Ctl) Progress(percent float64, msg string, speedBPS, bytesDone, bytesTo
 // Event 向所有前端广播一个自定义事件。
 func (c *Ctl) Event(name string, data any) { c.hub.Publish(name, data) }
 
+// FlushProgress 绕过节流强制发一次进度：**任务收尾那句总结必须落库**。
+//
+// 为什么：Progress 在 800ms 内的第二次调用会被丢掉（见上面 throttled），而跑得快的任务
+// （yt_meta 只剩 1 条要补、2 秒就结束）最后那句「补完 N 条；剩下 M 条拿不到：…」正好落在
+// 窗口里，任务列表留下的就是中间那句「看观看页 1/1」——用户看不出到底怎么了。
+// 2026-11-04 实测：同一条 yt_meta 连跑两次，一次留下总结、一次留下中间态，就差这几百毫秒。
+func (c *Ctl) FlushProgress(percent float64, msg string) {
+	c.mu.Lock()
+	c.lastPub = time.Time{}
+	c.mu.Unlock()
+	c.Progress(percent, msg, 0, 0, 0)
+}
+
 func (c *Ctl) percent() float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()

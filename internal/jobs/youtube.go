@@ -167,7 +167,7 @@ func (r *Runner) autoFillYtMeta() {
 	if gaps.Rows == 0 || gaps.Rows > ytMetaAutoLimit {
 		return
 	}
-	if _, err := r.EnqueueYtMeta(ytMetaAutoLimit); err != nil {
+	if _, err := r.EnqueueYtMeta(ytMetaAutoLimit, false); err != nil {
 		r.log.Warn("排队补元信息失败", "err", err)
 	}
 }
@@ -533,27 +533,35 @@ const ytMetaDefault = 500
 
 type ytMetaPayload struct {
 	Limit int `json:"limit"`
+	// Force 是「用户明确点了补齐」：忽略 meta_tries 的记账，把补过 3 次还缺的那些也重试一遍。
+	// 自动补（同步完顺手跑的那次）不带它。
+	Force bool `json:"force"`
 }
 
 // EnqueueYtMeta 投递一次「补元信息」；已经有在跑的就不重复投。
-func (r *Runner) EnqueueYtMeta(limit int) (int64, error) {
+func (r *Runner) EnqueueYtMeta(limit int, force bool) (int64, error) {
 	if limit <= 0 {
 		limit = ytMetaDefault
 	}
 	if active, err := r.st.HasActiveJobForTarget(model.JobTypeYtMeta, 0); err == nil && active {
 		return 0, nil
 	}
-	return r.st.Enqueue(model.JobTypeYtMeta, ytMetaPayload{Limit: limit}, 9)
+	return r.st.Enqueue(model.JobTypeYtMeta, ytMetaPayload{Limit: limit, Force: force}, 9)
 }
 
-// runYtMetaJob 逐条补元信息。
+// runYtMetaJob 补元信息：**先按频道批量补时长，再逐条看观看页**。
 //
-// 为什么不用 yt-dlp：单条要起进程、实测 4.1 秒，补 200 条得十几分钟；
-// 观看页是一次 GET、1.5 秒，同样的三个字段（发布时间 / 播放量 / 时长）都在页面 JSON 里。
-// 拿不到就跳过那一条（视频可能已删除），不因为一条失败放弃整批。
+// 两遍的原因（2026-11-04 实测，见 M6 §14.24）：
+//   - 观看页那条路（一次 GET、1.29MB、1.5 秒）只在这台机器「匿名也能拿到播放器数据」时好用。
+//     现在从出口 13.158.71.17 匿名抓 `/watch?v=` 只剩登录墙：1.25~1.34MB 的页面里
+//     **零个 lengthSeconds、零个 publishDate**，`playabilityStatus` 是 `LOGIN_REQUIRED`。
+//     于是每轮同步都「补完 0 条，3 条这次没拿到」，而墙上那条提示条永远消不掉。
+//   - 同一时刻频道页的 yt-dlp flat 列表照样带时长：7 个频道各拉 60 条，
+//     1.0~2.4 秒一次、60/60 条都有 `duration`。一次请求补一个频道里所有缺时长的行。
 //
-// 补的到底是哪种缺口：见 store 的 `ListYtVideosMissingMeta`——两条抓取通道各缺一半
-// （RSS 有日期没时长、yt-dlp flat 有时长没日期），哪边缺都走这一条路补齐。
+// 所以：flat 能补的（绝大多数新视频）先一次性补掉；剩下的（短视频不在 `/videos` 列表里、
+// 超过列表深度的老条目、缺发布时间的行）才逐条看观看页。补不到的记账，到
+// store.YtMetaMaxTries 次就不再算「缺」，提示条也就不会再永远挂着。
 func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 	var p ytMetaPayload
 	if j.Payload != "" {
@@ -561,7 +569,13 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 			return fmt.Errorf("任务参数损坏")
 		}
 	}
-	rows, err := r.st.ListYtVideosMissingMeta(p.Limit)
+	if p.Force {
+		// 用户要求重试：把「补过几次」清零，之前被判「补不到」的行也重新排队。
+		if err := r.st.ResetYtMetaTries(); err != nil {
+			r.log.Warn("清零补元信息记账失败", "err", err)
+		}
+	}
+	rows, err := r.st.ListYtVideosMissingMeta(p.Limit, p.Force)
 	if err != nil {
 		return err
 	}
@@ -570,22 +584,42 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 		return nil
 	}
 
+	// 第一遍：flat 列表批量补时长。
+	filled, left := 0, rows
+	if r.ytDlp != nil {
+		var n int
+		n, left = r.ytFillDurationsFromList(ctx, c, rows)
+		filled += n
+	}
+
+	// 第二遍：flat 里没有的那些，逐条看观看页。
 	client := r.httpClient("youtube")
-	filled, failed, pruned := 0, 0, 0
-	for i, row := range rows {
+	failed, pruned, blocked := 0, 0, ""
+	for i, row := range left {
 		if err := c.Check(); err != nil {
 			return err
 		}
-		c.Progress(float64(i)/float64(len(rows))*100,
-			fmt.Sprintf("补元信息 %d/%d（已补 %d，跳过 %d）", i+1, len(rows), filled, failed), 0, 0, 0)
+		c.Progress(float64(i)/float64(len(left))*100,
+			fmt.Sprintf("看观看页 %d/%d（已补 %d，跳过 %d）", i+1, len(left), filled, failed), 0, 0, 0)
 
 		info, err := ytsub.WatchMeta(ctx, client, r.ytThrottle, row.VideoID)
 		if err != nil {
-			failed++
-			// 限流 / 被拦：后面的必然也失败，收工（已经补上的那条条都写库了）。
+			// 限流 / 登录墙：后面的必然也失败，收工。这些行（含这一条）一次记满次数——
+			// 挡住的不是这一条，而是这条路；换一份 Cookie 或用户点补齐都会清零重来。
 			if k := social.KindOf(err); k == social.KindRateLimited || k == social.KindBlocked {
-				c.Progress(100, fmt.Sprintf("补元信息被拦：%v", err), 0, 0, 0)
-				return nil
+				rest := make([]int64, 0, len(left)-i)
+				for _, r2 := range left[i:] {
+					rest = append(rest, r2.ID)
+				}
+				if berr := r.st.BumpYtMetaTries(rest, store.YtMetaMaxTries); berr != nil {
+					r.log.Warn("记补元信息次数失败", "err", berr)
+				}
+				blocked = err.Error()
+				break
+			}
+			failed++
+			if berr := r.st.BumpYtMetaTries([]int64{row.ID}, 1); berr != nil {
+				r.log.Warn("记补元信息次数失败", "ytVideo", row.ID, "err", berr)
 			}
 			continue
 		}
@@ -606,6 +640,9 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 		if err := r.st.FillYtVideoMeta(row.ID, published, info.DateSource, info.DurationSec, info.Views); err != nil {
 			r.log.Warn("写回元信息失败", "ytVideo", row.ID, "err", err)
 			failed++
+			if berr := r.st.BumpYtMetaTries([]int64{row.ID}, 1); berr != nil {
+				r.log.Warn("记补元信息次数失败", "ytVideo", row.ID, "err", berr)
+			}
 			continue
 		}
 		filled++
@@ -615,10 +652,75 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 		msg += fmt.Sprintf("，删掉 %d 条会员抢先看的", pruned)
 	}
 	if failed > 0 {
-		// 实测这 3 条重跑一次就补上了（首次连接偶发失败），所以别把话说死成「已删除」。
-		msg += fmt.Sprintf("，%d 条这次没拿到（可能已删除，也可能只是这次请求失败，可以再点一次）", failed)
+		// 单条失败多半是偶发（实测重跑一次就补上了），所以不说成「已删除」。
+		msg += fmt.Sprintf("，%d 条这次没拿到（可能只是这次请求失败，可以再点一次）", failed)
 	}
-	c.Progress(100, msg, 0, 0, 0)
-	r.log.Info("补元信息完成", "filled", filled, "failed", failed, "membersOnly", pruned)
+	if blocked != "" {
+		msg += fmt.Sprintf("；剩下 %d 条拿不到：%s", len(rows)-filled-pruned-failed, blocked)
+	}
+	// 收尾这句要强制落库：这条任务常常一两秒就结束，普通 Progress 会落在 800ms 节流里被丢掉。
+	c.FlushProgress(100, msg)
+	r.log.Info("补元信息完成", "filled", filled, "failed", failed, "membersOnly", pruned,
+		"leftOver", len(rows)-filled-pruned, "blocked", blocked)
 	return nil
+}
+
+// ytFillDurationsFromList 用 yt-dlp 的 flat 列表批量补时长，返回没补上的行。
+//
+// 实测（2026-11-04，7 个启用的频道各拉 60 条）：1.0~2.4 秒一次、每条都带 duration，
+// 而同一个视频的观看页是 1.3MB 的登录墙。一次请求补一个频道里所有缺时长的行，
+// 比逐条 1.5 秒还拿不到东西的观看页省得多，而且**不依赖登录态**。
+//
+// 拉不到的频道不放弃：那些行原样交给第二遍（观看页）。
+func (r *Runner) ytFillDurationsFromList(ctx context.Context, c *Ctl, rows []store.YtVideoLite) (filled int, left []store.YtVideoLite) {
+	byChannel := map[int64][]store.YtVideoLite{}
+	order := make([]int64, 0, 4)
+	for _, row := range rows {
+		if _, ok := byChannel[row.ChannelID]; !ok {
+			order = append(order, row.ChannelID)
+		}
+		byChannel[row.ChannelID] = append(byChannel[row.ChannelID], row)
+	}
+	limit := r.settingInt("yt_backfill_limit", ytBackfillDefault)
+	for i, chID := range order {
+		if err := c.Check(); err != nil {
+			for _, rest := range order[i:] {
+				left = append(left, byChannel[rest]...)
+			}
+			return filled, left
+		}
+		ch, err := r.st.GetYtChannel(chID)
+		if err != nil {
+			left = append(left, byChannel[chID]...)
+			continue
+		}
+		c.Progress(c.percent(), fmt.Sprintf("用 flat 列表补 %s 的时长", ch.Title), 0, 0, 0)
+		listed, err := r.ytDlp.ListChannel(ctx, ch.ChannelID, limit)
+		if err != nil {
+			r.log.Warn("拉频道 flat 列表失败，这些行改走观看页",
+				"channel", ch.Title, "rows", len(byChannel[chID]), "err", err)
+			left = append(left, byChannel[chID]...)
+			continue
+		}
+		byID := make(map[string]ytsub.Video, len(listed))
+		for _, v := range listed {
+			byID[v.VideoID] = v
+		}
+		for _, row := range byChannel[chID] {
+			v, ok := byID[row.VideoID]
+			if !ok || v.DurationSec <= 0 {
+				// 短视频不在 `/videos` 列表里（它在 `/shorts`，那个列表连时长字段都没有），
+				// 超出列表深度的老条目也在这里——都留给观看页那遍。
+				left = append(left, row)
+				continue
+			}
+			if err := r.st.FillYtVideoMeta(row.ID, nil, "", v.DurationSec, v.Views); err != nil {
+				r.log.Warn("写回时长失败", "ytVideo", row.ID, "err", err)
+				left = append(left, row)
+				continue
+			}
+			filled++
+		}
+	}
+	return filled, left
 }

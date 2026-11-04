@@ -286,3 +286,109 @@ func TestSetYtVideoRotate(t *testing.T) {
 		t.Fatalf("不存在的 id 应得 0, nil，得到 %d, %v", n, err)
 	}
 }
+
+// TestYtMetaTriesAccounting 覆盖「补不到就别一直催」的记账。
+//
+// 2026-11-04 用户看到的「YouTube 页总是显示有 3 条没有时长」就是这里漏的：
+// 那 3 条是短视频 / 登录墙挡住的行，补一百次也补不到，而缺口统计每次都把它们数进去，
+// 墙上那条提示条于是永远挂着。现在的规矩：
+//   - 还值得试的（meta_tries < YtMetaMaxTries）才算缺口，墙上的提示条只数这些；
+//   - 试够次数的进 Stuck，只在设置页说明；
+//   - 补到了（FillYtVideoMeta）或用户点补齐 / 换了 Cookie（ResetYtMetaTries）就清零重来。
+func TestYtMetaTriesAccounting(t *testing.T) {
+	st := newTestStore(t)
+	chID, _, err := st.UpsertYtChannel(ytTestChannel("UCdddddddddddddddddddddd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	ids, err := st.UpsertYtVideos(chID, []YtVideoInput{
+		{VideoID: "vidTry1", Title: "只跑过 RSS 的一条", PublishedAt: pub},
+		{VideoID: "vidTry2", Title: "只跑过 RSS 的另一条", PublishedAt: pub, DurationSec: 90},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowA, rowB := ids[0], ids[1]
+
+	// 初始：一条缺时长（A），B 有日期有时长不算缺。
+	g, err := st.CountYtVideosMissingMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Rows != 1 || g.Durations != 1 || g.Stuck != 0 {
+		t.Fatalf("初始缺口不对: %+v", g)
+	}
+	rows, err := st.ListYtVideosMissingMeta(0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID != rowA {
+		t.Fatalf("待补列表不对: %+v", rows)
+	}
+
+	// 补 3 次都失败：缺口清零、进 Stuck，自动补就不该再拿它当缺口。
+	if err := st.BumpYtMetaTries([]int64{rowA}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BumpYtMetaTries([]int64{rowA}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BumpYtMetaTries([]int64{rowA}, 1); err != nil {
+		t.Fatal(err)
+	}
+	g, err = st.CountYtVideosMissingMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Rows != 0 || g.Durations != 0 || g.Stuck != 1 {
+		t.Fatalf("试够 3 次后应当只留在 Stuck: %+v", g)
+	}
+	rows, err = st.ListYtVideosMissingMeta(0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("试够次数的行不该再出现在自动待补列表里: %+v", rows)
+	}
+	rows, err = st.ListYtVideosMissingMeta(0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("force 要把它重新列出来，得到 %d 条", len(rows))
+	}
+
+	// 一次记满（登录墙那种整批挡住的）：直接到上限。
+	if err := st.ResetYtMetaTries(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BumpYtMetaTries([]int64{rowB, rowA}, YtMetaMaxTries); err != nil {
+		t.Fatal(err)
+	}
+	var tries int
+	if err := st.DB().QueryRow(`SELECT meta_tries FROM yt_videos WHERE id = ?`, rowA).Scan(&tries); err != nil {
+		t.Fatal(err)
+	}
+	if tries != YtMetaMaxTries {
+		t.Fatalf("一次记满应当是 %d，得到 %d", YtMetaMaxTries, tries)
+	}
+
+	// 补到了就归零：下次再缺（比如换了登录态又抓不到）还能重新试。
+	if err := st.FillYtVideoMeta(rowA, nil, "", 152, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB().QueryRow(`SELECT meta_tries FROM yt_videos WHERE id = ?`, rowA).Scan(&tries); err != nil {
+		t.Fatal(err)
+	}
+	if tries != 0 {
+		t.Fatalf("补到以后记账应归零，得到 %d", tries)
+	}
+	g, err = st.CountYtVideosMissingMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Rows != 0 || g.Stuck != 0 {
+		t.Fatalf("两条都齐了，不该再有缺口: %+v", g)
+	}
+}

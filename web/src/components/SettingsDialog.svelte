@@ -102,6 +102,8 @@
   /** yt-dlp 健康度：进 YouTube 那一节时才拉（要 fork 一个进程，不值得每次开设置都跑） */
   let ytHealth = $state<YtHealth | null>(null);
   let ytHealthLoading = $state(false);
+  /** 正在排队「强制重试补不到的时长」 */
+  let retryingMeta = $state(false);
 
   const current = $derived(PANES.find((p) => p.id === ui.settingsPane) ?? PANES[0]);
   const isFormPane = $derived(FORM_PANES.includes(ui.settingsPane));
@@ -145,6 +147,32 @@
       ytHealth = null;
     } finally {
       ytHealthLoading = false;
+    }
+  }
+
+  /**
+   * 强制重试那些「补了 3 次仍没有时长」的视频。
+   *
+   * 为什么要一个按钮：这些行的缺口已经从墙上的提示条里摘掉了（不然提示条永远挂着），
+   * 墙上的「补齐」也就不会再出现——换了一份 Cookie（新的登录态可能就补得上）以后，
+   * 得有个地方能手动再推一次。后端收到 force=true 会把记账清零重新排队。
+   */
+  async function retryStuckMeta(): Promise<void> {
+    if (retryingMeta) return;
+    retryingMeta = true;
+    try {
+      const res = await api.ytFillMeta();
+      if (res.total === 0) {
+        live.toast('已经没有缺元信息的视频了', 'success');
+      } else {
+        live.toast(`正在重试 ${String(res.total)} 条（发布时间 / 时长）`, 'success');
+      }
+      ytHealth = null;
+      await loadYtHealth();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      retryingMeta = false;
     }
   }
 
@@ -690,6 +718,23 @@
                         <p class="mt-1 truncate font-mono text-[0.6875rem] text-dim" title={ytHealth.path}>
                           {ytHealth.path}
                         </p>
+                        <!-- 补过 3 次仍拿不到的那些：卡片上就是没有时长那一块（短视频不在频道的
+                             /videos 列表里、观看页又要登录）。它们不再计入墙上的缺口提示，
+                             免得提示条永远挂着；还要不要试，在这里说清楚。 -->
+                        {#if ytHealth.missingStuck > 0}
+                          <p class="mt-1.5 text-meta text-dim">
+                            {ytHealth.missingStuck} 条视频补过 3 次仍没有时长/发布时间（多是短视频，
+                            频道列表里没有它；登录态失效时观看页也只剩登录墙）。
+                            <button
+                              type="button"
+                              class="underline underline-offset-2 hover:text-fg disabled:opacity-50"
+                              disabled={retryingMeta}
+                              onclick={() => void retryStuckMeta()}
+                            >
+                              {retryingMeta ? '排队中…' : '再试一次'}
+                            </button>
+                          </p>
+                        {/if}
                         {#if ytHealth.stale}
                           <p class="mt-1.5 text-meta text-dim">
                             升级：<code class="font-mono">yt-dlp -U</code>（或

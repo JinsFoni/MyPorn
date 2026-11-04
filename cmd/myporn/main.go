@@ -172,8 +172,16 @@ func main() {
 	// 跑完把 yt-dlp 写回来的**轮换后** jar 存回设置。过去的临时文件方案每轮把它删掉，
 	// 等于每轮都拿作废快照去敲门（2026-11-04 实测：一轮就从 26 条掉到 16 条，
 	// SID / LOGIN_INFO 全被清），见 cookiejar.go。
+	//
+	// 存回新 jar 时顺手把「补元信息补了几次」的记账清零：换了登录态就是换了一条路，
+	// 之前因为登录墙没补到时长的那些行（卡片上没有时长）该重新试一遍。
 	ytJar := ytsub.NewCookieJar(filepath.Join(cfg.DataDir, "ytcookies"),
-		func(text string) error { return st.SetSecret(box, "yt_cookies", text) }, logger)
+		func(text string) error {
+			if err := st.SetSecret(box, "yt_cookies", text); err != nil {
+				return err
+			}
+			return st.ResetYtMetaTries()
+		}, logger)
 	ytDlp := ytsub.NewYtDlp(
 		func() string {
 			if v, err := st.GetSetting("ytdlp_path"); err == nil && strings.TrimSpace(v) != "" {
