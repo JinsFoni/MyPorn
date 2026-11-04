@@ -7,7 +7,11 @@
  * 已注册的平台。M1 只有 Pornhub，之后逐个加：xHamster / beeg / x.com（M4）、
  * bilibili（M7）。列表里没有的新平台仍会照原样显示代号，不至于露出空白。
  */
-export type PlatformKey = 'pornhub' | 'xhamster' | 'beeg' | 'xcom' | 'bilibili' | 'youtube';
+/**
+ * krx18 是「影片站」：站上没有艺人主页，影片靠粘影片页地址入库
+ * （见 api.importVideo），所以它不会出现在艺人的平台筛选里。
+ */
+export type PlatformKey = 'pornhub' | 'xhamster' | 'beeg' | 'xcom' | 'bilibili' | 'youtube' | 'krx18';
 
 export type SyncMode = 'incremental' | 'full';
 
@@ -17,6 +21,8 @@ export interface PlatformInfo {
   key: string;
   name: string;
   enabled: boolean;
+  /** 只有影片页的站（krx18）：不进「发现艺人」的平台筛选 */
+  movieOnly?: boolean;
   baseUrl: string;
   hasProxy: boolean;
   hasCookie: boolean;

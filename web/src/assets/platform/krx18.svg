@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- krx18：站方 logo 是红字「KRX18」压一个断开的圆环，缩到 16px 只剩一团红。
+       这里照它的两个识别点重画：红底 + 那个断开的圆环，中间换成能认出来的「18」。 -->
+  <rect width="64" height="64" rx="14" fill="#E5343F"/>
+  <circle cx="32" cy="32" r="21" fill="none" stroke="#FFFFFF" stroke-opacity="0.42" stroke-width="2.4"
+          stroke-linecap="round" stroke-dasharray="46 14" transform="rotate(-38 32 32)"/>
+  <text x="32" y="32" fill="#FFFFFF" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="30" font-weight="800" letter-spacing="-1.2" text-anchor="middle"
+        dominant-baseline="central">18</text>
+</svg>

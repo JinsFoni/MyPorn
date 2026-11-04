@@ -2,6 +2,7 @@
   import pornhubIcon from '../assets/platform/pornhub.png';
   import xhamsterIcon from '../assets/platform/xhamster.png';
   import beegIcon from '../assets/platform/beeg.svg';
+  import krx18Icon from '../assets/platform/krx18.svg';
   import bilibiliIcon from '../assets/platform/bilibili.svg';
 
   interface Props {
@@ -30,12 +31,15 @@
      xhamster = 深色方砖 + 白色仓鼠头（站方 180px touch icon）
      beeg = 自带渐变底 + 白色字标的 favicon.svg
      bilibili = 粉底白色「小电视」（照官方 app icon 画的超简版 SVG：天线 + 机身 + 两只眼睛）
+     krx18 = 红底白色「18」+ 一道断开的圆环（站方 logo 是红字压圆环，缩到 16px 认不出字，
+             所以只留那两个识别点）
      都缩到 64px 左右。 */
   const ICONS: Record<string, string> = {
     pornhub: pornhubIcon,
     xhamster: xhamsterIcon,
     beeg: beegIcon,
     bilibili: bilibiliIcon,
+    krx18: krx18Icon,
   };
 
   let icon = $derived(ICONS[platform.toLowerCase()]);

@@ -305,6 +305,18 @@
   let fragSince = 0;
   /** 分片最近一次「有动静」的时刻：开始、收到一批字节、到手、报错都算 */
   let fragActivityAt = 0;
+  /**
+   * 监听挂上之后**还没见过任何分片事件**（= 第一个分片的 `hlsFragLoading` 早于挂监听）。
+   *
+   * 这个空档是真会吃时间的：监听从 `stallTick` 里挂（第一秒），而第一个分片通常在
+   * 100~200 毫秒就开始下载——那一次 `hlsFragLoading` 没人听见，`fragInFlight` 停在 0，
+   * 于是第 3 秒的 nudge 把这条**正在下**的分片掐掉重来。krx18 的实测代价：
+   * 第一段 2.70 MB 被掐一次，多花 2.87 秒，起播从 4.9 秒变成 7.8 秒。
+   * 所以「一个事件都没见过」的头几秒不当卡死处理（见 firstFragGrace）。
+   */
+  let fragFirstSeenAt = 0;
+  /** 监听挂上的时刻，用来给「还没见过任何分片」兜底计时 */
+  let fragWatchSince = 0;
   let fragEngine: HlsEngineLike | null = null;
   let fragListeners: Array<[string, HlsListener]> = [];
   /**
@@ -1031,6 +1043,12 @@
       stallTicks = 0;
       return;
     }
+    // 一个分片事件都还没见过：可能只是「第一个分片在挂监听之前就开始下了」，也可能
+    // 是真的没在拉流。给它 FIRST_FRAG_GRACE_MS 先自己走完，别掐（见 fragFirstSeenAt）。
+    if (fragFirstSeenAt === 0 && fragWatchSince > 0 && now - fragWatchSince < FIRST_FRAG_GRACE_MS) {
+      stallTicks = 0;
+      return;
+    }
     stallTicks += 1;
     if (stallTicks < 3 || now - lastNudgeAt < STALL_NUDGE_MS) return;
     stallTicks = 0;
@@ -1051,6 +1069,14 @@
   const STALL_NUDGE_MS = 10_000;
   /** 在飞的分片有多久没动静就算真死了（这样才允许 nudge 掐掉它重来） */
   const FRAG_STUCK_MS = 30_000;
+  /**
+   * 「一个分片事件都没见过」时给的宽限。
+   *
+   * 要盖住最慢的第一段：krx18 实测第一段 2.70 MB、CDN 单连接 0.9~4.4 秒（同一条分片
+   * 六次取样 0.98/1.05/1.16/1.35/1.61/3.38 秒，另一次 4.39 秒），再算上服务端转发的
+   * 一点开销。15 秒还没一点动静，那就真是没在拉了。
+   */
+  const FIRST_FRAG_GRACE_MS = 15_000;
 
   function startStallWatch(): void {
     if (stallTimer !== undefined) return;
@@ -1079,8 +1105,10 @@
     detachFragments();
     if (typeof eng.on !== 'function') return;
     fragEngine = eng;
+    fragWatchSince = Date.now();
     const bump = (): void => {
       fragActivityAt = Date.now();
+      if (fragFirstSeenAt === 0) fragFirstSeenAt = fragActivityAt;
     };
     const start = (): void => {
       if (fragInFlight === 0) fragSince = Date.now();
@@ -1112,6 +1140,8 @@
     fragInFlight = 0;
     fragSince = 0;
     fragActivityAt = 0;
+    fragFirstSeenAt = 0;
+    fragWatchSince = 0;
     if (!eng) return;
     for (const [event, listener] of listeners) eng.off?.(event, listener);
   }

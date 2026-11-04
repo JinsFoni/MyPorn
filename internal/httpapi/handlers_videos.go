@@ -328,9 +328,18 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 
 	// 所有线上播放地址都改走 /api/stream：平台 CDN 会校验 Referer，
 	// 浏览器直接请求只会拿到 404，必须由服务端补上 Referer/UA 再转发。
+	ad, _ := s.reg.Get(v.Platform)
 	for i, vv := range variants {
-		src := streamURL(v.Platform, vv.URL)
-		hls := strings.Contains(vv.URL, ".m3u8")
+		// url 留空的档位 = 清单只能站内现做（krx18：m3u8 是 POST 换回来的内容，不是地址）。
+		// 适配器给出站内清单地址，streamURL 对以 / 开头的地址原样放行。
+		raw := vv.URL
+		if raw == "" {
+			if sp, ok := ad.(platform.SitePlaylistProvider); ok {
+				raw = sp.PlaylistPath(v.PlatformVideoID)
+			}
+		}
+		src := streamURL(v.Platform, raw)
+		hls := strings.Contains(raw, ".m3u8")
 		// 音画分轨的档位（B 站 1080P+ / 4K）：一条 URL 只有一个轨，<video> 直接放会没声音。
 		// 现在两条路都给出去，由页面按浏览器能力选：
 		//   - dash=true + audioUrl：页面自己用 MSE 把两条 fMP4 分片喂进同一个 MediaSource

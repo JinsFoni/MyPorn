@@ -3,7 +3,8 @@
   import PlatformIcon from '../components/PlatformIcon.svelte';
   import Skeleton from '../components/Skeleton.svelte';
   import TopBar from '../components/TopBar.svelte';
-  import { api, messageFor } from '../lib/api';
+  import { ApiError, api, messageFor } from '../lib/api';
+  import { navigate } from '../lib/router.svelte';
   import { imageUrl } from '../lib/img';
   import { formatCount } from '../lib/format';
   import { live } from '../lib/live.svelte';
@@ -99,7 +100,24 @@
       results = [];
       searched = false;
       mockNote = '';
+      return;
     } catch (err) {
+      // 艺人页认不出来，再看它是不是**影片页**：krx18 这种影片站没有艺人主页，
+      // 只有 /movies/<片名>-<年份>，粘进来就该直接导入、跳到播放页在线看，
+      // 而不是回一句「暂不支持这个平台的链接」让人自己猜该去哪儿。
+      // 导入要走「页面 → 播放器 → token → 清单」四跳，实测 4~6 秒。
+      if (err instanceof ApiError && err.code === 'unsupported_platform') {
+        try {
+          const { video } = await api.importVideo(url);
+          live.toast(`已导入《${video.title}》，正在打开`, 'success');
+          live.bumpFeed();
+          navigate(`/video/${String(video.id)}`);
+          return;
+        } catch (importErr) {
+          error = messageFor(importErr);
+          return;
+        }
+      }
       if (import.meta.env.DEV) {
         resolved = MOCK_RESOLVED;
         mockNote = messageFor(err);
@@ -135,7 +153,8 @@
     void (async () => {
       try {
         const list = await api.platforms();
-        platforms = list;
+        // 影片站（krx18）没有艺人库，摆在筛选里点一下只会拿到错误。
+        platforms = list.filter((p) => p.movieOnly !== true);
       } catch {
         /* 平台列表只是辅助，拿不到就只显示默认那几个 */
       }
@@ -158,13 +177,13 @@
 
   <form class="flex flex-col gap-2 sm:flex-row" onsubmit={submit}>
     <div class="min-w-0 flex-1">
-      <label for="discover-q" class="sr-only">艺人名字或主页链接</label>
+      <label for="discover-q" class="sr-only">艺人名字、主页链接或影片链接</label>
       <input
         id="discover-q"
         class="field"
         type="search"
         inputmode="search"
-        placeholder="输入艺人名字，或粘贴主页链接"
+        placeholder="输入艺人名字，或粘贴主页 / 影片链接"
         autocomplete="off"
         bind:value={q}
         disabled={searching}
@@ -172,7 +191,7 @@
     </div>
     <div class="flex gap-2">
       <button type="submit" class="btn btn-primary flex-1 sm:flex-none" disabled={searching || q.trim().length === 0}>
-        {searching ? '查询中…' : isUrl ? '解析链接' : '搜索艺人'}
+        {searching ? (isUrl ? '解析中…' : '查询中…') : isUrl ? '解析链接' : '搜索艺人'}
       </button>
     </div>
   </form>
@@ -308,7 +327,7 @@
   {:else if !searched && !resolved}
     <EmptyState
       title="搜艺人，或者直接贴链接"
-      hint="输入名字按所选平台搜索（名字要写全）；粘贴艺人主页链接可直接解析并订阅。只做艺人搜索，不含影片与分类浏览。"
+      hint="输入名字按所选平台搜索（名字要写全）；粘贴艺人主页链接可直接解析并订阅，贴影片页链接（如 krx18 的 /movies/…）会导入并在站内在线播放。"
       icon="search"
     />
   {:else if searched}

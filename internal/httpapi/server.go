@@ -205,6 +205,12 @@ func (s *Server) Routes() http.Handler {
 			// 播放页那颗「旋转」：角度记在 videos.rotate_deg 上（给「躺着拍」的片子用）
 			pr.Post("/videos/{id}/rotate", s.handleVideoRotate)
 
+			// 影片站（krx18）的入口：贴一条影片页地址就能入库并在线播放。
+			// 站上没有艺人主页，订阅那条路走不通，所以单独一条。
+			pr.Post("/videos/import", s.handleImportVideo)
+			// 站内现做的 HLS 清单（krx18）：上游只给清单正文、不给地址。
+			pr.Get("/{platform}/playlist.m3u8", s.handleSitePlaylist)
+
 			pr.Get("/videos", s.handleListVideos)
 			pr.Get("/videos/new", s.handleListNewVideos)
 			pr.Get("/videos/{id}", s.handleGetVideo)

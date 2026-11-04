@@ -24,6 +24,7 @@ import (
 	"github.com/JinsFoni/MyPorn/internal/platform"
 	"github.com/JinsFoni/MyPorn/internal/platform/beeg"
 	"github.com/JinsFoni/MyPorn/internal/platform/bilibili"
+	"github.com/JinsFoni/MyPorn/internal/platform/krx18"
 	"github.com/JinsFoni/MyPorn/internal/platform/pornhub"
 	"github.com/JinsFoni/MyPorn/internal/platform/xcom"
 	"github.com/JinsFoni/MyPorn/internal/platform/xhamster"
@@ -550,6 +551,21 @@ func buildRegistry(cfg *config.Config, st *store.Store, box *secret.Box, log *sl
 	}
 	reg.Register(bl)
 	if err := st.SeedPlatform(bl.Key(), bl.Name(), blBase); err != nil {
+		log.Warn("写入平台信息失败", "err", err)
+	}
+
+	// krx18 是「影片站」：没有艺人主页（订阅那条路没有入口），影片靠粘地址进来。
+	// 它在 Cloudflare 后面，客户端必须是伪装浏览器指纹的那一个，见 platform.NewBrowserHTTPClient。
+	krBase, _ := st.GetSetting("krx18_base_url")
+	if krBase == "" {
+		krBase = "https://krx18.com"
+	}
+	kr, err := krx18.New(krBase, cfg.FFprobePath)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 krx18 适配器: %w", err)
+	}
+	reg.Register(kr)
+	if err := st.SeedPlatform(kr.Key(), kr.Name(), krBase); err != nil {
 		log.Warn("写入平台信息失败", "err", err)
 	}
 	return reg, nil

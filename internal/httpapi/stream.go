@@ -32,6 +32,11 @@ var streamHostSuffixes = []string{
 	// 官方 upos-*（*.bilivideo.com）之间混着给。白名单只放 B 站自己的域名后缀，
 	// 适配器那边会优先挑 upos-* 那条（实测 6.6 MB/s vs PCDN 0.9 MB/s）。
 	"bilivideo.com", "bilivideo.cn",
+	// krx18 的分片在 server7.stream-baby1.top（loadvid 的存储域名，Cloudflare 后面但
+	// 不设挑战：实测不带 Referer、不带特指 UA 也是 200，还写着 access-control-allow-origin: *）。
+	// 地址伪装成 .png（`…/hls/1/<uuid>-<时间戳>/AbCdEf12345678.png`），内容是 MPEG-TS，
+	// 首字节 0x47 —— 按扩展名判断容器会全错。
+	"stream-baby1.top",
 	// YouTube 的 HLS（清单 + 分片）都在 googlevideo 上。地址是签名且绑定出口 IP 的，
 	// 只有本进程能取——浏览器拿到的永远是 /api/yt/seg/... 这种站内地址。
 	"googlevideo.com",
@@ -48,9 +53,15 @@ func streamHostAllowed(host string) bool {
 }
 
 // streamURL 把上游地址包成同源代理地址，浏览器才能带上 Referer 拿到分片。
+//
+// 已经是站内地址（以 / 开头）的原样返回：krx18 的清单是站内现做的
+// （见 platform.SitePlaylistProvider），再包一层 /api/stream 等于让代理去取它自己。
 func streamURL(platformKey, raw string) string {
 	if raw == "" {
 		return ""
+	}
+	if strings.HasPrefix(raw, "/") {
+		return raw
 	}
 	q := url.Values{}
 	q.Set("u", raw)

@@ -282,6 +282,15 @@ export const api = {
   },
 
   // ---- 影片 ----
+  /**
+   * 贴一条**影片页地址**入库（krx18 这种「影片站」的入口）。
+   *
+   * 站上没有艺人主页，订阅那条路走不通。解析整条链要 4~6 秒（页面 → 播放器 → token → 清单），
+   * 所以按钮上要显示「解析中」而不是假装瞬时完成。
+   */
+  importVideo(url: string): Promise<{ video: Video }> {
+    return request<{ video: Video }>('/api/videos/import', { method: 'POST', body: { url } });
+  },
   videos(params: VideoQuery = {}): Promise<VideoPage> {
     return request<VideoPage>(
       `/api/videos${qs({

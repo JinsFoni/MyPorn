@@ -65,6 +65,39 @@ type PlaybackResolver interface {
 	ResolvePlayback(ctx context.Context, videoID string) (*model.Video, []model.Variant, error)
 }
 
+// VideoURLResolver 是可选接口：从「影片页地址」直接认出是哪条片子。
+//
+// 只有 krx18 这种**影片站**需要它：站上没有艺人主页（整站只有 /movies、/genre、
+// /release 三种链接），订阅那条路走不通，影片只能靠粘一条地址进来
+// （见 httpapi.handleImportVideo）。实现了它的平台会出现在「解析链接」里。
+type VideoURLResolver interface {
+	// ParseVideoURL 从影片页地址取出平台侧 id；不是本平台的地址就返回错误。
+	ParseVideoURL(raw string) (string, error)
+}
+
+// MovieSite 标记「影片站」：站上没有艺人主页，只有影片页（krx18）。
+//
+// 这类平台不进「发现艺人」的平台筛选、也不参与跨站头像/资料补齐——它的
+// ParsePerformerURL / SearchPerformers 只会返回错误，摆在筛选里就是让人点出错误。
+type MovieSite interface {
+	// IsMovieSite 恒为 true，存在即声明（方法只是为了让接口能跨包实现）。
+	IsMovieSite() bool
+}
+
+// SitePlaylistProvider 是可选接口：播放清单不是一条能直接 GET 的上游地址，得现做一份。
+//
+// krx18 的 m3u8 是拿影片页里的 token 去 POST 换回来的**内容**（接口故意不回地址，
+// 这样浏览器的网络面板里看不到真实存储地址），所以既不能把它包成 /api/stream?u=…，
+// 也不能让浏览器自己去取。这里的约定是：适配器给出一个站内地址，Server 路由到
+// SitePlaylist 现取清单、把分片改写成 /api/stream 再发出去。
+type SitePlaylistProvider interface {
+	// PlaylistPath 返回这条片子的站内清单地址（形如 /api/krx18/playlist.m3u8?v=slug）。
+	// 变体 url 留空的档位靠它接上，见 httpapi.handlePlayback。
+	PlaylistPath(videoID string) string
+	// SitePlaylist 返回清单原文与基准地址（分片里的相对地址要拼在它后面）。
+	SitePlaylist(ctx context.Context, videoID string) ([]byte, *url.URL, error)
+}
+
 // PageResolver 是可选接口：能直接按「影片页地址」解析播放地址，省掉一次 301。
 //
 // 为什么会有这个需求：xHamster 的影片 ID 是 URL 末尾那段（xhW3Ivw），
