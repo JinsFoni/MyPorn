@@ -116,6 +116,9 @@ uTLS vs 裸 `http.Client` 取同一分片（交替各 6 次，两次实验）：
 
 ## 7. 覆盖面：**只支持 loadvid 这一个播放器**（这条要看清）
 
+> 2026-11-05 更新：`mov18plus.cloud`（Server 2 / Abyss）已经打通，覆盖面从 1/34 变成
+> 「26 部里 24 部」。本节保留当时的实测，现状见 [§12](#12-server-2mov18pluscloud--abyss-打通2026-11-05)。
+
 站点给每部片配了 1~3 个「Server」，指向不同 embed 站。实测抽样 **34 部**
 （`/movies` 首页 + `/movies/page/3` + `/movies/page/6` + `/genre/eng-sub` + `/genre/korea`）：
 
@@ -348,6 +351,8 @@ Tailwind 4 排在 `sm`/`lg`/`xl` 之前，两条 `grid-template-columns` 打架�
 
 ### 11.5 覆盖面还是那个老问题
 
+> 2026-11-05：Abyss（mov18plus.cloud）已支持，见 §12，本节随后就过时了。
+
 §7 的结论没变：**只支持 `loadvid` 这一个播放器**（抽样 34 部里 1 部）。
 `do-hee` 这个 tag 的 92 部里，点开会明确报「Server 2 用的是 mov18plus.cloud 播放器（暂不支持在线播放）；
 Server 1 用的是 play.playkrx18.site 播放器（暂不支持在线播放）」——不是静默失败，但确实是少数能播。
@@ -371,3 +376,160 @@ curl -s -b .tmp/cookie.txt -X POST localhost:18081/api/krx18/seen -d '{"channelI
 单测：`go test ./internal/platform/krx18/` 里的 `TestParseTagPage`（真 HTML 夹具）、
 `TestParsePerformerURL`、`TestAdapterSubscription`（httptest 顶替整站，把「地址 → slug →
 标签接口 → 归档页 → 末页 404 变 ErrNotFound」走一遍）、`TestCanonicalTagSlug`。
+
+## 12. Server 2（mov18plus.cloud / Abyss）打通（2026-11-05）
+
+用户点开 `/video/3355` 提示「这部片没有能用的播放器」——那部片子三个 Server 分别是
+mov18plus.cloud / play.playkrx18.site / helvid.net，一个都放不了。这次啃掉的是
+**Server 2 = mov18plus.cloud（Abyss 播放器）**，实测覆盖率最高的一家。
+
+### 12.1 静态覆盖面（2026-11-05，26 部片子数 Server 1/2/3 指向谁）
+
+| 播放器 | 命中 | 状态 |
+|---|---|---|
+| `mov18plus.cloud` | **24 / 26** | ✅ 本次打通 |
+| `play.playkrx18.site` | 22 / 26 | ❌ 403（CF bot management，5635 字节挑战页，`curl_cffi` 伪装 Chrome 也一样） |
+| `filemoon.sx` | 8 / 26 | ❌ 另有域名（未做） |
+| `helvid.net` | 2 / 26 | ❌ 已停服（`ERR_CONNECTION_CLOSED`） |
+| `cdn.loadvid.com` | 1 / 26 | ✅ §4~§6 那条 HLS |
+
+也就是说：库里 96% 的 krx18 片子在此之前是放不了的，现在反过来 92% 都有 Abyss 这条路。
+
+### 12.2 链路：`datas` 是加密的「播放器配置」
+
+```
+GET  https://mov18plus.cloud/?v=<code>          ← ajax nume=2 给的就是这个地址
+     页面里：const datas = "<base64>"
+     base64 → JSON   {"slug":"N1N5-Y7-C","md5_id":26709409,"user_id":1995,"media":"…"}
+     media 是**原始二进制**（不是 base64）：整块 JSON 里既有 `\u00XX` 转义、也有裸的 0xF1
+     这类非法 UTF-8 字节 → encoding/json 会把它们换成 U+FFFD、密文当场作废，
+     所以只能按 JSON 转义规则自己抠字节（`abyssJSONRawString`）。
+     AES-256-CTR 解密：key = md5hex("<user_id>:<slug>:<md5_id>") 的 32 个 ASCII 字节，
+     counter = key 的前 16 字节 → {"mp4":{"sources":[…],"domains":[…],"fristDatas":[…]}}
+```
+
+`3355` 解出来的档位（7 档 = 360p/720p/1080p × h264/av1）：
+
+| label | codec | res_id | size | sub |
+|---|---|---|---|---|
+| 360p | h264 | 2 | 582,520,983 | ft50i9esq14 |
+| 360p | av1 | 3 | 1,175,377,905 | — |
+| 720p | h264 | 4 | 1,092,025,995 | 8wjnrtzqd42 |
+| 720p | h264 | 4 | 1,457,792,071 | weifxopsn26 |
+| 720p | av1 | 4 | 1,457,792,071 | — |
+| **1080p** | **h264** | **5** | **1,634,796,856** | **ygfi0yfyc10** |
+| 1080p | av1 | 5 | 1,495,725,746 | e50zu2xv29 |
+
+挑档规则（`pickAbyssSource`）：**分辨率优先、同档 h264 优先**。1080p av1 与 1080p h264
+是同一分辨率，但 av1 在部分浏览器上解不了，所以取 h264 那档——它实测就是 1920×1080 /
+2.87 Mbps，属于「最高画质」，没有降级。站点确实只有 av1 的片子（库里 3352、3351、`78321…`）
+就照实给 av1，档位标签会写成 `1080p.av1`。
+
+### 12.3 真正的字节：`/sora/{size}/{token}`，5 MB 一片
+
+播放器从来不给浏览器真地址，它给的是**假地址**：
+
+```
+https://storage.googleapis.com/mediastorage/{Date.now()}/{rand}/{size}.mp4#mp4/chunk/1/{size}/2097152/{label}/{codec}?maxChunkSize=5242880
+```
+
+由 Service Worker（`iamcdn.net/player-v2/sw.bundle.v3.js`）拦下来，按 5 MB 一片换真地址：
+
+```
+GET https://{sub}.sssrr.org/sora/{size}/{token}
+    token  = b64(b64(AES-256-CTR(plain)))                （两层 base64 各自去掉 '='）
+    plain  = /mp4/{md5_id}/{res_id}/{size}/{chunkSize}/{分片序号}
+    key    = md5(分片长的十进制**数字位**)，counter = key[:16]，都是 32 个 ASCII 字节
+```
+
+两个坑，都是实测撞出来的：
+
+1. **key 不是 `md5("1634796856")`**。JS 那个 md5 收到 number 会先 `toString()`、再把字符串
+   按**字符下标**喂进 `bytesToWords`，于是字符 `"1"` 变成数值 1 而不是 0x31。
+   对 1,634,796,856 来说：`md5({1,6,3,4,7,9,6,8,5,6})` = `aaccae5faad13ef8eec53c4344a7c2c5`（对），
+   `md5("1634796856")` = `ee5d…`（错）。用错不是解出乱码，而是整条 404。
+2. **plain 里必须带 `chunkSize`**，少了那一段上游 404（Backblaze 的「Object not found」页，
+   27,511 字节）；请求还必须带 `Referer: https://mov18plus.cloud/`，不带一律 403
+   （Cloudflare，4,545 字节拦截页；UA 写什么都一样）。
+
+拿到的片是**明文 MP4**：
+
+| 量到的东西 | 值 |
+|---|---|
+| 单片大小 | 5,242,880 B（`content-range: bytes 0-1048575/5242880`，`206`，`application/octet-stream`） |
+| 分片总数（1080p h264） | 312 片（311×5,242,880 + 4,261,176 = 1,634,796,856） |
+| 第 0 片的盒子 | `ftyp` @4、**`moov` @36**（4.5 MB）、`mdat` @4,564,397 → **faststart**，从 0 开始播不需要尾巴 |
+| 整条片子（ffprobe 第 0 片） | h264 1920×1080 2.87 Mbps + aac 195 kbps / 4261.4 s |
+| 跨片一致性 | 区间 5,242,000–5,245,000（跨第 0/1 片边界）站内转发 vs 上游两段拼接：md5 都是 `b58c414aa7878f0070ddc72413d527f6` |
+
+`.fd`（`fristDatas`，部分片子的第一段是预切好的一份）这条**没做**：它要按 `partSize` 再解一层
+（`key = md5hex(最后一段路径含 .fd)`），而 `/sora/` 分片从第 0 片起就是明文，不需要它。
+
+### 12.4 站内通道：`GET /api/{platform}/file.mp4?v=<id>`
+
+整片是一条支持 Range 的 mp4，但每片的地址是**算出来的**，所以既不能包成
+`/api/stream?u=…`（那是一条固定地址），也不能让浏览器自己去取（要 Referer + token）。
+新增可选接口 `platform.FileStreamProvider`：适配器给出站内地址（`variant.url` 直接用它，
+`streamURL` 对以 `/` 开头的地址原样放行），Server 路由到 `ServeFile`：
+
+```
+浏览器 Range: bytes=813170688-           （34:00 处拖动）
+  → 813170688 / 5242880 = 第 155 片，片内偏移 813170688 - 155*5242880 = 688128
+  → GET https://{sub}.sssrr.org/sora/{size}/{token}   Range: bytes=688128-5242879
+  → 206 + Content-Range: bytes 813170688-1634796855/1634796856
+```
+
+实现上的两个决定：
+
+- **每片先取回内存再写出去**，不是 `io.Copy` 直连。实测上游会半路抽风：同一条片子连取两片，
+  第 1 片在 16.3 秒时回 `stream error: stream ID 3; INTERNAL_ERROR`（HTTP/2 被对端 RST）。
+  先落内存就能在「还没写出任何字节」时重试（单片最多 3 次），用户一次都察觉不到；代价是每片
+  要等整片到齐（5 MB / 15~27 MB/s ≈ 0.2~0.3 秒），而播放器本来就在往前缓存。
+- **分辨率/时长是量出来的**：解析时顺手把第 0 片（5 MB）取回来喂 ffprobe，拿到
+  1920×1080 / h264 / 2.87 Mbps / 4261 s，比档位标签可靠；量不出来（上游抖）就退回标签
+  （1080p → height 1080），码率留 0，不会因此判失败。时长也借此落库（`FillVideoMeta`）。
+
+### 12.5 实测（2026-11-05，一次全链路）
+
+| 项 | 结果 |
+|---|---|
+| `GET /api/videos/3355/playback` 冷解析（页面→ajax→datas→探第 0 片） | **3.52 s**，回 `1080p / 1920×1080 / avc1 / bw 2,865,341 / hls false / url=/api/krx18/file.mp4?v=…` |
+| 站内取头 1 KB | `206`，`content-range: bytes 0-1023/1634796856`，首字节 `00 00 00 20 66 74 79 70 69 73 6f 6d`（`ftypisom`） |
+| 站内取 20 MB（4 片） | 20,971,520 B / **0.77 s** = 27.1 MB/s（同样 4 片直连上游 1.47 s = 14.3 MB/s） |
+| 站内取尾 1 KB | `206` |
+| 浏览器（`playwright-cli`，静音）3355 | `readyState 4`、1920×1080、`duration 4261`、18 秒墙钟推进 18.0 秒、`error` 为 null |
+| 拖动到 2100 s | 发出 `Range: bytes=813170688-`，2 秒内 `readyState 4` 继续播（buffered 2098.3~2107.3） |
+| 浏览器 3352（站点只有 av1 的那类） | `readyState 4`、1920×1080、`duration 2389`、正常推进 |
+| 库里 5 部抽查 | 3355/3354/3353/3352/3351 全部能解析出 1080p（h264 或 av1） |
+
+失败的两种如实报（`3356`《I Am a Plaything》）：它的 Server 2 是老形态 `…/v/8UIvI13M70SY/`
+（那个路径现在整条 404），换成新形态 `?v=8UIvI13M70SY` 后站点直接回「Video not found」——
+`{"message":"Path not found"}` 不再当成「取播放器页面失败」，而是
+「播放器说这个片子已经删了（Video not found）」。Server 1/3 是 playkrx18 + helvid，仍然不行。
+
+### 12.6 复现
+
+```bash
+# 解析 + 站内整片地址
+curl -s -b .tmp/cookie.txt localhost:18081/api/videos/3355/playback
+# 按 Range 取字节（头 1 KB / 34:00 处 1 KB / 尾 1 KB）
+curl -s -b .tmp/cookie.txt -o /dev/null -D - -H 'Range: bytes=0-1023' \
+  'localhost:18081/api/krx18/file.mp4?v=77806-taste-of-a-former-classmate-i-always-wanted-to-devour-2025'
+curl -s -b .tmp/cookie.txt -o /dev/null -w '%{http_code} %{size_download}\n' \
+  -H 'Range: bytes=813170688-813171711' 'localhost:18081/api/krx18/file.mp4?v=…'
+```
+
+单测（`internal/platform/krx18/abyss_test.go`，全部离线）：`TestAbyssTokenKey`（数字位 md5 三条
+向量，并反证「按字符串 md5 不相等」）、`TestAbyssToken`（第 0/1/311 片与浏览器抓到的 token 逐字节
+相同）、`TestAbyssConfigKey`、`TestParseAbyssPage`（自己造一个同形态的 datas：控制字符写成
+`\u00XX`、夹裸 0xF1）、`TestAbyssJSONRawString`、`TestAbyssAltEmbed`、`TestParseByteRange`、
+`TestAbyssHost`。
+
+### 12.7 剩下的
+
+- `play.playkrx18.site`（22/26）是下一块骨头：`appv1.js`（javascript-obfuscator）+ CF Turnstile，
+  连 `curl_cffi` 伪装 Chrome136 都是 403。这台机器上没法用来当 oracle。
+- `filemoon.sx`（8/26）另算一家，未动。
+- `.fd`（`fristDatas`）分片没做：`/sora/` 已经够用，做了只是少几次请求。
+- 下载仍然不支持（入口处就拦下）：Abyss 这条路的字节其实能直接落盘，但下载链路要接
+  `FileStreamProvider` 到 ffmpeg/分片写盘那一套，本次没做。

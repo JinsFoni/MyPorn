@@ -1221,7 +1221,22 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
 
 语义与 D3 完全一致（`ids` 只标这几条，`channelId` > 0 只标这个 tag，都不给 = 全站 krx18）。
 
-### E4. 通用接口上的相关改动
+### E4. `GET /api/{platform}/file.mp4?v=<平台侧 id>` —— 站内整片通道（2026-11-05 加）
+
+有些通道给的是「整片一条 mp4，但每片的地址要按 Range 现算」——krx18 的 Server 2
+（`mov18plus.cloud` / Abyss）就是这样：浏览器要 1 GB 处的一段，服务端得先算出那是第几片、
+用 AES-256-CTR 加出 token 再去 `{sub}.sssrr.org/sora/{size}/{token}` 取。
+
+和「站内现做清单」（`GET /api/{platform}/playlist.m3u8`，`platform.SitePlaylistProvider`）同一套路，
+只是这边是 `platform.FileStreamProvider`：`GET /api/videos/{id}/playback` 里那条档位的 `url`
+直接就是这个站内地址（`hls: false`），前端当普通 mp4 播。
+
+- 透传 `Range`（单段 `bytes=a-b` / `bytes=a-` / `bytes=-n`），回 `206` + `Content-Range`；
+- 不带 `Range` 就是整条（`200`，1,634,796,856 B）；
+- 头已经发出去之后上游才断（HTTP/2 RST 见过），服务端会在**写字节之前**重试单片，最多 3 次；
+- 解析失败（片子被上游删了、播放器认不出来）在写头之前发生，回的还是正常 JSON 错误。
+
+### E5. 通用接口上的相关改动
 
 | 改动 | 说明 |
 |---|---|

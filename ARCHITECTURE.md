@@ -714,6 +714,12 @@ X 的账号名猜不出来的（艺名拼起来超过 15 字符、账号名里�
   清单里的主机可能**不止一个**：xHamster 1080p AV1 那条清单共 319 段，只有 init 段和前两个分片在
   `video7.xhcdn.com`，其余 317 段都在 `ip<数字>.ahcdn.com`——`streamHostSuffixes` 漏掉哪个后缀，
   播放就会「头 8 秒正常、之后每段 400 非法的播放地址」。
+- **有些通道只能站内现算地址**：清单拿不到地址的（krx18 的 loadvid：`resolve-token` 回 m3u8
+  **正文**）走 `platform.SitePlaylistProvider`（`/api/{platform}/playlist.m3u8`）；连整片字节都要
+  按 Range 现算的（krx18 的 Server 2 / Abyss：每 5 MB 一片，片地址是 `AES-256-CTR`
+  加出来的 token）走 `platform.FileStreamProvider`（`/api/{platform}/file.mp4`）。
+  两者都靠「档位 `url` 是以 `/` 开头的站内地址」这条约定接上，`streamURL` 对它原样放行——
+  别再包一层 `/api/stream`，那等于让代理去取它自己。
 - **详情页的播放列表＝本地档 + 线上档**：`GET /api/videos/{id}/playback` 把本地库那一路（若已下载）
   排第一并设为默认，再追加线上解析出来的每个清晰度；**只有两边都空**才是真的没得播
   （只有不注册 adapter 的 YouTube 会走到）。判断时别忘了线上档位是在循环里才追加进返回列表的。

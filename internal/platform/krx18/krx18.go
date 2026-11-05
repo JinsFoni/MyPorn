@@ -22,6 +22,11 @@
 // 每段 6~8 秒），分片地址伪装成 .png，但内容首字节是 0x47（TS 同步字节）；
 // **分片不要 Referer、不要特定 UA、CORS 是 \\***，所以只有清单那一侧要过 Cloudflare，
 // 分片照走通用 /api/stream 代理。
+//
+// 另一条通道是 Server 2 的 **Abyss 播放器（mov18plus.cloud）**，它给的不是 HLS 而是
+// 一条假的 storage.googleapis.com 地址 + 5 MB 一片的 /sora/{size}/{token}：
+// 覆盖率高得多（实测 26 部里 24 部有它，loadvid 只有 1 部），解析与逐片转发在 abyss.go，
+// 走的站内地址是 /api/krx18/file.mp4（见 platform.FileStreamProvider）。
 package krx18
 
 import (
@@ -73,19 +78,17 @@ const (
 // streamango / openload——那些站早就没了，只能当兜底挨个试一遍。
 var playerServers = []string{"2", "1", "3"}
 
-// loadvidHost 是目前唯一跑得通的播放器域名（后缀匹配，播放页在 cdn.loadvid.com）。
+// loadvidHost 是 HLS 那条通道的播放器域名（后缀匹配，播放页在 cdn.loadvid.com）；
+// Abyss 那条的域名是 abyssHostSuffix（mov18plus.cloud，见 abyss.go）。
 const loadvidHost = "loadvid.com"
 
 // describePlayer 把「不支持的 embed 站」说成人话。
 //
-// 实测（2026-11-04，从 /movies、/genre/eng-sub/、/genre/korea/ 抽 18 部最近的片子）：
-// 18 部全是 play.playkrx18.site + mov18plus.cloud，一部 loadvid 都没有；用户给的
-// office-wifes-affair-2026 是 Server 2 上有 loadvid 的那一类（三部里只有它放得出来）。
-// 两家不支持的都不是「少写了个正则」：
-//   - play.playkrx18.site 的播放逻辑在 appv1.js（javascript-obfuscator 混淆）里，
-//     接口还带 CF Turnstile，无头浏览器直接被挑战页挡住；
-//   - mov18plus.cloud 把 media 字段加密了，解出来的 id 指向 player.abyssplayer.com，
-//     实测那页只回一个占位视频（bbb_sunflower…）。
+// 实测覆盖率（2026-11-05，26 部片子里数 Server 2/1/3 指向谁）：mov18plus.cloud 24/26、
+// play.playkrx18.site 22/26、filemoon.sx 8/26、helvid.net 2/26、cdn.loadvid.com 1/26。
+// 现在 mov18plus（Abyss）已经能放了（见 abyss.go），还剩下 play.playkrx18.site：
+// 它的播放逻辑在 appv1.js（javascript-obfuscator 混淆）里，接口还带 CF Turnstile，
+// 无头浏览器直接被挑战页挡住，Go 这边从 IP 层面就是 403（实测 5635 字节的挑战页）。
 //
 // 所以这里如实报「用的是哪个播放器、暂不支持」，别让用户对着「解析失败」猜。
 func describePlayer(host string) string {
@@ -121,12 +124,16 @@ type Adapter struct {
 }
 
 // cached 是一条影片解析出来的页面元数据 + 清单 + 媒体信息。
+//
+// playlist 与 abyss 二选一：前者是 loadvid 的 HLS 清单（站内现做成 m3u8），
+// 后者是 Server 2 的 Abyss 整片 mp4（按 Range 逐片取，见 abyss.go）。
 type cached struct {
 	at       time.Time
 	page     *pageInfo
 	playlist []byte
 	base     *url.URL
 	info     mediaInfo
+	abyss    *abyssMedia
 }
 
 // mediaInfo 是从第一段分片里量出来的真实参数。
@@ -412,7 +419,12 @@ func (a *Adapter) ResolvePlayback(ctx context.Context, videoID string) (*model.V
 		return nil, nil, err
 	}
 	v := e.page.video(a)
-	v.DurationSec = e.info.DurationSec
+	if e.abyss != nil {
+		// Abyss 通道的时长是从第 0 片的 moov 里量出来的（影片页上根本没有时长）。
+		v.DurationSec = e.abyss.DurationSec
+	} else {
+		v.DurationSec = e.info.DurationSec
+	}
 	return v, []model.Variant{e.variant()}, nil
 }
 
@@ -433,6 +445,18 @@ func (a *Adapter) SitePlaylist(ctx context.Context, videoID string) ([]byte, *ur
 // ---------- 解析链路 ----------
 
 func (e *cached) variant() model.Variant {
+	if e.abyss != nil {
+		// Abyss 通道：整片就是一条 mp4，站内按 Range 现算分片 token 再转发，
+		// 所以这里直接给站内地址（streamURL 对以 / 开头的地址原样放行）。
+		return model.Variant{
+			Height:          e.abyss.Height,
+			Width:           e.abyss.Width,
+			Bandwidth:       e.abyss.Bandwidth,
+			Codec:           e.abyss.Codec,
+			URL:             e.abyss.Path,
+			ApproxBandwidth: false,
+		}
+	}
 	// url 留空：清单是站内现做的，由 httpapi.handlePlayback 换成 SitePlaylistProvider 的地址。
 	return model.Variant{
 		Height:          e.info.Height,
@@ -454,11 +478,73 @@ func (a *Adapter) resolve(ctx context.Context, slug string) (*cached, error) {
 	if err != nil {
 		return nil, err
 	}
-	playlist, playlistBase, err := a.fetchPlaylist(ctx, page.PostID, slug)
+	c, err := a.resolveMedia(ctx, page, slug)
 	if err != nil {
 		return nil, err
 	}
-	segs, dur := parseMediaPlaylist(string(playlist), playlistBase)
+	c.page = page
+	c.at = time.Now()
+	a.toCache(slug, c)
+	return c, nil
+}
+
+// resolveMedia 走「播放器选项 → 对应播放器」这两跳，两种通道都认。
+//
+// 顺序还是 playerServers 的顺序（2、1、3），谁先给出能播的东西就用谁：
+//   - cdn.loadvid.com → HLS 清单，站内再做成 m3u8（SitePlaylist）；
+//   - mov18plus.cloud → Abyss，整片 mp4，站内按 Range 逐片取（abyss.go）。
+func (a *Adapter) resolveMedia(ctx context.Context, page *pageInfo, slug string) (*cached, error) {
+	if page.PostID == "" {
+		return nil, errors.New("影片页里没找到播放器编号（data-post）")
+	}
+	var problems []string
+	for _, nume := range playerServers {
+		embedURL, err := a.playerEmbedURL(ctx, page.PostID, slug, nume)
+		if err != nil {
+			problems = append(problems, "Server "+nume+"："+err.Error())
+			continue
+		}
+		if embedURL == "" {
+			continue
+		}
+		host := hostOf(embedURL)
+		switch {
+		case strings.HasSuffix(host, loadvidHost):
+			c, err := a.resolveLoadvidChannel(ctx, embedURL)
+			if err != nil {
+				problems = append(problems, "Server "+nume+"："+err.Error())
+				continue
+			}
+			return c, nil
+		case isAbyssHost(host):
+			m, err := a.resolveAbyss(ctx, embedURL)
+			if err != nil {
+				problems = append(problems, "Server "+nume+"："+err.Error())
+				continue
+			}
+			m.Path = a.FilePath(slug)
+			// 分辨率/时长从第 0 片里量；量不出来就用档位标签兜底，不算失败。
+			pctx, cancel := context.WithTimeout(ctx, abyssProbeTimeout)
+			a.probeAbyss(pctx, m)
+			cancel()
+			return &cached{abyss: m}, nil
+		default:
+			problems = append(problems, "Server "+nume+" 用的是 "+describePlayer(host))
+		}
+	}
+	if len(problems) == 0 {
+		return nil, errors.New("影片页上没有可用的播放器")
+	}
+	return nil, fmt.Errorf("这部片没有能用的播放器（%s）", strings.Join(problems, "；"))
+}
+
+// resolveLoadvidChannel 是 loadvid 那条路：取播放页 → 换清单 → 量首段。
+func (a *Adapter) resolveLoadvidChannel(ctx context.Context, embedURL string) (*cached, error) {
+	playlist, base, err := a.resolveLoadvid(ctx, embedURL)
+	if err != nil {
+		return nil, err
+	}
+	segs, dur := parseMediaPlaylist(string(playlist), base)
 	if len(segs) == 0 {
 		return nil, errors.New("清单里没有分片")
 	}
@@ -467,9 +553,7 @@ func (a *Adapter) resolve(ctx context.Context, slug string) (*cached, error) {
 		return nil, err
 	}
 	info.DurationSec = int(dur + 0.5)
-	c := &cached{at: time.Now(), page: page, playlist: playlist, base: playlistBase, info: info}
-	a.toCache(slug, c)
-	return c, nil
+	return &cached{playlist: playlist, base: base, info: info}, nil
 }
 
 func (a *Adapter) fromCache(slug string) (*cached, bool) {
@@ -498,42 +582,6 @@ func (a *Adapter) fetchPage(ctx context.Context, slug string) (*pageInfo, error)
 		return nil, err
 	}
 	return parsePage(body, pageURL, slug)
-}
-
-// fetchPlaylist 走「影片页 → 播放器选项 → loadvid → 换清单」这四跳。
-//
-// 播放器不止一个：页面上的「Server 1/2/3」对应不同的 embed 站，老片留下的那几个
-// 早就关站了（实测 2017 年的《Living with My Cousin》只有 streamango / openload），
-// 所以按 playerServers 的顺序逐个试，谁给出 LoadVidConfig 就用谁。
-func (a *Adapter) fetchPlaylist(ctx context.Context, postID, slug string) ([]byte, *url.URL, error) {
-	if postID == "" {
-		return nil, nil, errors.New("影片页里没找到播放器编号（data-post）")
-	}
-	var problems []string
-	for _, nume := range playerServers {
-		embedURL, err := a.playerEmbedURL(ctx, postID, slug, nume)
-		if err != nil {
-			problems = append(problems, "Server "+nume+"："+err.Error())
-			continue
-		}
-		if embedURL == "" {
-			continue
-		}
-		if host := hostOf(embedURL); !strings.HasSuffix(host, loadvidHost) {
-			problems = append(problems, "Server "+nume+" 用的是 "+describePlayer(host))
-			continue
-		}
-		playlist, base, err := a.resolveLoadvid(ctx, embedURL)
-		if err != nil {
-			problems = append(problems, "Server "+nume+"："+err.Error())
-			continue
-		}
-		return playlist, base, nil
-	}
-	if len(problems) == 0 {
-		return nil, nil, errors.New("影片页上没有可用的播放器")
-	}
-	return nil, nil, fmt.Errorf("这部片没有能用的播放器（%s）", strings.Join(problems, "；"))
 }
 
 // playerEmbedURL 问一次「第 nume 个播放器」的 embed 地址。

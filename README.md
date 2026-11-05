@@ -12,7 +12,8 @@ M5 社交动态、M6 YouTube、M7 bilibili。
 - 接口契约：`docs/API.md`
 - 上线前必读：`docs/NEEDS-VERIFICATION.md`（解析选择器需在能访问站点的机器上核对）
 - bilibili 一期：`docs/M7-BILIBILI.md`（实测记录、两条列表通道、分轨合流都在这里）
-- krx18：`docs/M8-KRX18.md`（四跳解析链路、Cloudflare 指纹、tag 订阅、播放器覆盖面只有 1/34）
+- krx18：`docs/M8-KRX18.md`（四跳解析链路、Cloudflare 指纹、tag 订阅；播放器两家：loadvid 的 HLS
+  + mov18plus/Abyss 的 `/sora/` 分片（§12），后者覆盖 24/26）
 
 ## 当前状态（三个站都能用）
 

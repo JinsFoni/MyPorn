@@ -89,6 +89,23 @@ type SitePlaylistProvider interface {
 	SitePlaylist(ctx context.Context, videoID string) ([]byte, *url.URL, error)
 }
 
+// FileStreamProvider 是可选接口：整片是一条支持 Range 的 mp4，但取字节的地址要按 Range 现算。
+//
+// krx18 的 Server 2（mov18plus.cloud / Abyss 播放器）就是这样：播放器给浏览器的是
+// 一条**假**地址（storage.googleapis.com/mediastorage/…#mp4/chunk/…），真正的字节在
+// {sub}.sssrr.org/sora/{size}/{token} 上，token 由「(md5_id, res_id, size, chunkSize, 分片序号)」
+// 这串明文 AES-256-CTR 加出来、再套两层 base64（实测与浏览器抓到的 token 逐字节一致，
+// 见 docs/M8-KRX18.md §11.4）。分片序号来自 Range 头，所以这条既不能包成
+// /api/stream?u=…（那是一条固定地址），也不能让浏览器自己去取（要 Referer，且 token 是算出来的）。
+//
+// 约定：适配器给出一个站内整片地址（variant.url 直接用它），Server 路由到 ServeFile。
+type FileStreamProvider interface {
+	// FilePath 返回这条片子的站内整片地址（形如 /api/krx18/file.mp4?v=<id>）。
+	FilePath(videoID string) string
+	// ServeFile 按 Range 把上游的分片边取边发；出错时若已经写了响应头就只能断流。
+	ServeFile(ctx context.Context, videoID string, w http.ResponseWriter, r *http.Request) error
+}
+
 // PageResolver 是可选接口：能直接按「影片页地址」解析播放地址，省掉一次 301。
 //
 // 为什么会有这个需求：xHamster 的影片 ID 是 URL 末尾那段（xhW3Ivw），

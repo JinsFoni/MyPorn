@@ -270,7 +270,11 @@ poster 1000×1500 / thumb 1280×720 / fanart 1920×1080 / nfo（含 `uniqueid ty
 | 影片页 | `GET /movies/<slug>`（1.4~1.9 s）抠 `post_id` + iframe 播放器域名 | 报「页面上没找到播放器」→ 模板改了，先看 `-debug-parse` 打出来的 iframe |
 | 中间跳 | `POST /wp-admin/admin-ajax.php`，`action=doo_player_ajax&post=<id>&nume=<n>&type=movie`，要 `X-Requested-With: XMLHttpRequest` + `Referer`（0.7~1.4 s） | `{"embed_url":""}` → 少了这两个头，或 `nume` 编号变了 |
 | 清单 | embed 页里 `videoHash:` / `videoToken:` → `POST cdn.loadvid.com/videos/resolve-token` 回 m3u8 **正文** | 401/403 → token 过期（同一次解析内有效）；注意正文里没有 `#EXT-X-MAP`，分片是 `.png` 后缀的 TS（首字节 `0x47`） |
-| 覆盖面 | **只有 `cdn.loadvid.com` 这一家能起播**，抽样 34 部里 1 部；`play.playkrx18.site` / `mov18plus.cloud` 明确报「暂不支持在线播放」 | 点开就报「暂不支持」→ 不是 bug，是还没啃那两家播放器（见 M8 §7） |
+| 覆盖面 | **两家能起播**：`cdn.loadvid.com`（HLS，26 部里 1 部）+ `mov18plus.cloud`（Abyss，26 部里 24 部，M8 §12）；`play.playkrx18.site` 明确报「暂不支持在线播放」 | 点开就报「暂不支持」→ 剩下的那家还没啃（`appv1.js` + CF Turnstile，见 M8 §12.7） |
+| Abyss 配置（`mov18plus.cloud`） | 页面里 `const datas = "<base64>"` → JSON → `media` 用 AES-256-CTR 解（key = `md5hex("user_id:slug:md5_id")` 的 ASCII，counter = key[:16]） | 报「media 明文不是 JSON（key 不对？）」→ 站点改了密钥拼法；报「播放器页里没有 const datas」→ 页面模板改了（顺带看是不是 `Video not found`） |
+| Abyss 分片 | `GET https://{sub}.sssrr.org/sora/{size}/{token}`，token = `b64(b64(AES-256-CTR("/mp4/{md5_id}/{res_id}/{size}/{chunkSize}/{i}")))`，key = `md5(数字位)`，必须带 `Referer: https://mov18plus.cloud/` | 403 → 少了 Referer；404 但地址对 → `plain` 少了 `chunkSize` 段或 key 用了字符串 md5（差一位就整条 404）；206 但字节是乱的 → 分片序号/片内偏移算错 |
+| Abyss 单片粒度 | `chunkSize = 5,242,880`（播放器 `maxChunkSize=0x500000`），它**进 token 明文**，不能改 | 改大/改小后一律 404 |
+| Abyss 整片通道 | `GET /api/{platform}/file.mp4?v=<id>`（`platform.FileStreamProvider`），Range → 片号 + 片内偏移，单片先取回内存再写、失败重试 3 次 | 播放中途断 → 看是否 RST（上游偶发 `INTERNAL_ERROR`）；拖不动 → `Accept-Ranges`/`Content-Range` 没写 |
 | tag 归档页 | `/tag/<slug>/`，每页 **39 部**，`/page/N/`；总页数从 `.pagination` 的 `Page 1 of 3` 读 | 列表空了 → `article.item.movies` 那套选择器变了（`.poster img` / `.data h3 a` / `.data span` 日期 / `.metadata` 播放数） |
 | tag 的 slug 形态 | `/wp-json/wp/v2/tags` 回的 `slug` **本身是 percent-encoded**（`do-hee-%eb%8f%84%ed%9d%ac`），入库/比较/拼地址一律用解码态（`canonicalTagSlug`） | 报「没有这个 tag」→ 两种形态没归一；归档页 404 → 编码态被 `PathEscape` 二次转义成 `%25` |
 | 「翻完了」的判定 | 翻过末页是 **HTTP 404**（不是空列表，正文是 137 KB 的整站模板）→ `*statusError` → `platform.ErrNotFound` | 回填停在最后一页不结束 → 404 被当成普通错误，或者 `page > 1` 那条判断被去掉 |

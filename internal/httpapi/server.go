@@ -210,6 +210,8 @@ func (s *Server) Routes() http.Handler {
 			pr.Post("/videos/import", s.handleImportVideo)
 			// 站内现做的 HLS 清单（krx18）：上游只给清单正文、不给地址。
 			pr.Get("/{platform}/playlist.m3u8", s.handleSitePlaylist)
+			// 站内整片通道（krx18 的 Server 2 / Abyss）：整片是 mp4，但每片地址要按 Range 现算 token。
+			pr.Get("/{platform}/file.mp4", s.handleSiteFile)
 
 			pr.Get("/videos", s.handleListVideos)
 			pr.Get("/videos/new", s.handleListNewVideos)
