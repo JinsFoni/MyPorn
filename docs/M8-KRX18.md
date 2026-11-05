@@ -330,6 +330,11 @@ Tailwind 4 排在 `sm`/`lg`/`xl` 之前，两条 `grid-template-columns` 打架�
 实测 1440 上仍然是 4 列（CSS 里 `min-width:1400px` 那条排在 `40rem/64rem/80rem` 前面）。
 换成 `min-[1400px]:` 任意断点也一样。最后是手写媒体查询放进 `@utility poster-grid` 才可控。
 
+竖版卡片的栅格只有这一个真源：`/krx18` 墙用 `POSTER_GRID`，**影片页「相关影片」也用它**
+（2026-11-05 修，原来那里写死 `grid-cols-2 sm:3 xl:4`，1440 上墙 5 列 × 213px、相关 4 列 × 269px，
+用户一眼看出两边不一样大）。实测改完：390 → 177 / 177、1280 → 229 / 229、1440 → 213 / 213
+（墙 / 相关）。非竖版平台的「相关影片」同理改用 `WALL_GRID`，和 B 站 / YouTube 墙对齐。
+
 ### 11.3.2 关注流不收 krx18（同日按用户要求）
 
 `store.FeedExcludedPlatforms` 从 `bilibili, youtube` 变成 `bilibili, youtube, krx18`：

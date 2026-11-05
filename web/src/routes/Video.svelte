@@ -1,6 +1,7 @@
 <script lang="ts">
   import DownloadDialog from '../components/DownloadDialog.svelte';
   import VideoCard from '../components/VideoCard.svelte';
+  import { POSTER_GRID, WALL_GRID } from '../components/InfiniteList.svelte';
   import VideoByline from '../components/VideoByline.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import Skeleton from '../components/Skeleton.svelte';
@@ -921,7 +922,11 @@
     {#if video.related.length > 0}
       <section class="mt-10">
         <h3 class="mb-3 text-title font-medium text-fg">相关影片</h3>
-        <div class="grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-3 xl:grid-cols-4">
+        <!-- krx18 的卡是竖版（5:7），尺寸口径跟 `/krx18` 墙一致就用同一个 `poster-grid`：
+             两处的列数都按**视口宽**定档，各写一套必然对不上——原来这里写死
+             `xl:grid-cols-4`，1440 上墙是 5 列 × 213px、这里 4 列 × 269px（+26%），
+             2026-11-05 用户报的就是这个。非竖版平台仍走原来那套 16:9 栅格。 -->
+        <div class={video.platform === 'krx18' ? POSTER_GRID : WALL_GRID}>
           {#each video.related.slice(0, 8) as related (related.id)}
             <VideoCard video={related} />
           {/each}
