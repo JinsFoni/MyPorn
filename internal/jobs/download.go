@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -237,12 +238,132 @@ func (r *Runner) runDownloadJob(ctx context.Context, j *model.Job, c *Ctl) error
 	return nil
 }
 
+// saveFromSiteStream 是「字节在服务端手里」那条下载路径：档位 url 是站内相对地址，
+// 适配器实现了 platform.FileSourceProvider 就直接顺序读它的字节流落盘。
+//
+// 不 remux：上游给的就是 faststart 的明文 mp4（moov 在第一片，实测 4.5 MB），
+// 再 -c copy 一遍只是把一两个 GB 白拷一次、白占一份临时空间。
+// 落的是 .part，字节数对上了才改名成 .mp4 —— 中途取消/断流不会在库里留半截成品。
+func (r *Runner) saveFromSiteStream(ctx context.Context, c *Ctl, video *model.Video,
+	ad platform.Adapter, outBase string, estimated int64) (string, error) {
+	src, ok := ad.(platform.FileSourceProvider)
+	if !ok {
+		return "", fmt.Errorf("这个站暂不支持下载：%s 的播放清单由服务端现做，上游只给正文不给地址",
+			ad.Name())
+	}
+	rc, total, err := src.OpenFile(ctx, video.PlatformVideoID)
+	if err != nil {
+		return "", fmt.Errorf("解析整片地址失败: %w", err)
+	}
+	defer rc.Close()
+	if total <= 0 {
+		total = estimated
+	}
+
+	finalPath := outBase + ".mp4"
+	tmpPath := finalPath + ".part"
+	_ = os.Remove(tmpPath)
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return "", fmt.Errorf("创建文件失败: %w", err)
+	}
+	done := false
+	defer func() {
+		if !done {
+			_ = f.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	// 1 MiB 一块：上游实测 15~27 MB/s，块太小光在管道上打转，太大则取消反应变慢。
+	buf := make([]byte, 1<<20)
+	var got int64
+	lastAt, lastGot := time.Now(), int64(0)
+	for {
+		if cerr := c.Check(); cerr != nil {
+			return "", cerr
+		}
+		n, rerr := rc.Read(buf)
+		if n > 0 {
+			if _, werr := f.Write(buf[:n]); werr != nil {
+				return "", fmt.Errorf("写入文件失败: %w", werr)
+			}
+			got += int64(n)
+			if now := time.Now(); now.Sub(lastAt) >= time.Second {
+				c.Progress(siteStreamPercent(got, total), siteStreamMsg(got, total, lastGot, now.Sub(lastAt)), speedBPS(got-lastGot, now.Sub(lastAt)), got, total)
+				lastAt, lastGot = now, got
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return "", fmt.Errorf("读取整片字节失败: %w", rerr)
+		}
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("收尾失败: %w", err)
+	}
+	if total > 0 && got != total {
+		return "", fmt.Errorf("字节数不符：收到 %s，应为 %s", library.HumanBytes(got), library.HumanBytes(total))
+	}
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		return "", fmt.Errorf("改名失败: %w", err)
+	}
+	done = true
+	c.Progress(92, "写入完成 "+library.HumanBytes(got), 0, got, got)
+	r.log.Info("站内整片下载完成", "video", video.ID, "bytes", got)
+	return finalPath, nil
+}
+
+// siteStreamPercent 把已下字节映射到进度条 2%~90%（和分段下载器占的区间一致）。
+func siteStreamPercent(got, total int64) float64 {
+	if total <= 0 {
+		return 2
+	}
+	p := 2 + 88*float64(got)/float64(total)
+	if p > 90 {
+		p = 90
+	}
+	return p
+}
+
+func siteStreamMsg(got, total, lastGot int64, span time.Duration) string {
+	msg := "下载中 " + library.HumanBytes(got)
+	if total > 0 {
+		msg = "下载中 " + library.HumanBytes(got) + "/" + library.HumanBytes(total)
+	}
+	if bps := speedBPS(got-lastGot, span); bps > 0 {
+		msg += " · " + library.HumanBytes(bps) + "/s"
+		if total > got {
+			if eta := int(float64(total-got) / float64(bps)); eta > 0 {
+				msg += " · 剩余 " + humanETA(eta)
+			}
+		}
+	}
+	return msg
+}
+
+func speedBPS(delta int64, span time.Duration) int64 {
+	if delta <= 0 || span <= 0 {
+		return 0
+	}
+	return int64(float64(delta) / span.Seconds())
+}
+
 // downloadAndMux 优先用自研分段下载器；清单形态不支持时退回 ffmpeg 直拉。
 func (r *Runner) downloadAndMux(ctx context.Context, c *Ctl, video *model.Video, best model.Variant,
 	workDir, binPath, outBase, referer string, estimated int64, ad platform.Adapter) (string, error) {
 
-	// 有的平台清单是**服务端现做的**（krx18：上游 resolve-token 回的是 m3u8 正文，
-	// 不下发地址），这类影片的档位 url 是空的。必须当场说清楚，否则空地址会一路
+	// 字节在**服务端手里**的那类片子：档位 url 是站内相对地址（krx18 的 Abyss 通道
+	// 给的是 /api/krx18/file.mp4?v=…）。这种地址交给 ffmpeg 会被当成文件名，实测报
+	// `Error opening input file /api/krx18/file.mp4?v=…`，所以直接问适配器要字节流。
+	if strings.HasPrefix(strings.TrimSpace(best.URL), "/") {
+		return r.saveFromSiteStream(ctx, c, video, ad, outBase, estimated)
+	}
+
+	// 有的平台清单是**服务端现做的**（krx18 的 loadvid 通道：上游 resolve-token 回的是
+	// m3u8 正文，不下发地址），这类影片的档位 url 是空的。必须当场说清楚，否则空地址会一路
 	// 掉进 ffmpeg，用户看到的是「Error opening input file .」（2026-11-04 实测）。
 	if strings.TrimSpace(best.URL) == "" {
 		return "", fmt.Errorf("这个站暂不支持下载：%s 的播放清单由服务端现做，上游只给正文不给地址",

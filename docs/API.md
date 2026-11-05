@@ -1174,8 +1174,11 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
   2026-11-04 按用户要求改的：订阅一个 tag 一次回填几十上百部，会把关注流整页顶掉）。
   但 `GET /api/videos?performerId=` 例外——指定了艺人就**不排**任何平台，否则艺人页会因为
   「这个人的片子来自被排掉的站」而变空（实测 `/performer/152` 当时直接 0 条）。
-- **不能下载**：上游 `resolve-token` 只回清单正文、不下发地址，档位 `url` 为空。
-  下载任务会在入口直接回「这个站暂不支持下载…」，前端也不显示下载键。
+- **下载看通道**：Abyss（Server 2）那条给的是站内整片地址 `/api/krx18/file.mp4?v=<id>`，
+  可以下载（`POST /api/videos/{id}/download`，服务端经 `platform.FileSourceProvider`
+  顺序取字节直接落盘，不 remux，见 docs/M8-KRX18.md §11.4）；
+  只有 loadvid 那条（上游 `resolve-token` 只回清单正文、不下发地址）档位 `url` 为空，
+  下载任务在入口回「这个站暂不支持下载…」，前端也不出现下载键。
 
 ### E1. `GET /api/krx18/channels`
 
@@ -1191,7 +1194,7 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
       "siteCount": 92,            // 站上这个 tag 的总片数（来自 /wp-json/wp/v2/tags 的 count）
       "videoCount": 92,           // 本地已收录
       "unseenCount": 0,           // 其中 is_new = 1
-      "downloaded": 0,            // 永远 0（不能下载），字段保留是为了和 D1 同形
+      "downloaded": 0,            // 已落盘到本地库的条数（Abyss 通道的片子可下载，见上文）
       "subscriptionId": 11,
       "enabled": true,
       "backfillDone": true,

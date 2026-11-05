@@ -57,8 +57,12 @@ import (
 	"github.com/JinsFoni/MyPorn/internal/platform"
 )
 
-// 编译期断言：Server 的 /api/{platform}/file.mp4 路由靠这个接口认人。
-var _ platform.FileStreamProvider = (*Adapter)(nil)
+// 编译期断言：Server 的 /api/{platform}/file.mp4 路由靠这个接口认人；
+// 下载任务（jobs.saveFromSiteStream）靠 FileSourceProvider 拿同一份字节。
+var (
+	_ platform.FileStreamProvider = (*Adapter)(nil)
+	_ platform.FileSourceProvider = (*Adapter)(nil)
+)
 
 const (
 	// abyssReferer 是 sssrr.org 那批存储域名唯一认的 Referer。
@@ -562,6 +566,62 @@ func (a *Adapter) ServeFile(ctx context.Context, videoID string, w http.Response
 		off = chunkStart + inEnd + 1
 	}
 	return nil
+}
+
+// OpenFile 把整片按顺序吐给下载任务：和 ServeFile 是同一份字节的第二个出口。
+//
+// 为什么要两条出口（2026-11-05 用户要求「krx18 播放页面加下载按钮」时补的）：
+// 档位 url 是**站内相对地址**（/api/krx18/file.mp4?v=…），交给 ffmpeg 会被当成文件名
+// ——实测报 `Error opening input file /api/krx18/file.mp4?v=…`；让下载器回头请求自己的
+// HTTP 口又要带上会话 Cookie、还把「本机端口」变成下载任务的隐式依赖。直接读适配器最干净。
+//
+// 一片 5 MB 仍先落内存再交出（和播放一个道理，见 fetchAbyssChunk）：上游偶发 RST 时
+// 能在写出任何字节之前重试，下游拿到的流里不会出现「中间少一截」。
+func (a *Adapter) OpenFile(ctx context.Context, videoID string) (io.ReadCloser, int64, error) {
+	e, err := a.resolve(ctx, videoID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if e.abyss == nil {
+		return nil, 0, errors.New("这条片子不是 Abyss 通道（Server 2 没给整片 mp4）")
+	}
+	m := e.abyss
+	total := m.Size
+	ctx, cancel := context.WithCancel(ctx)
+	pr, pw := io.Pipe()
+	go func() {
+		defer cancel()
+		for i := 0; i < m.chunks(); i++ {
+			from := int64(0)
+			to := int64(abyssChunkSize - 1)
+			if left := total - int64(i)*abyssChunkSize; left < abyssChunkSize {
+				to = left - 1
+			}
+			data, ferr := a.fetchAbyssChunk(ctx, m.chunkURL(i), from, to)
+			if ferr != nil {
+				pw.CloseWithError(fmt.Errorf("取第 %d 片失败: %w", i, ferr))
+				return
+			}
+			if _, werr := pw.Write(data); werr != nil {
+				return // 下游关了（用户取消 / 暂停），不该再往下取
+			}
+		}
+		pw.Close()
+	}()
+	return &abyssStream{pr: pr, cancel: cancel}, total, nil
+}
+
+// abyssStream 把 io.Pipe 包成能取消的 ReadCloser：Close 时顺手停掉上游的分片请求。
+type abyssStream struct {
+	pr     *io.PipeReader
+	cancel context.CancelFunc
+}
+
+func (s *abyssStream) Read(p []byte) (int, error) { return s.pr.Read(p) }
+
+func (s *abyssStream) Close() error {
+	s.cancel()
+	return s.pr.Close()
 }
 
 // fetchAbyssChunk 取一片里的 [from,to] 区间（最多 5 MB，直接放内存）。

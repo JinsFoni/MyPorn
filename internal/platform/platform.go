@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -104,6 +105,22 @@ type FileStreamProvider interface {
 	FilePath(videoID string) string
 	// ServeFile 按 Range 把上游的分片边取边发；出错时若已经写了响应头就只能断流。
 	ServeFile(ctx context.Context, videoID string, w http.ResponseWriter, r *http.Request) error
+}
+
+// FileSourceProvider 是可选接口：把整片字节**直接**交给下载任务（不走 HTTP 回路）。
+//
+// 和 FileStreamProvider 是同一份字节的两个出口：那边服务浏览器（按客户端要的 Range
+// 边取边发），这边服务下载任务（从头拉到尾落盘）。为什么要多一个出口：这类平台的档位
+// url 是**站内相对地址**（`/api/krx18/file.mp4?v=…`），交给 ffmpeg 会被当成文件名，
+// 实测报 `Error opening input file /api/krx18/file.mp4?v=…`；而让下载器回头请求自己的
+// HTTP 口，又得把会话 Cookie 和本机端口变成下载任务的隐式依赖。
+//
+// 约定：实现了它，Server 的 `/api/{platform}/file.mp4` 与非空的档位 url 才成立，
+// 下载任务的「字节在服务端手里」那条路径也才走得通（见 jobs.saveFromSiteStream）。
+type FileSourceProvider interface {
+	// OpenFile 从第 0 字节开始顺序读出整片，total 是总字节数（0 = 未知，调用方按估算值报进度）。
+	// 调用方负责 Close；带上 ctx 才能在中途取消时把上游也停掉。
+	OpenFile(ctx context.Context, videoID string) (rc io.ReadCloser, total int64, err error)
 }
 
 // PageResolver 是可选接口：能直接按「影片页地址」解析播放地址，省掉一次 301。

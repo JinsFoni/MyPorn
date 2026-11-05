@@ -78,6 +78,21 @@
 
   let video = $state<VideoDetail | null>(null);
   let playback = $state<PlaybackInfo | null>(null);
+  /**
+   * 「下载到本地库」这颗按钮出不出现。
+   *
+   * 只看**有没有一条带地址的档位**：站内整片（krx18 的 Abyss 通道，url 是
+   * `/api/krx18/file.mp4?v=…`）和普通外链档位都带地址，下得动；krx18 走 loadvid 的那批
+   * 档位 url 是空的（清单由服务端现做、上游只给正文不给地址），点了必然失败，
+   * 所以按钮也不出现（2026-11-05 前的旧规矩是「krx18 一律不给下载键」，
+   * Abyss 通道能直取字节之后收窄成这一条）。
+   *
+   * 非 krx18 平台不参与这个判断：它们的按钮一直是「不等 playback 就渲染」，
+   * 改成等数据会让按钮在页面加载后突然冒出来。
+   */
+  const downloadReady = $derived(
+    video?.platform !== 'krx18' || (playback?.variants ?? []).some((v) => v.url !== '')
+  );
   let loadingVideo = $state(true);
   let loadingPlayback = $state(true);
   let pageError = $state('');
@@ -802,9 +817,13 @@
                   </svg>
                 {/if}
               </button>
-            {:else if video.platform !== 'krx18'}
-              <!-- krx18 不给下载键：它的播放清单是服务端现做的（上游只给 m3u8 正文、
-                   不下发地址），没有能交给下载器的直链，点了只会排出一个必败的任务。 -->
+            {:else if downloadReady}
+              <!-- krx18 的门不是平台，而是「有没有一条带地址的档位」（`downloadReady`）：
+                   Abyss（Server 2）那条通道的档位 url 是站内整片地址
+                   `/api/krx18/file.mp4?v=…`，服务端自己取字节落盘（见
+                   jobs.saveFromSiteStream）；走 loadvid 的片子档位 url 是空的（清单由
+                   服务端现做、上游只给正文不给地址），点了只会排出一个必败的任务，
+                   所以那种片子照旧不出现这颗按钮。 -->
               <button
                 type="button"
                 class="icon-act"

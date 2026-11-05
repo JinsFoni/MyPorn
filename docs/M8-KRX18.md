@@ -367,12 +367,34 @@ Tailwind 4 排在 `sm`/`lg`/`xl` 之前，两条 `grid-template-columns` 打架�
 「艺人」（M8 §11.1 那两位同名/不同名的女优就是靠 tag 区分的）。要排的只是「拿它当关注流筛选项」
 这一个用法，所以做成调用方显式声明，而不是全局删掉。
 
-### 11.4 不支持下载
+### 11.4 下载：Abyss 通道能下（2026-11-05 按用户要求加），loadvid 通道仍不行
 
-上游 `resolve-token` 回的是 m3u8 **正文**、不是地址，档位的 `url` 因此是空的
-（见 `variant()` 的注释）。原来的空地址会一路掉进 ffmpeg，报
-`Error opening input file .`（2026-11-04 实测 job 744 失败原文）。
-现在：① 下载任务在入口处直接回「这个站暂不支持下载…」；② 前端不显示下载键。
+**loadvid 那条**（`play.playkrx18.site` 也不支持）上游 `resolve-token` 回的是 m3u8 **正文**、
+不是地址，档位的 `url` 因此是空的（见 `variant()` 的注释）。空地址会一路掉进 ffmpeg，
+报 `Error opening input file .`（2026-11-04 实测 job 744 失败原文），所以那条现在仍然：
+入口处直接回「这个站暂不支持下载…」，前端不出现下载键。
+
+**Abyss（Server 2，§12）那条现在能下**：档位 `url` 是站内整片地址
+`/api/krx18/file.mp4?v=<id>`，字节本来就在服务端手里（每 5 MB 一片现算 token），
+所以下载任务不走 ffmpeg，而是 `platform.FileSourceProvider`（`krx18.OpenFile`）把整片
+顺序吐出来，`jobs.saveFromSiteStream` 直接落盘：写 `.mp4.part`，字节数对上才改名 `.mp4`。
+**不 remux**（上游给的就是 faststart 明文 mp4，`-c copy` 只是白拷 1.5 GB）。
+
+实测（2026-11-05，片子 3355《Taste of a Former Classmate…》1:11:01）：
+
+| 项 | 实测 |
+|---|---|
+| 落盘 | `1,634,796,856` 字节 = 312 片（311×5,242,880 + 4,261,176），与档位 `size` 逐字节相等 |
+| 耗时 | 约 3 分钟，速度 3~14 MB/s（上游波动，分片重试没触发） |
+| ffprobe | `h264 1920×1080 2,865,341 bps` + `aac 195,120 bps`，`duration 4261.419 s` |
+| 完整性 | `ffmpeg -v error -i <file> -f null -` 全片解码 **零输出**（整条 71 分钟没有坏帧/坏包） |
+| 库索引 | `library_files` 一行：`size_bytes 1634796856 / 1920×1080 / duration_sec 4261` |
+
+前端：影片页那颗下载键的门从「平台不是 krx18」收窄成「**有没有一条带地址的档位**」
+（`downloadReady`）。所以 Abyss 片子有键（`/video/3256` 实测有）、只有 loadvid 的片子没有键
+（`/video/3300` 实测无，那部连播放都报「没有能用的播放器」）。
+**墙上的卡片仍然不放开**：`/krx18` 一页 39 张卡，要逐张去上游解析才知道是不是 Abyss 片子，
+代价太大；要下就走影片页。
 
 ### 11.5 覆盖面还是那个老问题
 

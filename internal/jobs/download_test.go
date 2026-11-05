@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -305,3 +306,198 @@ func TestHumanETA(t *testing.T) {
 }
 
 var _ = library.DefaultTemplate
+
+// siteFileAdapter 是「字节在服务端手里」的平台：档位 url 是**站内相对地址**，
+// 适配器自己会把整片字节吐出来（krx18 的 Abyss 通道就是这样，见 abyss.go 的 OpenFile）。
+type siteFileAdapter struct {
+	fakeAdapter
+	data   []byte
+	opened int
+	closes int
+}
+
+func (f *siteFileAdapter) ResolveStreams(ctx context.Context, videoID string) ([]model.Variant, error) {
+	return []model.Variant{{
+		Height: 180, Width: 320, Bandwidth: 600000, Codec: "avc1",
+		URL: "/api/" + f.Key() + "/file.mp4?v=" + videoID,
+	}}, nil
+}
+
+func (f *siteFileAdapter) OpenFile(ctx context.Context, videoID string) (io.ReadCloser, int64, error) {
+	f.opened++
+	return &countingReadCloser{r: bytes.NewReader(f.data), onClose: func() { f.closes++ }}, int64(len(f.data)), nil
+}
+
+type countingReadCloser struct {
+	r       *bytes.Reader
+	onClose func()
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) { return c.r.Read(p) }
+func (c *countingReadCloser) Close() error              { c.onClose(); return nil }
+
+// makeMP4 用 ffmpeg 造一份真实可探的 mp4（faststart，和 Abyss 给的形态一样）。
+func makeMP4(t *testing.T, dir string) []byte {
+	t.Helper()
+	out := filepath.Join(dir, "src.mp4")
+	cmd := exec.Command("ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc=size=320x180:rate=15:duration=2",
+		"-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+		"-c:a", "aac", "-shortest", "-movflags", "+faststart", out)
+	if err := cmd.Run(); err != nil {
+		t.Skipf("本机 ffmpeg 无法生成测试 mp4，跳过: %v", err)
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestDownloadSiteStream 走「适配器直接吐字节」那条下载路径：不经过 ffmpeg、
+// 不 remux，落盘字节必须与上游一字不差，且不留 .part。
+func TestDownloadSiteStream(t *testing.T) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("没有 ffprobe，跳过站内整片下载测试")
+	}
+	tmp := t.TempDir()
+	mp4 := makeMP4(t, tmp)
+	img := makeJPEG(t, tmp)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(img)
+	}))
+	defer srv.Close()
+
+	st, err := store.Open(filepath.Join(tmp, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	perfID, err := st.UpsertPerformer(&model.Performer{
+		Platform: "pornhub", PerformerID: "mini-diva", Name: "Mini Diva", AvatarURL: srv.URL + "/a.jpg",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	libRoot := filepath.Join(tmp, "media")
+	libID, err := st.CreateLibrary(&model.Library{
+		Name: "测试库", RootPath: libRoot, Enabled: true, IsDefault: true,
+		UploadPolicy: model.PolicyLocal, NamingTemplate: "{date} - {title}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	vidID, _, err := st.UpsertVideo(&model.Video{
+		Platform: "pornhub", PlatformVideoID: "phSITE1", Title: "Site Stream One",
+		ThumbURL: srv.URL + "/t.jpg", DurationSec: 2, PublishedAt: &pub,
+		Tags: []string{"t"}, Description: "d",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkVideoPerformer(vidID, perfID); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		DataDir: filepath.Join(tmp, "data"), MaxDownload: 2,
+		FFmpegPath: "ffmpeg", FFprobePath: "ffprobe", PlatformProxy: map[string]string{},
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ad := &siteFileAdapter{fakeAdapter: fakeAdapter{playlistURL: "unused"}, data: mp4}
+	reg := platform.NewRegistry()
+	reg.Register(ad)
+	r := buildRunner(t, st, reg, cfg)
+
+	if _, err := r.EnqueueDownload(vidID, libID, false); err != nil {
+		t.Fatal(err)
+	}
+	job, err := st.Claim(model.JobTypeDownload)
+	if err != nil || job == nil {
+		t.Fatalf("领取任务失败: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	ctl := &Ctl{ctx: ctx, cancel: func(error) {}, st: st, hub: events.NewHub(),
+		log: slog.New(slog.NewTextHandler(io.Discard, nil)), job: job}
+
+	if err := r.runDownloadJob(ctx, job, ctl); err != nil {
+		t.Fatalf("站内整片下载失败: %v", err)
+	}
+	if ad.opened != 1 || ad.closes != 1 {
+		t.Errorf("OpenFile 应打开并关闭一次，实际 opened=%d closes=%d", ad.opened, ad.closes)
+	}
+
+	dir := filepath.Join(libRoot, "Pornhub", "Mini Diva", "2024-05-07 - Site Stream One")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("目录未生成: %v", err)
+	}
+	var partSeen bool
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".part") {
+			partSeen = true
+		}
+	}
+	if partSeen {
+		t.Errorf("成功之后不该留下 .part：%v", entries)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "2024-05-07 - Site Stream One.mp4"))
+	if err != nil {
+		t.Fatalf("成品文件不在: %v", err)
+	}
+	if int64(len(got)) != int64(len(mp4)) {
+		t.Errorf("落盘字节数 %d，上游给的是 %d", len(got), len(mp4))
+	}
+	if string(got) != string(mp4) {
+		t.Error("落盘内容与上游字节不一致（站内整片必须原样落盘，不 remux）")
+	}
+
+	lf, err := st.GetLibraryFile(vidID, libID)
+	if err != nil {
+		t.Fatalf("库索引未写入: %v", err)
+	}
+	if lf.SizeBytes != int64(len(mp4)) || lf.Height != 180 {
+		t.Errorf("库索引信息不对: size=%d height=%d", lf.SizeBytes, lf.Height)
+	}
+}
+
+// TestDownloadSiteStreamUnsupported：url 是站内相对地址、但适配器不会吐字节时，
+// 必须当场说清楚，不能掉进 ffmpeg 报「Error opening input file」。
+func TestDownloadSiteStreamUnsupported(t *testing.T) {
+	tmp := t.TempDir()
+	st, err := store.Open(filepath.Join(tmp, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := &config.Config{DataDir: filepath.Join(tmp, "data"), PlatformProxy: map[string]string{}}
+	reg := platform.NewRegistry()
+	reg.Register(&fakeAdapter{playlistURL: "/api/pornhub/file.mp4?v=x"})
+	r := buildRunner(t, st, reg, cfg)
+	vidID, _, _ := st.UpsertVideo(&model.Video{Platform: "pornhub", PlatformVideoID: "x", Title: "t", URL: "u"})
+	libID, err := st.CreateLibrary(&model.Library{
+		Name: "库", RootPath: filepath.Join(tmp, "media"), Enabled: true, IsDefault: true,
+		UploadPolicy: model.PolicyLocal, NamingTemplate: "{title}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &model.Job{ID: 1, Type: model.JobTypeDownload,
+		Payload: `{"videoId":` + fmt.Sprint(vidID) + `,"libraryId":` + fmt.Sprint(libID) + `}`}
+	ctx := context.Background()
+	ctl := &Ctl{ctx: ctx, cancel: func(error) {}, st: st, hub: events.NewHub(),
+		log: slog.New(slog.NewTextHandler(io.Discard, nil)), job: job}
+	err = r.runDownloadJob(ctx, job, ctl)
+	if err == nil || !strings.Contains(err.Error(), "暂不支持下载") {
+		t.Fatalf("应给出「暂不支持下载」，得到 %v", err)
+	}
+}

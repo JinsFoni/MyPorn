@@ -725,6 +725,14 @@ X 的账号名猜不出来的（艺名拼起来超过 15 字符、账号名里�
   加出来的 token）走 `platform.FileStreamProvider`（`/api/{platform}/file.mp4`）。
   两者都靠「档位 `url` 是以 `/` 开头的站内地址」这条约定接上，`streamURL` 对它原样放行——
   别再包一层 `/api/stream`，那等于让代理去取它自己。
+- **站内整片的片子也能下载**（2026-11-05 用户要求「krx18 播放页面加下载按钮」）：档位 `url` 以
+  `/` 开头时，下载任务不去碰 ffmpeg（相对地址会被当成文件名，实测报
+  `Error opening input file /api/krx18/file.mp4?v=…`），而是走 `platform.FileSourceProvider`——
+  适配器把整片字节顺序吐出来（`krx18.OpenFile`，仍是 5 MB 一片先落内存再交出），
+  `jobs.saveFromSiteStream` 直接写 `xxx.mp4.part`，字节数对上才改名成 `.mp4`。
+  **不 remux**：上游给的就是 faststart 的明文 mp4，`-c copy` 一遍只是白拷一两个 GB。
+  所以「能不能下」这件事有两个口子要同时成立：适配器实现了 `FileSourceProvider`，
+  且这条片子的档位真有地址（loadvid 那条的 `url` 是空的，仍旧「暂不支持下载」）。
 - **详情页的播放列表＝本地档 + 线上档**：`GET /api/videos/{id}/playback` 把本地库那一路（若已下载）
   排第一并设为默认，再追加线上解析出来的每个清晰度；**只有两边都空**才是真的没得播
   （只有不注册 adapter 的 YouTube 会走到）。判断时别忘了线上档位是在循环里才追加进返回列表的。
