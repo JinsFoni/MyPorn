@@ -17,6 +17,7 @@
   } from '../lib/format';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
+  import { nav } from '../lib/nav.svelte';
   import { confirmDialog } from '../lib/confirm.svelte';
   import { platformLabel } from '../lib/platform';
   import { privacy } from '../lib/privacy.svelte';
@@ -210,9 +211,13 @@
     try {
       const detail = await api.video(videoId);
       video = detail;
+      // 侧边栏要知道这一页的片属于哪个平台：`/video/:id` 是跨平台复用的路由，
+      // 光看路径前缀会把 B 站 / krx18 的片算进「关注」（见 lib/nav.svelte.ts）。
+      nav.setVideoPlatform(detail.platform);
       rotateDeg = detail.rotateDeg ?? 0;
       mockNote = '';
     } catch (err) {
+      nav.setVideoPlatform(null);
       if (import.meta.env.DEV) {
         video = MOCK_VIDEO;
         mockNote = messageFor(err);
@@ -526,8 +531,10 @@
   });
 
   // 离开这一页就把轮询停掉：prepToken 一变，waitForRemux 下一轮自己退出。
+  // 顺手把「当前片属于哪个平台」清掉，免得换到别的影片页前那一瞬间高亮错格。
   $effect(() => () => {
     prepToken += 1;
+    nav.setVideoPlatform(null);
   });
 
   // 先把封面塞进浏览器缓存：播放器挂载时会立刻要这张图，否则会闪一下它自带的占位插画

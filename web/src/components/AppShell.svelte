@@ -8,6 +8,7 @@
   import { installScrollProbe } from '../lib/scroll';
   import { connectEvents } from '../lib/sse';
   import { router } from '../lib/router.svelte';
+  import { nav } from '../lib/nav.svelte';
   import { ui } from '../lib/ui.svelte';
   import { privacy } from '../lib/privacy.svelte';
   import type { JobType } from '../lib/types';
@@ -69,7 +70,27 @@
     yt_meta: '补元信息',
   };
 
-  const activeHref = $derived(NAV.find((item) => item.isActive(router.path))?.href ?? '');
+  /**
+   * `/video/:id` 是跨平台复用的路由（关注流、艺人页、B 站墙、krx18 墙、媒体库点开的都是它），
+   * 光看路径前缀会一律算成「关注」。播放页会把片子自己的 platform 写进 `nav`（见
+   * lib/nav.svelte.ts），这里据此把 B 站 / krx18 的片归到各自那一格；
+   * pornhub / xhamster 那种真·关注流内容，以及平台还不知道的加载瞬间，仍旧算「关注」。
+   */
+  // YouTube 也收进来：它的片正常走 `/youtube/:videoId`（前缀就够），但**媒体库里点开已下载的
+  // YouTube 片走的是 `/video/:id`**（那 12 行是下载留下的 videos 记录），同样该高亮 YouTube。
+  const VIDEO_NAV_HREF: Record<string, string> = {
+    youtube: '/youtube',
+    bilibili: '/bilibili',
+    krx18: '/krx18',
+  };
+
+  const activeHref = $derived.by(() => {
+    if (router.path.startsWith('/video')) {
+      const href = VIDEO_NAV_HREF[nav.videoPlatform ?? ''];
+      if (href) return href;
+    }
+    return NAV.find((item) => item.isActive(router.path))?.href ?? '';
+  });
 
   // 设置不进侧边列表，单独摆在侧边栏右下角（只显示齿轮图标）；移动端底部 tab 仍保留五项
   const SIDE_NAV = NAV.filter((item) => item.icon !== 'settings');
