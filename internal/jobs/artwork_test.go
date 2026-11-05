@@ -266,3 +266,90 @@ func TestFrameAt(t *testing.T) {
 		t.Errorf("时长未知时应取 1 秒，得到 %v", got)
 	}
 }
+
+// TestWriteArtworkUsesPortraitCover 验「站方封面本身就是竖版海报时，poster 就用它」：
+// krx18 只给 353×500 的 5:7 封面，它过不了「不放大能给 400 宽」的门槛，以前会被视频帧顶掉
+// （实测 3355 的 poster.jpg 是黑屋子里两个人，跟片名毫无关系）。现在整张照搬：不裁、不放大。
+func TestWriteArtworkUsesPortraitCover(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("没有 ffmpeg，跳过")
+	}
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "movie")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	video := filepath.Join(dir, "movie.mp4")
+	// 横屏 1080p 的片子 + krx18 那种 353×500 的竖版封面
+	makeTestVideo(t, video, 1920, 1080)
+	makeTestImage(t, filepath.Join(tmp, "cover.jpg"), 353, 500)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(tmp, "cover.jpg"))
+	}))
+	defer srv.Close()
+
+	st, err := store.Open(filepath.Join(tmp, "art.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := &config.Config{DataDir: filepath.Join(tmp, "data"), PlatformProxy: map[string]string{}}
+	r := buildRunner(t, st, platform.NewRegistry(), cfg)
+	v := &model.Video{
+		Platform: "krx18", PlatformVideoID: "77806-x", Title: "T",
+		ThumbURL: srv.URL + "/cover.jpg", DurationSec: 4,
+	}
+
+	art := r.writeArtwork(context.Background(), v, video, dir, 4)
+	if len(art.warnings) > 0 {
+		t.Fatalf("不该有警告：%v", art.warnings)
+	}
+	w, h := dimsOf(t, art.poster)
+	if w != 353 || h != 500 {
+		t.Errorf("poster 应为封面的 353x500（5:7，原样不裁不放大），实为 %dx%d", w, h)
+	}
+	// 卡片小图 / 背景仍是视频帧（16:9），别一起换成竖图
+	if w, h := dimsOf(t, art.thumb); w != 1280 || h != 720 {
+		t.Errorf("thumb 应仍是 1280x720（视频帧），实为 %dx%d", w, h)
+	}
+	if w, h := dimsOf(t, art.fanart); w != 1920 || h != 1080 {
+		t.Errorf("fanart 应仍是 1920x1080（视频帧），实为 %dx%d", w, h)
+	}
+}
+
+// TestWriteArtworkPortraitCoverTooSmall：小到头像级别的「竖图」不当海报，
+// 仍旧走「够大就官方图、不够就换一帧」的老规矩。
+func TestWriteArtworkPortraitCoverTooSmall(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("没有 ffmpeg，跳过")
+	}
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "movie")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	video := filepath.Join(dir, "movie.mp4")
+	makeTestVideo(t, video, 1920, 1080)
+	makeTestImage(t, filepath.Join(tmp, "cover.jpg"), 120, 170)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(tmp, "cover.jpg"))
+	}))
+	defer srv.Close()
+
+	st, err := store.Open(filepath.Join(tmp, "art2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := &config.Config{DataDir: filepath.Join(tmp, "data"), PlatformProxy: map[string]string{}}
+	r := buildRunner(t, st, platform.NewRegistry(), cfg)
+	v := &model.Video{Platform: "krx18", PlatformVideoID: "x", Title: "T",
+		ThumbURL: srv.URL + "/cover.jpg", DurationSec: 4}
+
+	art := r.writeArtwork(context.Background(), v, video, dir, 4)
+	if w, h := dimsOf(t, art.poster); w != 720 || h != 1080 {
+		t.Errorf("封面太小应退回视频帧（720x1080 @2:3），实为 %dx%d", w, h)
+	}
+}

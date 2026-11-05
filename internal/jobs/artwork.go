@@ -186,12 +186,49 @@ func (r *Runner) writeArtwork(ctx context.Context, video *model.Video, videoPath
 
 	res.fanart = write(filepath.Join(dir, "fanart.jpg"), fanartW, fanartH, fanartW/2, "thumb", "frame", "avatar")
 	res.thumb = write(filepath.Join(dir, "thumb.jpg"), thumbW, thumbH, thumbW/2, "thumb", "frame", "avatar")
-	res.poster = write(filepath.Join(dir, "poster.jpg"), posterW, posterH, posterW*2/5, posterPref...)
+
+	// 站方封面**本身就是竖版海报**时（krx18 的 5:7），poster 整张照搬、不裁不放大。
+	// 2026-11-05 用户报「krx18 视频下载时的 poster 使用竖版封面图」：krx18 只给 353×500，
+	// 过不了 pickSource 那道「不放大能给 400 宽」的门槛，于是被随手拍的一帧顶掉——实测
+	// 3355 的 poster.jpg 是一间黑屋子里的两个人，跟片名毫无关系。这类封面是设计过的竖图
+	// （韩文片名压在画面上），按下 2:3 裁会从两侧各切掉十来个像素，所以干脆不裁。
+	posterDst := filepath.Join(dir, "poster.jpg")
+	if cov := portraitCover(sources); cov != nil {
+		if err := r.enc.FitImage(ctx, cov.path, posterDst, posterW, posterH); err != nil {
+			r.log.Warn("竖版封面出图失败，退回常规海报", "video", video.ID, "err", err)
+			res.poster = write(posterDst, posterW, posterH, posterW*2/5, posterPref...)
+		} else {
+			res.poster = posterDst
+			r.log.Debug("底图：竖版站方封面（不裁切）", "video", video.ID, "size", fmt.Sprintf("%dx%d", cov.w, cov.h))
+		}
+	} else {
+		res.poster = write(posterDst, posterW, posterH, posterW*2/5, posterPref...)
+	}
 
 	if res.poster == "" && len(res.warnings) == 0 {
 		res.warnings = append(res.warnings, "没有可用图片")
 	}
 	return res
+}
+
+// portraitCoverMinW 是「站方竖版封面可以当海报」的最小宽度。
+//
+// 353×500 是 krx18 唯一给的尺寸（实测它的图床只生成这一档，`-768x1088` / `-1024x1450`
+// 这些 WordPress 尺寸一律 404），Emby / 浏览器的海报格子 300–500px 宽，353 够用；
+// 再小就到头像级别了，那种不配当海报（会退回常规的「够大就官方图、不够就换一帧」）。
+const portraitCoverMinW = 250
+
+// portraitCover 挑出「本身就是竖版海报」的站方封面（竖图、宽 ≥ portraitCoverMinW）。
+//
+// 只认站方封面（thumb）：视频帧和艺人头像不在此列——头像不是海报，横屏片子的一帧
+// 裁成 2:3 才是对的（那正是 ResizeImage 干的事）。
+func portraitCover(sources []artSource) *artSource {
+	for i := range sources {
+		if s := &sources[i]; s.kind == "thumb" && s.h > s.w && s.w >= portraitCoverMinW {
+			return s
+		}
+	}
+	return nil
 }
 
 // biggerThumbVariants 把库里存的缩略图 URL 换成这条视频能给的更大版本，从大到小排。

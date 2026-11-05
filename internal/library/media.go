@@ -173,6 +173,29 @@ func (e *Encoder) ResizeImage(ctx context.Context, input, output string, w, h in
 	cw, ch := CoverCrop(sw, sh, w, h)
 	ow, oh := FitWithin(cw, ch, w, h)
 	filter := fmt.Sprintf("crop=%d:%d:(iw-%d)/2:(ih-%d)/2,scale=%d:%d", cw, ch, cw, ch, ow, oh)
+	return e.imageFilter(ctx, input, output, filter)
+}
+
+// FitImage 把图片等比缩到不超过 maxW×maxH（只缩不放），**不裁切、不改比例**。
+//
+// 和 ResizeImage 的分工：那个按目标比例居中裁（卡片 / 背景要固定 16:9、海报要 2:3 时用它），
+// 这个整张照搬。用武之地是**站方海报本身就是一版设计好的竖图**（krx18 的 5:7 封面，
+// 韩文片名压在画面上）——按 2:3 裁会从两侧各切掉十几个像素，可能正好切到字。
+// 实测 krx18 只给一档 353×500，所以这里也只缩不放，不硬吹成 1000×1500。
+func (e *Encoder) FitImage(ctx context.Context, input, output string, maxW, maxH int) error {
+	if maxW <= 0 || maxH <= 0 {
+		return fmt.Errorf("目标尺寸非法 %dx%d", maxW, maxH)
+	}
+	sw, sh, err := e.ImageInfo(ctx, input)
+	if err != nil || sw <= 0 || sh <= 0 {
+		return fmt.Errorf("读不出底图尺寸: %w", err)
+	}
+	ow, oh := FitWithin(sw, sh, maxW, maxH)
+	return e.imageFilter(ctx, input, output, fmt.Sprintf("scale=%d:%d", ow, oh))
+}
+
+// imageFilter 跑一遍 ffmpeg：只处理第一帧、jpg q3、最多等 60 秒。
+func (e *Encoder) imageFilter(ctx context.Context, input, output, filter string) error {
 	args := []string{
 		"-y", "-hide_banner", "-loglevel", "error", "-nostdin",
 		"-i", input,
