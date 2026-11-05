@@ -22,6 +22,13 @@
 
   let { selected = null, onSelect, onLoad }: Props = $props();
 
+  /**
+   * 要排掉的平台（对应后端 store.FeedExcludedPlatforms 那条规矩）：关注流不收它们的片子，
+   * 把它们当筛选项只会筛出空列表。这里只有 krx18 需要排——B 站 UP 主在 store 那层已经
+   * 排掉了（`p.platform <> 'bilibili'`），YouTube 频道压根不是 performers 行。
+   */
+  const FEED_EXCLUDED_PLATFORMS = ['krx18'];
+
   let items = $state<Performer[]>([]);
   let loaded = $state(false);
   let lastBump = 0;
@@ -47,7 +54,9 @@
 
   async function refresh(): Promise<void> {
     try {
-      const res = await api.subscriptions();
+      // 关注页的头像条是关注流的筛选项，而关注流不收 krx18 的片子
+      // （它们在自己的 /krx18 页面里），所以那几个 tag 不该出现在这里。
+      const res = await api.subscriptions({ excludePlatform: FEED_EXCLUDED_PLATFORMS });
       items = res.items;
       onLoad?.(items);
     } catch {

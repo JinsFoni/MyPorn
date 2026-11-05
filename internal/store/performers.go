@@ -345,12 +345,25 @@ func (s *Store) GetSubscriptionByPerformer(performerID int64) (*model.Subscripti
 //
 // B 站同样不在里面：「关注」流只管追艺人的片，「关注管理」也不该替 B 站列 UP 主
 // （那是 管理 → B 站 那一页签的事）。
-func (s *Store) ListSubscriptions() ([]*model.Performer, error) {
+//
+// excludePlatforms 是**调用方额外要排掉**的平台：关注页顶部那条艺人头像条是「筛选关注流」
+// 用的，而关注流本身不收 krx18 的片子（store.FeedExcludedPlatforms），点那几个 tag
+// 只会筛出一个空列表——所以那边传 "krx18" 进来。艺人页（/performers）不传：tag 背后
+// 就是真人女优，在那一页它们本来就是正经的「艺人」。
+func (s *Store) ListSubscriptions(excludePlatforms ...string) ([]*model.Performer, error) {
+	where := `su.deleted_at IS NULL AND p.platform <> 'bilibili'`
+	args := make([]any, 0, len(excludePlatforms))
+	if len(excludePlatforms) > 0 {
+		where += ` AND p.platform NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(excludePlatforms)), ",") + `)`
+		for _, p := range excludePlatforms {
+			args = append(args, p)
+		}
+	}
 	q := `SELECT ` + perfixedCols("p") + `, ` + subCols + `
 		FROM subscriptions su JOIN performers p ON p.id = su.performer_id
-		WHERE su.deleted_at IS NULL AND p.platform <> 'bilibili'
+		WHERE ` + where + `
 		ORDER BY COALESCE(su.last_sync_at, su.created_at) DESC`
-	rows, err := s.db.Query(q)
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

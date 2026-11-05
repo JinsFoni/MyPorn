@@ -342,6 +342,26 @@ Tailwind 4 排在 `sm`/`lg`/`xl` 之前，两条 `grid-template-columns` 打架�
 改完之后直接 0 条、页面写「还没有同步到影片」。这条同时修好了 B 站 UP 主的艺人页
 （`/performer/147` 之前也是 0 条，现在 100 条）。
 
+### 11.3.3 关注页的头像条也不显示 krx18（2026-11-05 按用户要求）
+
+11.3.2 只排掉了关注流的**影片**，头像条还在：那一条拉的是 `GET /api/subscriptions`，
+而 krx18 的 tag 就是 `performers` 的一行，于是关注页顶上并排出现「Do Hee」「Do Hee-I」
+两个 krx18 的 tag——点下去只会筛出一个空列表（关注流本来就不收 krx18 的片）。
+
+改法：`store.ListSubscriptions(excludePlatforms ...string)` 多一层可选排除，
+`GET /api/subscriptions?excludePlatform=krx18` 由关注页的头像条（`PerformerRail.svelte`）传；
+其余调用方不传，行为不变：
+
+| 入口 | 请求 | 实测（库里 5 条订阅：2 条 krx18 + 3 条 pornhub/xhamster） |
+|---|---|---|
+| 关注页头像条 | `/api/subscriptions?excludePlatform=krx18` | 3 条：Charming Milana / Hot Pearl / mysaaat |
+| 艺人页 `/performers` | `/api/subscriptions` | 5 条（含 Do Hee、Do Hee-I） |
+| 管理页 | `handleManage` 内部调用，不传 | 5 条（krx18 的同步开关仍在能点的地方） |
+
+为什么不干脆在 store 里像 B 站那样硬排除：tag 背后是真人女优，**艺人页**上它们本来就是正经的
+「艺人」（M8 §11.1 那两位同名/不同名的女优就是靠 tag 区分的）。要排的只是「拿它当关注流筛选项」
+这一个用法，所以做成调用方显式声明，而不是全局删掉。
+
 ### 11.4 不支持下载
 
 上游 `resolve-token` 回的是 m3u8 **正文**、不是地址，档位的 `url` 因此是空的

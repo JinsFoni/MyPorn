@@ -265,8 +265,14 @@ func (s *Server) handleCreateSubscription(w http.ResponseWriter, r *http.Request
 	})
 }
 
-func (s *Server) handleListSubscriptions(w http.ResponseWriter, _ *http.Request) {
-	items, err := s.st.ListSubscriptions()
+// handleListSubscriptions 是「我的订阅」列表：关注页顶部的艺人头像条（当筛选器用）
+// 和艺人页（/performers）都吃它。
+//
+// excludePlatform=krx18（逗号分隔可传多个）由关注页传进来：krx18 的 tag 在自己的
+// /krx18 页面里，而关注流本身不收 krx18 的片子，拿它们当筛选项只会筛出空列表。
+func (s *Server) handleListSubscriptions(w http.ResponseWriter, r *http.Request) {
+	exclude := splitList(r.URL.Query().Get("excludePlatform"))
+	items, err := s.st.ListSubscriptions(exclude...)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", err.Error())
 		return

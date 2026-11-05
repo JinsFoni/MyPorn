@@ -78,7 +78,7 @@ type Performer = {
 | 方法 | 路径 | 请求 | 响应 |
 |---|---|---|---|
 | POST | `/api/subscriptions` | `{"url":"<艺人主页>","backfillLimit":0}`，`backfillLimit:0` 表示全量，`N>0` 只回填最近 N 部 | `201 {"subscriptionId":n,"performer":Performer,"jobId":n}` |
-| GET | `/api/subscriptions` | — | `{"items":Performer[]}`（同 Performer 结构） |
+| GET | `/api/subscriptions` | `?excludePlatform=krx18`（可选，逗号分隔多选） | `{"items":Performer[]}`（同 Performer 结构） |
 | PATCH | `/api/subscriptions/{id}` | `{"enabled":false}` | `200 Performer` |
 | DELETE | `/api/subscriptions/{id}` | — | `204`（软删，影片保留） |
 | POST | `/api/subscriptions/{id}/sync` | `{"mode":"incremental"\|"full"}` | `202 {"jobId":n}` |
@@ -256,6 +256,12 @@ type Video = {
    **单独一列**（`performers.model_rank`，整数）而不是塞进 JSON：它是一个会随同步更新的标量；同步时 `0` 不覆盖库里的旧值。
 5. **`Performer.backfillProgress`** 为 `{donePages, totalPages}`，百分比由前端计算；`totalPages` 未知时为 0。
 6. 没有批量同步端点：多艺人同步需逐个 `POST /api/subscriptions/{id}/sync`。
+
+6.1 `GET /api/subscriptions` 默认回**全部**订阅（B 站 UP 主除外，它们走
+`/api/bilibili/channels`）。`excludePlatform` 是给「这份列表要拿来干什么」用的：
+关注页顶部的艺人头像条传 `krx18`——那条头像条是**关注流的筛选项**，而关注流不收 krx18 的片子，
+把 tag 画进去只会筛出空列表（2026-11-05 用户要求）；艺人页 `/performers` 不传，
+那里的 tag 就是「艺人」（背后是真人女优）。
 7. 没有 OpenList 连通性测试端点（设置页因此无"测试连接"按钮）。
 8. `POST /api/videos/{id}/seen`、`DELETE /api/subscriptions/{id}`、`POST /api/jobs/{id}/cancel`
    成功返回 `204` / `202`，无响应体。

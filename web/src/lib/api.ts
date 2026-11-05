@@ -254,8 +254,17 @@ export const api = {
   },
 
   // ---- 订阅 ----
-  subscriptions(): Promise<{ items: Performer[] }> {
-    return request<{ items: Performer[] }>('/api/subscriptions');
+  /**
+   * 我的订阅（详情见 GET /api/subscriptions）。
+   *
+   * `excludePlatform` 是「这一份列表拿来干什么」的一部分，不是通用筛选：
+   * 关注页顶部的头像条是**关注流的筛选项**，而关注流本来就不收 krx18 的片子
+   * （它们在自己的 /krx18 页面里），把那几个 tag 画进去只会筛出空列表——
+   * 所以关注页传 `['krx18']`；艺人页不传，那里的 tag 就是「艺人」。
+   */
+  subscriptions(params: { excludePlatform?: string[] } = {}): Promise<{ items: Performer[] }> {
+    const exclude = params.excludePlatform?.length ? params.excludePlatform.join(',') : undefined;
+    return request<{ items: Performer[] }>(`/api/subscriptions${qs({ excludePlatform: exclude })}`);
   },
   subscribe(input: { url: string; backfillLimit?: number }): Promise<SubscriptionCreated> {
     return request<SubscriptionCreated>('/api/subscriptions', {
