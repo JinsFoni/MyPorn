@@ -972,9 +972,19 @@ B 站 UP 主的艺人页（`/performer/147` 之前也是 0 条，现在 100 条�
   路由，B 站、krx18、媒体库点开的都是它，原来 `/video` 前缀一律算「关注」——放 B 站和 krx18 的片时
   高亮的是「关注」，而那两格明明各有自己的入口。现在播放页加载到详情就把 `platform` 写进
   `lib/nav.svelte.ts`（一个 rune 模块，只存事实），`AppShell` 的 `activeHref` 据此把
-  `bilibili` / `krx18` 归到各自那一格；pornhub / xhamster 那种真·关注流内容、以及平台还没回来的
-  加载瞬间，仍旧算「关注」。实测（1280×720，`aria-current="page"`）：`/video/3355`（krx18）→
+  `bilibili` / `krx18` / `youtube` 归到各自那一格；表里没有的平台（pornhub / xhamster / beeg）
+  就是关注流本身，仍旧算「关注」。实测（1280×720，`aria-current="page"`）：`/video/3355`（krx18）→
   `krx18`、`/video/60`（B 站）→ `B 站`、`/video/324`（pornhub）→ `关注`、`/` → `关注`。
+- **详情回来之前不能先亮「关注」再跳走**（同一天第二轮，用户报「点播放时先跳到关注、然后跳回
+  B 站 / krx18」）：只认详情里的 `platform` 的话，那一次请求（十几毫秒到几百毫秒）里高亮是「关注」。
+  所以 `activeHref` 在 `/video` 前缀下按三条线索依次问：① 详情给的平台（准）→ ② `?back=` 的来源
+  （`navHrefForBack`：`/krx18*` → krx18、`/bilibili*` → B 站、`/youtube*` → YouTube、`/` 或 `/?...`
+  → 关注；同步可得，卡片链接本来就带着它、**刷新时 query 也还在**）→ ③ 上一格（`lastHref`，
+  别闪）。实测（playwright-cli，页面内 rAF 采样 `aria-current` 的每一次变化）：从 `/bilibili` 点卡片
+  → 全程只记录到 `B 站 99+`；从 `/krx18` 点 → 只记录到 `krx18 5`；从 `/library` 点一条 YouTube 片
+  → `媒体库` → 54 ms 后 `YouTube 82`（一次 settle，`/library` 装的是混合平台，只能等详情）；
+  把 `/api/videos/**` 整条 abort 掉（让「平台未知」那段窗口永不结束）再点 B 站卡片，仍然全程
+  `B 站 99+`——证明这一段靠的是 `?back=`，不是等详情。
 - 播放器的「上一个 / 下一个」同样认来源，只是两条路各走各的：`/video/:id` 按 `?back=` 换成
   `/api/videos/{id}/adjacent` 的筛选条件（§7.4.2）；`/youtube/:videoId` **不看来源，只按视频所属频道**
   （`/api/yt/videos?channelId=<行 id>&limit=60`，同一份列表顺带就是页面底部那排「同频道的其它视频」）。

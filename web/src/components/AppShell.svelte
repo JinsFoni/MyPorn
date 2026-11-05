@@ -8,7 +8,7 @@
   import { installScrollProbe } from '../lib/scroll';
   import { connectEvents } from '../lib/sse';
   import { router } from '../lib/router.svelte';
-  import { nav } from '../lib/nav.svelte';
+  import { FEED_HREF, nav, navHrefForBack, navHrefForPlatform } from '../lib/nav.svelte';
   import { ui } from '../lib/ui.svelte';
   import { privacy } from '../lib/privacy.svelte';
   import type { JobType } from '../lib/types';
@@ -71,25 +71,36 @@
   };
 
   /**
+   * 高亮哪一格。
+   *
    * `/video/:id` 是跨平台复用的路由（关注流、艺人页、B 站墙、krx18 墙、媒体库点开的都是它），
-   * 光看路径前缀会一律算成「关注」。播放页会把片子自己的 platform 写进 `nav`（见
-   * lib/nav.svelte.ts），这里据此把 B 站 / krx18 的片归到各自那一格；
-   * pornhub / xhamster 那种真·关注流内容，以及平台还不知道的加载瞬间，仍旧算「关注」。
+   * 光看路径前缀会一律算成「关注」。影片详情回来之前平台还不知道，而**这段时间也不能先亮
+   * 「关注」再跳走**（2026-11-05 用户报的第二次：点播放时先跳到关注、再跳回 B 站 / krx18），
+   * 所以按三条线索依次问：详情给的 platform（准）→ `?back=` 的来源（同步，点击路径都有）
+   * → 上一格（保持不动，等详情 settle）。见 `lib/nav.svelte.ts` 顶部。
    */
-  // YouTube 也收进来：它的片正常走 `/youtube/:videoId`（前缀就够），但**媒体库里点开已下载的
-  // YouTube 片走的是 `/video/:id`**（那 12 行是下载留下的 videos 记录），同样该高亮 YouTube。
-  const VIDEO_NAV_HREF: Record<string, string> = {
-    youtube: '/youtube',
-    bilibili: '/bilibili',
-    krx18: '/krx18',
-  };
+  let lastHref = '';
 
   const activeHref = $derived.by(() => {
-    if (router.path.startsWith('/video')) {
-      const href = VIDEO_NAV_HREF[nav.videoPlatform ?? ''];
-      if (href) return href;
+    if (!router.path.startsWith('/video')) {
+      const href = NAV.find((item) => item.isActive(router.path))?.href ?? '';
+      lastHref = href;
+      return href;
     }
-    return NAV.find((item) => item.isActive(router.path))?.href ?? '';
+    // 平台已知：表里有就归到那一格，没有就是「关注」流的内容（pornhub / xhamster / beeg）。
+    if (nav.videoPlatform !== null) {
+      const href = navHrefForPlatform(nav.videoPlatform) ?? FEED_HREF;
+      lastHref = href;
+      return href;
+    }
+    // 平台还没回来：先按 `?back=` 的来源亮（刷新时 query 还在，所以这条路也管用）。
+    const fromBack = navHrefForBack(router.query.get('back'));
+    if (fromBack !== null) {
+      lastHref = fromBack;
+      return fromBack;
+    }
+    // 连来源都没有（直接贴地址进来）：保持上一格，别先闪一下「关注」。
+    return lastHref === '' ? FEED_HREF : lastHref;
   });
 
   // 设置不进侧边列表，单独摆在侧边栏右下角（只显示齿轮图标）；移动端底部 tab 仍保留五项
