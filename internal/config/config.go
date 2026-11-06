@@ -48,7 +48,7 @@ func Load(root string) (*Config, error) {
 
 	dataDir := env("DATA_DIR", "./data")
 	c := &Config{
-		Version:     "0.1.0",
+		Version:     "0.1.1",
 		Port:        env("PORT", "8080"),
 		Password:    env("APP_PASSWORD", "changeme"),
 		SecretKey:   env("APP_ENCRYPTION_KEY", ""),

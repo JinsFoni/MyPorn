@@ -201,7 +201,7 @@ type Video = {
 
 ## 8. 健康检查
 
-`GET /healthz` → `200 {"ok":true,"version":"0.1.0","uptimeSec":123}`（无需鉴权）
+`GET /healthz` → `200 {"ok":true,"version":"0.1.1","uptimeSec":123}`（无需鉴权）
 
 ## 9. 错误码表
 

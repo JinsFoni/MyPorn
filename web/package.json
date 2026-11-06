@@ -1,7 +1,7 @@
 {
   "name": "myporn-web",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "MyPorn 前端（Svelte 5 SPA，构建产物 go:embed 进 Go 单二进制）",
   "scripts": {
