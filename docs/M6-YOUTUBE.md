@@ -275,7 +275,7 @@ yt-dlp --no-playlist --newline --socket-timeout 20 --retries 3 --concurrent-frag
 | 深度回填 | `yt_sync`（`deep=true` 参数） | 1 | 添加频道时自动跑；管理页可手动重跑 |
 | 下载 | `yt_download` | 由现有下载并发控制 | §6 |
 | 单条补时间 | 不是任务：`POST /api/yt/videos/{id}/refresh` | — | 点开一条没有时间的视频时同步调一次（4 秒） |
-| 整批补元信息 | `yt_meta` | 1 | 两遍：先按频道拉 yt-dlp 的 flat 列表批量补**时长**（2026-11-04 加，见 §14.24），剩下的再走观看页（`internal/ytsub/watch.go`）补**发布时间 / 播放量**。两条抓取通道各缺一半：RSS 不给时长、yt-dlp flat 不给时间戳。墙上「补齐」按钮 = `POST /api/yt/fill-meta`；每轮 `yt_sync` 结束时缺的行 ≤ 40 条会自动排一次；补不到的记 `meta_tries`，3 次后不再算缺口 |
+| 整批补元信息 | `yt_meta` | 1 | 三遍：① 按频道拉 yt-dlp 的 flat 列表批量补**时长**（2026-11-04 加，见 §14.24）；② 用 **RSS** 批量补**发布时间**（2026-11-06 加，见 §14.25：一次请求 20KB、带绝对时间，覆盖每频道最新 15 条）；③ 前两遍都补不到的最后逐条看观看页（`internal/ytsub/watch.go`），观看页被登录墙挡住就整批换 yt-dlp 真解析（4.6 秒/条）。两条抓取通道各缺一半：RSS 不给时长、yt-dlp flat 不给时间戳。墙上「补齐」按钮 = `POST /api/yt/fill-meta`；每轮 `yt_sync` 结束时缺的行 ≤ 40 条会自动排一次；补不到的记 `meta_tries`，3 次后不再算缺口 |
 
 调度沿用现有 scheduler；`enabled=0` 跳过。SSE 新增 `yt.new`（`{channelId, title, count}`），侧边栏未看角标复用 `live`。
 
@@ -409,7 +409,7 @@ yt-dlp -J --flat-playlist --playlist-end 200 https://www.youtube.com/channel/<UC
 | 风险 | 说明 | 应对 |
 |---|---|---|
 | yt-dlp 版本 | 两周不升级就可能全线 403 | 界面显示版本 + 过期警告；`stale_parser` 文案直接指向升级 |
-| 深挖条目没日期 | flat 模式不给时间；走 yt-dlp 逐条补太慢（4.1s/条） | 走观看页批量补（1.5s/条，`yt_meta`），墙上一条提示 + 一个按钮。**注意**：匿名观看页现在只剩登录墙（§14.24），这条只能救「RSS 没给时长」的那半 |
+| 深挖条目没日期 | flat 模式不给时间；走 yt-dlp 逐条补太慢（4.1s/条） | 先走 **RSS**（1 个请求 20KB 补一整个频道最新的 15 条，2026-11-06 加），再剩下逐条看观看页；被登录墙挡住就换 yt-dlp（§14.25） |
 | 首次回填 200 条上限 | 老频道历史远多于此 | 可配；管理页提供「再拉一批」（改 `--playlist-start` 续接） |
 | AV1 只有视频轨 | 必须封装一次 | 已是既定方案；`-c copy` 不损画质，产物单 mp4 兼容 Chrome / Firefox / Safari 17+ / Emby |
 | 高分辨率体积 | 8K AV1 90 秒就有 358 MB（实测），整频道批量下载很容易把盘吃满 | 不设高度上限（用户要「最高画质」）；`CheckSpace` 兜底 + 只做手动/整频道批量，不做全自动 |
@@ -1560,3 +1560,56 @@ __Secure-1PAPISID, __Secure-1PSID, __Secure-1PSIDCC        ← 只剩 __Secure-3
   不再挂提示条催人。
 - 缺发布时间（深度回填来的老条目）：flat 没有时间戳，仍然只能靠观看页/RSS。
   观看页被登录墙挡住时，同样走「记满 3 次 → 进 `missingStuck`」这条路，不会一直挂着。
+
+### 14.25 「YouTube 页为什么显示缺少发布时间」：flat 那一遍把「缺日期」当成「已补齐」了（2026-11-06）
+
+**起因**：用户看到 `/youtube` 上有一批卡片写着「时间未知」。库里 211 条里 15 条 `published_at` 是空串，
+全部来自同一个频道 `horizon`（`ch13`，当天刚加的）。
+
+**根因（自己量出来的，不猜）**
+
+| 量法 | 结果 |
+|---|---|
+| `select ... from yt_videos where coalesce(published_at,'')=''` | 15 条，`date_source` 全空，`duration_sec` 全是有效值 |
+| 同一个频道再拉一次 flat 列表（`yt-dlp -J --flat-playlist --playlist-end 15`） | 15/15 条 `timestamp: null`，`duration` 都在 → **flat 这条通道永远不给时间戳** |
+| 同一时刻 `yt_meta` 的日志 | `补完 16 条`，第二天再点「补齐」还是「补完 N 条」→ 从没真正补过日期 |
+| `CountYtVideosMissingMeta()` | `Dates=15`，也就是说**缺口统计是对的**，是补的过程把它吃掉了 |
+
+吃掉它的是 `ytFillDurationsFromList`（第一遍）：那一遍只要 `flat` 里「有时长」就写一次
+`FillYtVideoMeta(id, nil, "", dur, views)` 并把它从 `left` 里摘掉——`left` 是交给第二遍
+（观看页）的名单。于是「时长本来就有、日期还缺」的行被判成「补齐了」，**从来没进过第二遍**，
+每轮同步都报告「没有缺元信息的视频」，卡片就永远停在「时间未知」。
+
+RSS 其实一直有这 15 条的绝对时间（`<published>` 一条不少），只是没人去拿。
+
+**改法（三遍，`internal/jobs/youtube.go`）**
+
+1. 第一遍（flat 补时长）改成：补完时长后**再看一眼这一行有没有日期**（`YtVideoLite` 现在带
+   `PublishedAt` / `DurationSec`），缺日期就继续留在 `left` 里，不算「补齐」。
+2. 新增第二遍 `ytFillDatesFromFeed`：按频道拉一次 RSS（20KB）补日期，覆盖最新 15 条。
+   刚深度回填过的频道正好是「前 15 条全缺日期」，一次请求就清掉一大半。
+3. 第三遍（观看页）补两条：① 只补到时长、没补到日期的行不再算成功（否则
+   `FillYtVideoMeta` 把 `meta_tries` 清零，这一条会每轮被反复重抓）；② 登录墙/限流挡住整批时，
+   有 yt-dlp 就**整批换过去**真解析（它走自己的客户端 + Cookie，挡不住），换不了才按老办法记满次数。
+
+**实测（改完重启 `:18081`，库里那 15 条真缺口）**
+
+| 步骤 | 结果 |
+|---|---|
+| `POST /api/yt/fill-meta` | `{"jobId":1155,"missingDates":15,"missingDurations":0,"total":15}` |
+| 任务（job 1155） | 约 5 秒：`补完 15 条` |
+| 15 条的结果 | **13 条 `date_source = rss`**（在最新 15 条之内）、**2 条 `watch`**（`eo9ZVoiQEmo` 2025-02-09、`y_CiV16qjao` 2025-02-16，比 RSS 那 15 条还老，走的观看页） |
+| `channel_id=13` 再数 | `16 行 / 0 行缺日期` |
+| `/youtube`（真浏览器，先 unregister SW + 清 caches） | 36 张卡里 `时间未知` **0 处**、日期 36 处，提示条消失 |
+
+**单测**（`internal/jobs/youtube_test.go`，RSS 与观看页都用 httptest 假装，只留 yt-dlp 一个子进程）
+
+- `TestYtMetaFillsDatesFromRSS`：两条「有时长没日期」的行 + 假 flat 列表（有时长、`timestamp: null`）
+  + 假 RSS（带 `<published>`）→ 日期补上且 `date_source = rss`。**把第 1 条改法回退，这条测试立刻红**
+  （实测：`vidFLAT00001 的发布时间没补上（RSS 里明明有）`）。
+- `TestYtMetaFallsBackToYtDlpOnLoginWall`：RSS 覆盖不到 + 观看页只有
+  `"playabilityStatus":{"status":"LOGIN_REQUIRED"}` → 换 yt-dlp 补上日期（`date_source = ytdlp`）。
+- 原 `TestYtMetaJobFillsDurationsFromFlatList`（有日期、缺时长）照旧通过：那条路一条 RSS 请求都不发。
+
+**顺带**：`internal/ytsub.BaseURL` 从 `const` 改成 `var`——注释早就写着「便于测试替换」，
+const 其实换不掉，这次三遍补元信息全靠它指到 httptest 上。

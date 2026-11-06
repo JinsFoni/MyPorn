@@ -762,6 +762,14 @@ type YtVideoLite struct {
 	ID        int64
 	VideoID   string // YouTube 的 11 位 id
 	ChannelID int64
+	// PublishedAt 是这一行**此刻**有没有发布时间（空 = 缺）。
+	//
+	// 补元信息的第一遍（yt-dlp flat 列表）只能补时长，必须靠这个字段区分
+	// 「补完时长就算补齐了」和「时长本来就有、日期还缺」——只看时长的话，
+	// 深度回填进来的那批行会被当成本行已补齐、从此没人再去补日期（2026-11-06 实测：
+	// 频道 horizon 的 15 条一直显示「时间未知」，每轮同步都说「没有缺元信息的视频」）。
+	PublishedAt string
+	DurationSec int
 }
 
 // ListYtVideosMissingMeta 列出缺元信息的视频：没有发布时间的，或者没有时长的（直播除外）。
@@ -779,7 +787,7 @@ func (s *Store) ListYtVideosMissingMeta(limit int, force bool) ([]YtVideoLite, e
 	if limit <= 0 {
 		limit = 500
 	}
-	q := `SELECT id, video_id, channel_id FROM yt_videos
+	q := `SELECT id, video_id, channel_id, COALESCE(published_at, ''), duration_sec FROM yt_videos
 		WHERE hidden = 0
 		  AND (COALESCE(published_at, '') = '' OR (duration_sec = 0 AND is_live = 0))`
 	if !force {
@@ -794,7 +802,7 @@ func (s *Store) ListYtVideosMissingMeta(limit int, force bool) ([]YtVideoLite, e
 	var out []YtVideoLite
 	for rows.Next() {
 		var v YtVideoLite
-		if err := rows.Scan(&v.ID, &v.VideoID, &v.ChannelID); err != nil {
+		if err := rows.Scan(&v.ID, &v.VideoID, &v.ChannelID, &v.PublishedAt, &v.DurationSec); err != nil {
 			return nil, err
 		}
 		out = append(out, v)

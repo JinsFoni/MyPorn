@@ -28,7 +28,10 @@ import (
 )
 
 // BaseURL 便于测试替换。
-const BaseURL = "https://www.youtube.com"
+//
+// 是 var 不是 const：yt_meta 那三遍补元信息（flat 列表 / RSS / 观看页）都要靠 httptest
+// 假站点来验，const 换不掉就只能连真站跑测试。
+var BaseURL = "https://www.youtube.com"
 
 // feedURL 按频道 id 取 RSS。
 func feedURL(channelID string) string {

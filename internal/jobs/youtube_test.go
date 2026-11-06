@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -416,5 +418,181 @@ func TestYtMetaJobFillsDurationsFromFlatList(t *testing.T) {
 	}
 	if gaps.Rows != 0 || gaps.Stuck != 0 {
 		t.Fatalf("两条都补上了，不该再有缺口: %+v", gaps)
+	}
+}
+
+// 假 RSS：两条都带绝对时间（真 feed 的 <published> 就是这个形状）。
+const fakeFeedXML = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+  <title>测试频道</title>
+  <yt:channelId>UCtest000000000000000000</yt:channelId>
+  <entry>
+    <yt:videoId>vidFLAT00001</yt:videoId>
+    <title>一</title>
+    <published>2026-11-05T11:07:11+00:00</published>
+  </entry>
+  <entry>
+    <yt:videoId>vidFLAT00002</yt:videoId>
+    <title>二</title>
+    <published>2026-10-28T15:17:37+00:00</published>
+  </entry>
+</feed>`
+
+// 假 RSS：一条都不匹配（模拟「这条比 RSS 最新 15 条还老」）。
+const fakeEmptyFeedXML = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+  <title>测试频道</title>
+  <yt:channelId>UCtest000000000000000000</yt:channelId>
+  <entry>
+    <yt:videoId>vidNOTINDB01</yt:videoId>
+    <title>别条</title>
+    <published>2026-11-01T00:00:00+00:00</published>
+  </entry>
+</feed>`
+
+// 假观看页：只有登录墙，没有 lengthSeconds / publishDate——2026-11-04 实测的真形状。
+const fakeLoginWallPage = `<html><script>var ytInitialPlayerResponse = {"playabilityStatus":{"status":"LOGIN_REQUIRED"},"videoDetails":{"videoId":"x"}};</script></html>`
+
+// newMetaTestRunner 搭一套「离线 YouTube」：RSS 与观看页都由 httptest 假装，
+// 只留 yt-dlp 一个子进程（它是最容易做成假货的那一层）。
+func newMetaTestRunner(t *testing.T, bin, feedXML, watchPage string) (*Runner, *store.Store) {
+	t.Helper()
+	tmp := t.TempDir()
+	st, err := store.Open(filepath.Join(tmp, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/feeds/") {
+			_, _ = io.WriteString(w, feedXML)
+			return
+		}
+		_, _ = io.WriteString(w, watchPage)
+	}))
+	t.Cleanup(srv.Close)
+	oldBase := ytsub.BaseURL
+	ytsub.BaseURL = srv.URL
+	t.Cleanup(func() { ytsub.BaseURL = oldBase })
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := &config.Config{DataDir: tmp}
+	r := NewRunner(cfg, st, platform.NewRegistry(), nil, nil, nil, events.NewHub(), log,
+		imgcache.New(t.TempDir(), nil, "", log))
+	dlp := ytsub.NewYtDlp(
+		func() string { return bin },
+		func() string { return "" },
+		func() string { return "" },
+		func() string { return "" },
+		log,
+	)
+	r.SetYouTube(dlp, social.NewThrottle(0))
+	return r, st
+}
+
+func runMetaJob(t *testing.T, r *Runner, st *store.Store, rctx context.Context) {
+	t.Helper()
+	if _, err := r.EnqueueYtMeta(0, false); err != nil {
+		t.Fatalf("投递失败: %v", err)
+	}
+	job, err := st.Claim(model.JobTypeYtMeta)
+	if err != nil || job == nil {
+		t.Fatalf("领取任务失败: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(rctx, 30*time.Second)
+	defer cancel()
+	ctl := &Ctl{ctx: ctx, cancel: func(error) {}, st: st, hub: events.NewHub(),
+		log: slog.New(slog.NewTextHandler(io.Discard, nil)), job: job}
+	if err := r.runYtMetaJob(ctx, job, ctl); err != nil {
+		t.Fatalf("yt_meta 失败: %v", err)
+	}
+}
+
+// TestYtMetaFillsDatesFromRSS 覆盖 2026-11-06 那个 bug：
+// 深度回填（yt-dlp flat 列表）进来的行**有时长、没有发布时间**，而 flat 列表永远不带时间戳。
+// 原来的第一遍只要「时长有值」就算这一行补齐了，于是这些行从来没进过第二遍——
+// 库里 15 条一直显示「时间未知」（频道 horizon 实测），而每轮同步都说「没有缺元信息的视频」。
+// 现在：缺日期的行继续交给 RSS（一次请求 20KB、带绝对时间），补不完的才逐条看观看页。
+func TestYtMetaFillsDatesFromRSS(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "yt-dlp")
+	if err := os.WriteFile(bin, []byte(fakeFlatYtDlp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, st := newMetaTestRunner(t, bin, fakeFeedXML, fakeLoginWallPage)
+
+	chID, _, err := st.UpsertYtChannel(&store.YtChannel{
+		ChannelID: "UCtest000000000000000000", Title: "测试频道", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 深度回填的真实形状：有时长、没有发布时间。
+	if _, err := st.UpsertYtVideos(chID, []store.YtVideoInput{
+		{VideoID: "vidFLAT00001", Title: "一", DurationSec: 301},
+		{VideoID: "vidFLAT00002", Title: "二", DurationSec: 42},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gaps, _ := st.CountYtVideosMissingMeta(); gaps.Dates != 2 {
+		t.Fatalf("前提不对：应当两条都缺日期，实际 %+v", gaps)
+	}
+
+	runMetaJob(t, r, st, context.Background())
+
+	for _, want := range []string{"vidFLAT00001", "vidFLAT00002"} {
+		row, err := st.GetYtVideoByVideoID(want)
+		if err != nil {
+			t.Fatalf("%s 读不回来: %v", want, err)
+		}
+		if row.PublishedAt == nil {
+			t.Errorf("%s 的发布时间没补上（RSS 里明明有）", want)
+			continue
+		}
+		if row.DateSource != "rss" {
+			t.Errorf("%s 的日期来源 = %q，期望 rss", want, row.DateSource)
+		}
+	}
+	gaps, err := st.CountYtVideosMissingMeta()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gaps.Rows != 0 || gaps.Stuck != 0 {
+		t.Fatalf("两条都该补齐了: %+v", gaps)
+	}
+}
+
+// TestYtMetaFallsBackToYtDlpOnLoginWall：RSS 覆盖不到（比最新 15 条还老）而观看页被登录墙
+// 挡住时，不该整批放弃——改成让 yt-dlp 逐条真解析（它走自己的客户端 + Cookie）。
+func TestYtMetaFallsBackToYtDlpOnLoginWall(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "yt-dlp")
+	if err := os.WriteFile(bin, []byte(fakeYtDlp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, st := newMetaTestRunner(t, bin, fakeEmptyFeedXML, fakeLoginWallPage)
+
+	chID, _, err := st.UpsertYtChannel(&store.YtChannel{
+		ChannelID: "UCtest000000000000000000", Title: "测试频道", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertYtVideos(chID, []store.YtVideoInput{
+		{VideoID: "vidOLD000001", Title: "老条目", DurationSec: 99},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runMetaJob(t, r, st, context.Background())
+
+	row, err := st.GetYtVideoByVideoID("vidOLD000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.PublishedAt == nil {
+		t.Fatal("观看页被登录墙挡住后没有换 yt-dlp，这条的发布时间还是空的")
+	}
+	if row.DateSource != "ytdlp" {
+		t.Errorf("日期来源 = %q，期望 ytdlp", row.DateSource)
 	}
 }

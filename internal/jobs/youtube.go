@@ -549,9 +549,9 @@ func (r *Runner) EnqueueYtMeta(limit int, force bool) (int64, error) {
 	return r.st.Enqueue(model.JobTypeYtMeta, ytMetaPayload{Limit: limit, Force: force}, 9)
 }
 
-// runYtMetaJob 补元信息：**先按频道批量补时长，再逐条看观看页**。
+// runYtMetaJob 补元信息：**先按频道批量补时长 → 再用 RSS 批量补日期 → 剩下的逐条看观看页**。
 //
-// 两遍的原因（2026-11-04 实测，见 M6 §14.24）：
+// 三遍的原因（第一遍 + 第三遍见 M6 §14.24，第二遍 2026-11-06 加）：
 //   - 观看页那条路（一次 GET、1.29MB、1.5 秒）只在这台机器「匿名也能拿到播放器数据」时好用。
 //     现在从出口 13.158.71.17 匿名抓 `/watch?v=` 只剩登录墙：1.25~1.34MB 的页面里
 //     **零个 lengthSeconds、零个 publishDate**，`playabilityStatus` 是 `LOGIN_REQUIRED`。
@@ -559,9 +559,10 @@ func (r *Runner) EnqueueYtMeta(limit int, force bool) (int64, error) {
 //   - 同一时刻频道页的 yt-dlp flat 列表照样带时长：7 个频道各拉 60 条，
 //     1.0~2.4 秒一次、60/60 条都有 `duration`。一次请求补一个频道里所有缺时长的行。
 //
-// 所以：flat 能补的（绝大多数新视频）先一次性补掉；剩下的（短视频不在 `/videos` 列表里、
-// 超过列表深度的老条目、缺发布时间的行）才逐条看观看页。补不到的记账，到
-// store.YtMetaMaxTries 次就不再算「缺」，提示条也就不会再永远挂着。
+// 所以：flat 能补的时长先一次性补掉；日期走 RSS（一次请求 20KB、带绝对时间，覆盖最新 15 条）；
+// 剩下的（短视频不在 `/videos` 列表里、超过列表深度的老条目、RSS 那 15 条之外的）才逐条看
+// 观看页，观看页被登录墙挡住就整批换 yt-dlp 真解析（实测 4.6 秒/条）。
+// 补不到的记账，到 store.YtMetaMaxTries 次就不再算「缺」，提示条也就不会再永远挂着。
 func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 	var p ytMetaPayload
 	if j.Payload != "" {
@@ -592,7 +593,14 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 		filled += n
 	}
 
-	// 第二遍：flat 里没有的那些，逐条看观看页。
+	// 第二遍：RSS 批量补日期（一次请求覆盖一个频道最新 15 条）。
+	var dated int
+	if len(left) > 0 {
+		dated, left = r.ytFillDatesFromFeed(ctx, c, left)
+		filled += dated
+	}
+
+	// 第三遍：前两遍都补不到的那些，逐条看观看页。
 	client := r.httpClient("youtube")
 	failed, pruned, blocked := 0, 0, ""
 	for i, row := range left {
@@ -607,6 +615,19 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 			// 限流 / 登录墙：后面的必然也失败，收工。这些行（含这一条）一次记满次数——
 			// 挡住的不是这一条，而是这条路；换一份 Cookie 或用户点补齐都会清零重来。
 			if k := social.KindOf(err); k == social.KindRateLimited || k == social.KindBlocked {
+				// 这条路被挡住了（登录墙 / 限流）。有 yt-dlp 就整批换过去：它走自己的客户端
+				// 和 Cookie，观看页的登录墙挡不住它（实测 2026-11-06 一次性解析 4.6 秒/条）。
+				// 换不了才按老办法把剩下的都记满次数收工。
+				if r.ytDlp != nil && r.ytDlp.Available() {
+					rest := left[i:]
+					n, p2, f2 := r.ytMetaViaYtDlp(ctx, c, rest)
+					filled += n
+					pruned += p2
+					failed += f2
+					r.log.Info("观看页被挡，剩余改走 yt-dlp 补齐",
+						"rows", len(rest), "filled", n, "failed", f2, "reason", err.Error())
+					break
+				}
 				rest := make([]int64, 0, len(left)-i)
 				for _, r2 := range left[i:] {
 					rest = append(rest, r2.ID)
@@ -645,6 +666,15 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 			}
 			continue
 		}
+		if published == nil && strings.TrimSpace(row.PublishedAt) == "" {
+			// 只补到时长、没补到日期（观看页偶尔只剩播放器数据）：FillYtVideoMeta 会把
+			// meta_tries 清零，所以这里自己记一次账，否则这一条会在每轮同步里被反复重抓。
+			failed++
+			if berr := r.st.BumpYtMetaTries([]int64{row.ID}, 1); berr != nil {
+				r.log.Warn("记补元信息次数失败", "ytVideo", row.ID, "err", berr)
+			}
+			continue
+		}
 		filled++
 	}
 	msg := fmt.Sprintf("补完 %d 条", filled)
@@ -663,6 +693,110 @@ func (r *Runner) runYtMetaJob(ctx context.Context, j *model.Job, c *Ctl) error {
 	r.log.Info("补元信息完成", "filled", filled, "failed", failed, "membersOnly", pruned,
 		"leftOver", len(rows)-filled-pruned, "blocked", blocked)
 	return nil
+}
+
+// ytFillDatesFromFeed 用 RSS 批量补发布时间，返回还没补上的行。
+//
+// RSS 一次请求约 20KB、带**绝对时间**（`<published>`）；观看页那条路每条 1.3MB，还可能撞
+// 登录墙。刚深度回填过的频道正好是「前 15 条全缺日期」（2026-11-06 实测：频道 horizon 的
+// 15 条就是这样，RSS 那 15 条恰好一条不少地带着日期），一次请求就能清掉一大半。
+// RSS 只覆盖最新 15 条，更老的（列表深度之外的老条目）仍旧交给观看页那一遍。
+func (r *Runner) ytFillDatesFromFeed(ctx context.Context, c *Ctl, rows []store.YtVideoLite) (filled int, left []store.YtVideoLite) {
+	byChannel := map[int64][]store.YtVideoLite{}
+	order := make([]int64, 0, 4)
+	for _, row := range rows {
+		if _, ok := byChannel[row.ChannelID]; !ok {
+			order = append(order, row.ChannelID)
+		}
+		byChannel[row.ChannelID] = append(byChannel[row.ChannelID], row)
+	}
+	client := r.httpClient("youtube")
+	for i, chID := range order {
+		if err := c.Check(); err != nil {
+			for _, rest := range order[i:] {
+				left = append(left, byChannel[rest]...)
+			}
+			return filled, left
+		}
+		ch, err := r.st.GetYtChannel(chID)
+		if err != nil {
+			left = append(left, byChannel[chID]...)
+			continue
+		}
+		c.Progress(c.percent(), fmt.Sprintf("用 RSS 补 %s 的发布时间", ch.Title), 0, 0, 0)
+		_, videos, err := ytsub.FetchFeed(ctx, client, r.ytThrottle, ch.ChannelID)
+		if err != nil {
+			r.log.Warn("拉 RSS 补日期失败，这些行改走观看页",
+				"channel", ch.Title, "rows", len(byChannel[chID]), "err", err)
+			left = append(left, byChannel[chID]...)
+			continue
+		}
+		byID := make(map[string]ytsub.Video, len(videos))
+		for _, v := range videos {
+			byID[v.VideoID] = v
+		}
+		for _, row := range byChannel[chID] {
+			v, ok := byID[row.VideoID]
+			if !ok || v.PublishedAt.IsZero() {
+				// 不在最新 15 条里（比 RSS 还老），交给观看页
+				left = append(left, row)
+				continue
+			}
+			pub := v.PublishedAt
+			if err := r.st.FillYtVideoMeta(row.ID, &pub, v.DateSource, 0, v.Views); err != nil {
+				r.log.Warn("写回发布时间失败", "ytVideo", row.ID, "err", err)
+				left = append(left, row)
+				continue
+			}
+			filled++
+		}
+	}
+	return filled, left
+}
+
+// ytMetaViaYtDlp 是观看页被登录墙挡住时的换路：逐条让 yt-dlp 真解析一次。
+//
+// 比观看页贵（实测 4.6 秒/条 vs 一个 GET），但它是自己那套客户端 + Cookie，
+// YouTube 让匿名观看页返回 LOGIN_REQUIRED 的时候它照样能拿到 upload_date。
+func (r *Runner) ytMetaViaYtDlp(ctx context.Context, c *Ctl, rows []store.YtVideoLite) (filled, pruned, failed int) {
+	for i, row := range rows {
+		if err := c.Check(); err != nil {
+			return filled, pruned, failed
+		}
+		c.Progress(c.percent(), fmt.Sprintf("换 yt-dlp 补齐 %d/%d", i+1, len(rows)), 0, 0, 0)
+		vi, err := r.ytDlp.VideoInfo(ctx, row.VideoID)
+		if err != nil {
+			r.log.Warn("yt-dlp 补元信息失败", "ytVideo", row.VideoID, "err", err)
+			failed++
+			if berr := r.st.BumpYtMetaTries([]int64{row.ID}, 1); berr != nil {
+				r.log.Warn("记补元信息次数失败", "ytVideo", row.ID, "err", berr)
+			}
+			continue
+		}
+		if vi.MembersOnly {
+			if _, derr := r.st.DeleteYtVideosByVideoIDs([]string{row.VideoID}); derr != nil {
+				r.log.Warn("删掉会员抢先看的视频失败", "ytVideo", row.VideoID, "err", derr)
+				failed++
+			} else {
+				pruned++
+			}
+			continue
+		}
+		var published *time.Time
+		if !vi.PublishedAt.IsZero() {
+			published = &vi.PublishedAt
+		}
+		if err := r.st.FillYtVideoMeta(row.ID, published, vi.DateSource, vi.DurationSec, vi.Views); err != nil {
+			r.log.Warn("写回元信息失败", "ytVideo", row.ID, "err", err)
+			failed++
+			if berr := r.st.BumpYtMetaTries([]int64{row.ID}, 1); berr != nil {
+				r.log.Warn("记补元信息次数失败", "ytVideo", row.ID, "err", berr)
+			}
+			continue
+		}
+		filled++
+	}
+	return filled, pruned, failed
 }
 
 // ytFillDurationsFromList 用 yt-dlp 的 flat 列表批量补时长，返回没补上的行。
@@ -716,6 +850,14 @@ func (r *Runner) ytFillDurationsFromList(ctx context.Context, c *Ctl, rows []sto
 			}
 			if err := r.st.FillYtVideoMeta(row.ID, nil, "", v.DurationSec, v.Views); err != nil {
 				r.log.Warn("写回时长失败", "ytVideo", row.ID, "err", err)
+				left = append(left, row)
+				continue
+			}
+			// flat 列表**永远不带发布时间**（2026-11-06 实测：频道 horizon 的 15 条
+			// 全是 `timestamp: null`，同日再拉一次也是 15/15 为 null）。所以补完时长不等于
+			// 补齐了——缺日期的行必须继续交给 RSS / 观看页那两遍。原来这里直接算「补齐」，
+			// 于是深度回填进来的那批行永远停在「时间未知」，而且每轮同步都说「没有缺元信息」。
+			if strings.TrimSpace(row.PublishedAt) == "" {
 				left = append(left, row)
 				continue
 			}
