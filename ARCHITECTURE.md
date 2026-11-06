@@ -1103,6 +1103,19 @@ B 站 UP 主的艺人页（`/performer/147` 之前也是 0 条，现在 100 条�
 - 拉下来按 README 那三步（`.env` + `chown 1000` + `docker compose up -d`）在干净副本里跑通：
   容器 12 s 后 healthy，`/healthz` 答 `version=v0.1.0`（说明 `-X main.buildVersion` 这条链是通的）。
 
+第二次发版（2026-11-06 的 v0.1.1，动作是「`git push` main → 打 tag → `gh release create`」）：
+
+- 从 release 建立到两个架构都推完：**4 分 35 秒**（checks 两个 job 各 1 分 8 秒 / 25 秒，镜像 job 3 分 21 秒）；
+- 六个 tag 逐个 `docker manifest inspect` 都在：`v0.1.1` / `0.1.1` / `0.1` / `0` / `latest` / `sha-ae7e042`；
+  manifest index 里 amd64 与 arm64 各一条（arm64 是本机架构，用 config blob 的 `architecture` 核的）；
+- 镜像里到底报哪个版本，从 config blob 看不出来（build stage 的 layer 不进最终镜像，`history` 只剩
+  `COPY /out/myporn`），所以改从 Actions 日志看构建命令本身：
+  `[linux/amd64 build 7/7]` 与 `[linux/amd64->arm64 build 7/7]` 两行都是
+  `-ldflags "-s -w -X main.buildVersion=v0.1.1"`，`org.opencontainers.image.revision` 也等于 tag 指向的提交；
+- 顺带撞上一次「本机 docker daemon 没开」（OrbStack 停着）：`docker manifest inspect` 仍然能用
+  （它直连 registry，不经过 daemon），但 `docker run` 不行——所以「拉下来跑一遍 `/healthz`」这一步
+  在这一版没做，靠日志兜的底。
+
 ### 14.5 国内构建的换源口
 
 `Dockerfile` 留了 `GOPROXY` / `APK_MIRROR` / `PIP_INDEX` 三个 build-arg（不填就是官方源）。
