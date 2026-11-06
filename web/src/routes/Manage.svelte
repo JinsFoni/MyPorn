@@ -26,6 +26,8 @@
     YtChannel,
     YtHealth,
     YtManageResponse,
+    KrxChannel,
+    KrxChannelsResponse,
   } from '../lib/types';
 
   /**
@@ -36,7 +38,7 @@
    * 页签不走地址栏：两个页签看的是同一份数据，只是展开方式不同，刷新回到「统计」即可。
    */
 
-  type Tab = 'stats' | 'subs' | 'moments' | 'youtube' | 'bilibili';
+  type Tab = 'stats' | 'subs' | 'moments' | 'youtube' | 'bilibili' | 'krx18';
 
   let tab = $state<Tab>('stats');
   let data = $state<ManageResponse | null>(null);
@@ -67,6 +69,15 @@
   let biliBusyId = $state<number | null>(null);
   let biliAddUrl = $state('');
   let biliAddBusy = $state(false);
+
+  // ---- krx18 管理（M8）：订阅源是 tag 归档页，数据就是 /api/krx18/channels
+  // 那一份（`/krx18` 页面顶部的胶囊也用它），切到页签才拉，不额外造一个 manage 接口。----
+  let krx = $state<KrxChannelsResponse | null>(null);
+  let krxLoading = $state(false);
+  let krxError = $state('');
+  let krxBusyId = $state<number | null>(null);
+  let krxAddUrl = $state('');
+  let krxAddBusy = $state(false);
 
   // ---- 动态管理（M5）：单独一个接口，切到这个页签才去拉 ----
   let moments = $state<MomentsManageResponse | null>(null);
@@ -187,6 +198,100 @@
       live.toast(messageFor(err), 'error');
     } finally {
       ytAddBusy = false;
+    }
+  }
+
+  async function loadKrx(): Promise<void> {
+    krxLoading = krx === null;
+    krxError = '';
+    try {
+      krx = await api.krxChannels();
+    } catch (err) {
+      krxError = messageFor(err);
+    } finally {
+      krxLoading = false;
+    }
+  }
+
+  /**
+   * 同步一个 tag。deep=false 走增量（只拉归档第 1 页）；
+   * deep=true 从断点继续往回翻历史（每页 39 部）。
+   *
+   * 和 B 站的区别：krx18 的归档页是**静态页**，没有限流那套，所以「回填续翻」比 B 站轻松，
+   * 慢的是它的图床（每部片子的封面都要过一遍代理）。
+   */
+  async function syncKrx(channel: KrxChannel, deep: boolean): Promise<void> {
+    krxBusyId = channel.id;
+    try {
+      const res = await api.syncSubscription(channel.subscriptionId, deep ? 'full' : 'incremental');
+      live.toast(
+        res.jobId > 0
+          ? `已投递「${channel.name}」${deep ? '回填续翻' : '增量同步'}`
+          : `「${channel.name}」已经在队列里了`,
+        'info',
+      );
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      krxBusyId = null;
+    }
+  }
+
+  async function toggleKrx(channel: KrxChannel): Promise<void> {
+    krxBusyId = channel.id;
+    try {
+      await api.updateSubscription(channel.subscriptionId, { enabled: !channel.enabled });
+      await loadKrx();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      krxBusyId = null;
+    }
+  }
+
+  async function removeKrx(channel: KrxChannel): Promise<void> {
+    const ok = await confirmDialog.ask({
+      title: `取消订阅「${channel.name}」？`,
+      body: '这个 tag 下的影片会一起从 krx18 墙上撤下（重新订阅就能恢复），已下载到本地库的文件不会动。',
+      confirmText: '取消订阅',
+    });
+    if (!ok) return;
+    krxBusyId = channel.id;
+    try {
+      await api.unsubscribe(channel.subscriptionId);
+      live.toast('已取消订阅', 'success');
+      await loadKrx();
+      // 侧边栏角标 = 还在订阅里的 tag 的未看片数，删一个就得跟着降
+      void live.refreshKrxUnseen();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      krxBusyId = null;
+    }
+  }
+
+  /**
+   * 加一个 tag。krx18 上没有艺人主页，能订阅的就是 tag 归档页（/tag/<女优名>/），
+   * 所以这里贴的是那个地址——和 /krx18 页面右下角那个「添加订阅」是同一件事。
+   */
+  async function addKrxChannel(): Promise<void> {
+    const raw = krxAddUrl.trim();
+    if (raw === '' || krxAddBusy) return;
+    krxAddBusy = true;
+    try {
+      const res = await api.subscribe({ url: raw });
+      const already = (krx?.items ?? []).some((c) => c.id === res.performer.id);
+      live.toast(
+        already ? `${res.performer.name} 已经订阅过了` : `已订阅 ${res.performer.name}，正在回填这个 tag 的影片`,
+        'success',
+      );
+      krxAddUrl = '';
+      await loadKrx();
+      void live.refreshKrxUnseen();
+    } catch (err) {
+      live.toast(messageFor(err), 'error');
+    } finally {
+      krxAddBusy = false;
     }
   }
 
@@ -382,10 +487,11 @@
     void load();
     // /manage?tab=bilibili 这样的深链接（B 站墙上的「去管理」按钮就发这个地址）。
     const want = router.query.get('tab');
-    if (want === 'youtube' || want === 'bilibili' || want === 'moments' || want === 'subs') {
+    if (want === 'youtube' || want === 'bilibili' || want === 'krx18' || want === 'moments' || want === 'subs') {
       tab = want;
       if (want === 'youtube') void loadYt();
       else if (want === 'bilibili') void loadBili();
+      else if (want === 'krx18') void loadKrx();
       else if (want === 'moments') void loadMoments();
     }
   });
@@ -596,7 +702,7 @@
   }
 
   const tabClass = (active: boolean): string =>
-    `h-8 rounded-full px-3.5 text-ui transition-colors ${
+    `h-8 shrink-0 whitespace-nowrap rounded-full px-3.5 text-ui transition-colors ${
       active ? 'bg-hi font-medium text-ink' : 'text-muted hover:bg-panel hover:text-fg'
     }`;
 </script>
@@ -637,7 +743,12 @@
 
     <!-- 页签 + 刷新 -->
     <div class="mt-5 flex flex-wrap items-center justify-between gap-2">
-      <div class="flex items-center gap-1" role="tablist" aria-label="管理视图">
+      <!-- 窄屏横向滚动：6 个页签在 390px 上排不下，交给横向滚动而不是让「统计」竖成两行 -->
+      <div
+        class="flex min-w-0 items-center gap-1 overflow-x-auto whitespace-nowrap [scrollbar-width:none]"
+        role="tablist"
+        aria-label="管理视图"
+      >
         <button
           type="button"
           role="tab"
@@ -697,6 +808,21 @@
           B 站
           {#if bili}
             <span class="ml-1 tabular-nums text-dim">{formatCount(bili.stats.channels)}</span>
+          {/if}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'krx18'}
+          class={tabClass(tab === 'krx18')}
+          onclick={() => {
+            tab = 'krx18';
+            if (krx === null && !krxLoading) void loadKrx();
+          }}
+        >
+          krx18
+          {#if krx}
+            <span class="ml-1 tabular-nums text-dim">{formatCount(krx.stats.channels)}</span>
           {/if}
         </button>
       </div>
@@ -1271,7 +1397,7 @@
           </p>
         {/if}
       </div>
-    {:else}
+    {:else if tab === 'bilibili'}
       <!-- B 站管理（M7）：UP 主列表 + Cookie / ffmpeg 状态。
            和 YouTube 那一栏同构，区别是「健康度」换成了 B 站自己的两件事：
            有没有 SESSDATA（决定能不能超过 720P）、有没有 ffmpeg（分轨档位靠它合流）。 -->
@@ -1491,6 +1617,183 @@
           <p class="text-meta text-dim">
             B 站的空间投稿接口是全站风控最严的那个：翻页途中被限流会自动停下，断点保留，3 小时后自动接着翻。
             被限流时「同步」也会报同样的错，属于正常现象。
+          </p>
+        {/if}
+      </div>
+    {:else}
+      <!-- krx18 管理（M8）：订阅源列表 = tag 归档页。
+           和 B 站同构（一行一个 tag、开关 / 同步 / 回填续翻 / 取消订阅都一样），
+           区别在于 krx18 没有「艺人主页」也没有 Cookie：能订阅的就是
+           `https://krx18.com/tag/<女优名>/` 那个归档页，所以这里的添加框贴的是 tag 地址。 -->
+      <div class="mt-3 flex flex-col gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-meta text-dim">
+            {#if krx}
+              共 {formatCount(krx.stats.channels)} 个 tag · {formatCount(krx.stats.videos)} 部影片 ·
+              {formatCount(krx.stats.unseen)} 部未看 · {formatCount(krx.stats.downloaded)} 部已落盘
+              {#if krx.stats.errors > 0}
+                · <span class="text-brick">异常 {formatCount(krx.stats.errors)} 个</span>
+              {/if}
+            {:else}
+              正在载入…
+            {/if}
+          </span>
+          <div class="ml-auto flex items-center gap-2">
+            <button type="button" class="btn btn-ghost h-8" onclick={() => void loadKrx()}>刷新</button>
+            <button type="button" class="btn h-8" onclick={() => navigate('/krx18')}>打开 krx18 墙</button>
+          </div>
+        </div>
+
+        <div class="panel px-4 py-3 text-meta text-dim">
+          krx18 上没有艺人主页，能订阅的是 <span class="text-fg">tag 归档页</span>：站上随便点开一部片子，
+          正文下面那排女优 tag 点进去，把那个地址（形如
+          <span class="font-mono text-[0.6875rem] text-fg">https://krx18.com/tag/&lt;女优名&gt;/</span>）贴进来就行。
+          订阅后会立刻回填这个 tag 下的全部影片（归档页每页 39 部，站方自己报的片数是右边那个「/N 部」）。
+        </div>
+
+        <!-- 管理页是「一次性配好」的地方，加 tag 不必跳回视频墙 -->
+        <form
+          class="flex flex-wrap items-center gap-2"
+          onsubmit={(event) => {
+            event.preventDefault();
+            void addKrxChannel();
+          }}
+        >
+          <input
+            bind:value={krxAddUrl}
+            class="field h-9 min-w-0 max-w-md flex-1"
+            type="text"
+            placeholder="tag 归档页地址（https://krx18.com/tag/<女优名>/）"
+            spellcheck="false"
+            autocomplete="off"
+            disabled={krxAddBusy}
+          />
+          <button type="submit" class="btn h-9" disabled={krxAddBusy || krxAddUrl.trim() === ''}>
+            {krxAddBusy ? '添加中…' : '添加 tag'}
+          </button>
+        </form>
+
+        {#if krxError}
+          <p class="panel px-4 py-3 text-ui text-brick" role="alert">{krxError}</p>
+        {:else if krxLoading || krx === null}
+          <div class="panel px-4 py-10 text-center text-ui text-dim">正在载入…</div>
+        {:else if krx.items.length === 0}
+          <EmptyState
+            title="还没有订阅任何 tag"
+            hint="在上面贴一条 tag 归档页地址就能订阅；第一次会回填这个 tag 下的全部影片。"
+            icon="film"
+          >
+            {#snippet actions()}
+              <button type="button" class="btn btn-primary" onclick={() => navigate('/krx18')}>去 krx18 墙添加</button>
+            {/snippet}
+          </EmptyState>
+        {:else}
+          <ul class="panel divide-y divide-line">
+            {#each krx.items as channel (channel.id)}
+              <li class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5">
+                <!-- 窄屏：文字块占满一行、按钮落到下一行右对齐；sm 以上回到一行。
+                     之前三者挤在 390px 里，名字只剩「Seung Ha…」、统计竖着排成一列。 -->
+                {#if channel.avatarUrl}
+                  <img
+                    src={imageUrl(channel.avatarUrl, 80) ?? ''}
+                    alt=""
+                    class="h-9 w-9 shrink-0 rounded-full object-cover"
+                    loading="lazy"
+                    decoding="async"
+                  />
+                {:else}
+                  <span class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-raise text-meta text-dim">
+                    {channel.name.slice(0, 1).toUpperCase()}
+                  </span>
+                {/if}
+
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="truncate text-ui text-fg">{channel.name}</span>
+                    {#if !channel.enabled}
+                      <span class="shrink-0 rounded-full bg-raise px-1.5 text-meta text-dim">已停用</span>
+                    {/if}
+                  </div>
+                  <div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-meta text-dim">
+                    <a
+                      class="truncate font-mono text-[0.6875rem] hover:text-fg"
+                      href={channel.url}
+                      target="_blank"
+                      rel="noreferrer">/tag/{channel.platformId}/</a
+                    >
+                    <span class="hidden sm:inline" aria-hidden="true">·</span>
+                    <span class="tabular-nums">
+                      {formatCount(channel.videoCount)}
+                      {#if channel.siteCount > 0}/ {formatCount(channel.siteCount)}{/if} 部
+                      {#if channel.unseenCount > 0}
+                        · <span class="text-fg">{formatCount(channel.unseenCount)} 未看</span>
+                      {/if}
+                      {#if channel.downloaded > 0}
+                        · {formatCount(channel.downloaded)} 已落盘
+                      {/if}
+                    </span>
+                    {#if channel.lastSyncAt}
+                      <span class="hidden sm:inline" aria-hidden="true">·</span>
+                      <span>{relativeTime(channel.lastSyncAt)}同步</span>
+                    {/if}
+                    <span class="hidden sm:inline" aria-hidden="true">·</span>
+                    <span class="tabular-nums">
+                      回填 {channel.backfillPage}{#if channel.totalPages}/{channel.totalPages}{/if} 页
+                      {#if channel.backfillDone}（已完）{/if}
+                    </span>
+                  </div>
+                  {#if channel.lastError}
+                    <p class="mt-1 line-clamp-2 text-meta text-brick">
+                      {channel.lastError}
+                      {#if channel.nextSyncAt}
+                        <span class="text-dim">（{relativeFuture(channel.nextSyncAt)}再试）</span>
+                      {/if}
+                    </p>
+                  {/if}
+                </div>
+
+                <div class="flex w-full shrink-0 items-center justify-end gap-1 sm:w-auto">
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={krxBusyId === channel.id}
+                    title="拉一遍 tag 归档第 1 页（新片）"
+                    onclick={() => void syncKrx(channel, false)}
+                  >
+                    同步
+                  </button>
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={krxBusyId === channel.id}
+                    title="从断点继续往前翻归档页（每页 39 部）"
+                    onclick={() => void syncKrx(channel, true)}
+                  >
+                    回填续翻
+                  </button>
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-dim transition-colors hover:bg-raise hover:text-fg"
+                    disabled={krxBusyId === channel.id}
+                    onclick={() => void toggleKrx(channel)}
+                  >
+                    {channel.enabled ? '停用' : '启用'}
+                  </button>
+                  <button
+                    type="button"
+                    class="h-8 rounded-full px-2.5 text-meta text-brick/80 transition-colors hover:bg-raise hover:text-brick"
+                    disabled={krxBusyId === channel.id}
+                    onclick={() => void removeKrx(channel)}
+                  >
+                    删除
+                  </button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+          <p class="text-meta text-dim">
+            krx18 的归档页是静态页、没有限流，所以「回填续翻」比 B 站轻松。下载是手动的：到 krx18 墙上点卡片右上角那颗下载。
+            站方两条通道里只有 Server 2（Abyss）能整片下，另一条 loadvid 只给清单正文、没有地址，那种片子卡片上就不会出现下载键。
           </p>
         {/if}
       </div>

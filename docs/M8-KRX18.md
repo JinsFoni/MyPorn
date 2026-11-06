@@ -589,3 +589,61 @@ curl -s -b .tmp/cookie.txt -o /dev/null -w '%{http_code} %{size_download}\n' \
 - `.fd`（`fristDatas`）分片没做：`/sora/` 已经够用，做了只是少几次请求。
 - 下载仍然不支持（入口处就拦下）：Abyss 这条路的字节其实能直接落盘，但下载链路要接
   `FileStreamProvider` 到 ffmpeg/分片写盘那一套，本次没做。
+
+## 13. 管理页的「krx18」页签（2026-11-06 按用户要求加）
+
+用户的原话是「管理页添加krx18」：管理页那一排页签原来只有 统计 / 关注管理 / 动态管理 /
+YouTube / B 站，krx18 的订阅源只能去 `/krx18` 页面上那颗「添加订阅」里管——
+想停用一个 tag、或者看它回填到第几页，得先想起它在哪个页面。
+
+### 13.1 做了什么
+
+和 B 站那一栏同构（`web/src/routes/Manage.svelte`），但**没有新增后端接口**：
+
+| 界面上的东西 | 打的是哪个接口 |
+|---|---|
+| 顶上读数（共 N 个 tag · N 部影片 · N 部未看 · N 部已落盘 · 异常 N 个） | `GET /api/krx18/channels` 的 `stats` |
+| 列表每一行（名字 / `/tag/<slug>/` 链接 / 本地÷站方片数 / 未看 / 已落盘 / 上次同步 / 回填页数 / 上次错误） | 同一个接口的 `items` |
+| 添加 tag（贴 `https://krx18.com/tag/<女优名>/`） | `POST /api/subscriptions` |
+| 同步 / 回填续翻 | `POST /api/subscriptions/{id}/sync`（`incremental` / `full`） |
+| 停用 / 启用 | `PATCH /api/subscriptions/{id}` |
+| 删除 | `DELETE /api/subscriptions/{id}`（软删，重新订阅能恢复） |
+| 「打开 krx18 墙」 | 前端 `navigate('/krx18')` |
+
+为什么不另开一个 `/api/manage/krx18`：`/api/krx18/channels` 回的 `{items, stats}` 跟
+`/api/manage/bilibili` 的 `{stats, channels}` 是同一份东西（B 站那边多一个 health 面板，
+krx18 没有 Cookie 也就没有 health），再包一层只是把同一个 DTO 抄一遍。
+增删改本来就有通用的订阅接口，B 站那两个 `biliAdd` / `biliPatch` 是历史包袱，不必照抄。
+
+### 13.2 顺带改的两处（同一屏就会撞上）
+
+1. **页签在窄屏排不下**：390px 上原来 5 个页签就已经把「统计」挤成竖排的「统/计」，
+   加第 6 个必然更糟。页签容器改成 `overflow-x-auto` + 每个按钮 `shrink-0 whitespace-nowrap`，
+   窄屏横向滚动、宽屏照旧（实测 1280px `scrollWidth == clientWidth`，390px 才出滚动条）。
+2. **行在窄屏塌成一列**：`<li>` 里原来是「头像 + 文字 + 4 个按钮」挤在一行，390px 上名字只剩
+   「Seung Ha…」、统计竖着排。改成窄屏按钮整行落到下一排右对齐（`w-full sm:w-auto`），
+   行高从 **187px → 115px**；宽屏不变（1280px 三行都是 58~59px）。
+
+### 13.3 入口
+
+- `/krx18` 页头多一颗「管理」（在「添加订阅」左边）→ `/manage?tab=krx18`。
+- `/krx18` 顶上那条「N 个订阅上次同步失败：…」后面多了「去管理」，和 B 站墙那条一模一样。
+
+### 13.4 实测（2026-11-06，`:18081`，真浏览器先 unregister SW + 清 caches）
+
+| 量法 | 结果 |
+|---|---|
+| 页签 | `统计 / 关注管理 6 / 动态管理 / YouTube / B 站 / krx18 3`，点进去 `aria-selected` 落在 krx18 |
+| 顶部读数 | `共 3 个 tag · 224 部影片 · 127 部未看 · 1 部已落盘` |
+| 三行 | `Seung Ha (승하)` 122/122 部 · 122 未看 · 回填 4/5 页（已完）；`Do Hee (도희)` 92/92 · 回填 2/3 页；`Do Hee-I (채화-도희)` 10/10 · 5 未看 · 1 已落盘 · 回填 1 页 |
+| 点「停用」→ 点「启用」 | 行上出现「已停用」胶囊、按钮变「启用」；点回来恢复原样（`PATCH` 两次都 200） |
+| 点「同步」 | toast「已投递『Seung Ha』增量同步」，job **1181**：`同步第 1/5 页，新增 0 部`（1 分钟内 `lastSyncAt` 刷新成「2分钟前同步」） |
+| 贴假地址 `https://example.com/tag/not-krx18/` 点「添加 tag」 | 400 `unsupported_platform`「无法识别该链接所属平台（支持：Pornhub / xHamster / beeg / bilibili / krx18）」，toast 原样显示，`performers` 表没有新行 |
+| 回归 | `?tab=youtube` 8 行、`?tab=bilibili` 4 行、`?tab=stats` 照旧 |
+
+### 13.5 注意
+
+krx18 的 tag 在「关注管理」那一栏里**也会出现**（它们就是 `performers` 的行，
+`GET /api/subscriptions` 不按平台排除）。这一页不是替代它，是把 tag 特有的那几样
+（站方片数、回填页数、`/tag/<slug>/` 地址）放到一屏里。
+

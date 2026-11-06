@@ -1211,6 +1211,11 @@ Cookie 里自带的到期时间不算数——B 站可以在到期前作废登�
 `siteCount` 和 `videoCount` 一般相等，差两条时值得看一眼：订阅之前单独导入过、或者
 站上删了片都会让它们不一致。只列「还订阅着」的 tag（取消订阅是软删）。
 
+**这一份就是「管理 → krx18」页签的全部数据**（2026-11-06 加）：那个页签没有自己的
+`/api/manage/krx18`，直接打这个接口，`stats` 就是顶上那行读数。增删改仍然走通用那几条
+——`POST /api/subscriptions`（贴 tag 归档页地址）、`PATCH /api/subscriptions/{id}`
+（停用/启用）、`DELETE`（取消订阅）、`POST /api/subscriptions/{id}/sync`（`mode=full` 是回填续翻）。
+
 ### E2. `GET /api/krx18/videos?cursor=&channelId=&unseen=1&limit=36&q=`
 
 ```

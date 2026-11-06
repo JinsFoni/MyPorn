@@ -24,7 +24,7 @@
   import { api, messageFor } from '../lib/api';
   import { imageUrl } from '../lib/img';
   import { live } from '../lib/live.svelte';
-  import { patchQuery, router } from '../lib/router.svelte';
+  import { navigate, patchQuery, router } from '../lib/router.svelte';
   import { formatCount, relativeFuture } from '../lib/format';
   import type { KrxChannel, ResolvedPerformer, Video } from '../lib/types';
 
@@ -240,6 +240,13 @@
         {#if failing[0]?.nextSyncAt}
           <span class="text-dim">（{relativeFuture(failing[0].nextSyncAt)}再试）</span>
         {/if}
+        <button
+          type="button"
+          class="ml-1 underline underline-offset-2"
+          onclick={() => navigate('/manage?tab=krx18')}
+        >
+          去管理
+        </button>
       </p>
     </div>
   {/if}
@@ -274,6 +281,13 @@
             {filterChannel === null ? '全部标为已看' : '这个标为已看'}
           </button>
         {/if}
+        <button
+          type="button"
+          class="rounded-full px-3 py-1.5 text-meta text-muted transition-colors hover:bg-panel hover:text-fg"
+          onclick={() => navigate('/manage?tab=krx18')}
+        >
+          管理
+        </button>
         <button
           type="button"
           class="rounded-full bg-hi px-3.5 py-1.5 text-meta font-medium text-ink transition-opacity hover:opacity-90"
